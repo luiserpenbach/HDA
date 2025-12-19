@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from data_lib.prop_physics import calc_cd
+from data_lib.propulsion_physics import calc_cd
 from data_lib.sensor_data_tools import (
     analyze_stability_fft, integrate_data, smooth_signal_savgol,
     resample_data, find_steady_window, calculate_rise_time, generate_html_report, generate_pdf_report

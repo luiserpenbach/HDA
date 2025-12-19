@@ -166,7 +166,7 @@ def calculate_performance(df, config):
     cols = config.get('columns', {})
     geom = config.get('geometry', {})
 
-    # 1. RETRIEVE COLUMN NAMES
+    # 1. RETRIEVE IMPORTANT COLUMN NAMES
     col_pc = cols.get('chamber_pressure')
     col_thrust = cols.get('thrust')
     col_m_ox = cols.get('mass_flow_ox')
