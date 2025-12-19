@@ -1,0 +1,28 @@
+{
+  "config_name": "Igniter C1 - Hot Fire Standard",
+  "description": "Standard configuration for V1 prototype testing with LOX/Ethanol.",
+  "geometry": {
+    "throat_area_m2": 0.0015,
+    "nominal_mr": 2.5
+  },
+  "channel_config": {
+    "100001": "IG-PT-01",
+    "100002": "FU-PT-01"
+  },
+  "desc_columns": {
+    "timestamp": "time_ms",
+    "thrust": "LC_201_Main",
+    "mass_flow_ox": "FM_301_Ox",
+    "mass_flow_fuel": "FM_302_Fuel",
+    "inlet_pressure_ox": "PT_102_Ox_Inlet",
+    "inlet_pressure_fuel": "PT_103_Fuel_Inlet"
+  },
+  "sampling_settings": {
+    "resample_freq_ms": 10,
+    "steady_window_ms": 1000,
+    "cv_threshold": 1.5,
+
+    "target_c_star": 1450,
+    "target_isp": 220
+  }
+}
