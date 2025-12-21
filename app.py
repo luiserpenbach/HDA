@@ -127,10 +127,10 @@ def convert_df_to_csv(df):
 # MAIN TABS (THE PLUG-IN ARCHITECTURE)
 # ==========================================
 tab_insp, tab_cold, tab_hot, tab_db = st.tabs([
-    "🔍 Inspector",
-    "💧 Cold Flow / Component",
-    "🔥 Hot Fire Analysis",
-    "📅 Campaign DB"
+    "General Inspector",
+    "Cold Flow / Component",
+    "Hot Fire Analysis",
+    "Campaign Record"
 ])
 
 # -----------------------------------------------------------------------------
@@ -182,34 +182,34 @@ with tab_insp:
                 else:
                     st.info("Select signals to plot.")
 
-                # --- ANALYSIS: CORRELATION & STATS ---
-                col_corr, col_stats = st.columns([1, 1])
+            # --- ANALYSIS: CORRELATION & STATS ---
+            col_corr, col_stats = st.columns([1, 1])
 
-                with col_corr:
-                    st.subheader("Correlation Matrix")
-                    # Drop time columns for clean sensor correlation
-                    numerics = df.select_dtypes(include=[np.number])
-                    drop_cols = [c for c in numerics.columns if 'time' in c.lower()]
-                    corr_df = numerics.drop(columns=drop_cols)
+            with col_corr:
+                st.subheader("Correlation Matrix")
+                # Drop time columns for clean sensor correlation
+                numerics = df.select_dtypes(include=[np.number])
+                drop_cols = [c for c in numerics.columns if 'time' in c.lower()]
+                corr_df = numerics.drop(columns=drop_cols)
 
-                    if not corr_df.empty:
-                        corr = corr_df.corr()
-                        fig_corr = go.Figure(data=go.Heatmap(
-                            z=corr.values,
-                            x=corr.columns,
-                            y=corr.index,
-                            colorscale='RdBu',
-                            zmin=-1, zmax=1,
-                            colorbar=dict(title="Corr")
-                        ))
-                        fig_corr.update_layout(height=400, margin=dict(t=0, b=0, l=0, r=0))
-                        st.plotly_chart(fig_corr, use_container_width=True)
-                    else:
-                        st.info("No numeric columns available for correlation.")
+                if not corr_df.empty:
+                    corr = corr_df.corr()
+                    fig_corr = go.Figure(data=go.Heatmap(
+                        z=corr.values,
+                        x=corr.columns,
+                        y=corr.index,
+                        colorscale='RdBu',
+                        zmin=-1, zmax=1,
+                        colorbar=dict(title="Corr")
+                    ))
+                    fig_corr.update_layout(height=400, margin=dict(t=0, b=0, l=0, r=0))
+                    st.plotly_chart(fig_corr, use_container_width=True)
+                else:
+                    st.info("No numeric columns available for correlation.")
 
-                with col_stats:
-                    st.subheader("Descriptive Statistics")
-                    st.dataframe(df.describe().T, height=400)
+            with col_stats:
+                st.subheader("Descriptive Statistics")
+                st.dataframe(df.describe().T, height=400)
 
 # -----------------------------------------------------------------------------
 # TAB 2: COLD FLOW / COMPONENT (Batch Processor)
@@ -293,7 +293,7 @@ with tab_cold:
 
                     fig_cd = go.Figure()
                     fig_cd.add_trace(go.Scatter(
-                        x=valid_res['Avg Pressure'],
+                        x=valid_res['Avg Upstream Pressure'],
                         y=valid_res[cd_target],
                         mode='markers+text',
                         text=valid_res['Filename'],
@@ -484,13 +484,13 @@ with tab_hot:
                                 st.caption("No clear edges found.")
 
                     # --- 5. SAVE ---
-                    st.markdown("### Actions & Reporting")
+                    st.markdown("Actions & Reporting")
                     col_act_1, col_act_2, col_act_3 = st.columns([2, 1, 1])
 
                     with col_act_1:
                         notes = st.text_input("Test Notes", placeholder="e.g. Nominal run, new injector...")
 
-                        if st.button("💾 Save to Campaign DB"):
+                        if st.button("Save to Test Point to Campaign DB"):
                             # (Existing DB Save Logic...)
                             rise_k = cols_cfg.get('mass_flow_ox') or target_col
                             _, _, r_time = calculate_rise_time(df, rise_k, s_start, avg.get(rise_k, 0))
