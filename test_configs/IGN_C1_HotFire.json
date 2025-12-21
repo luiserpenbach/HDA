@@ -3,9 +3,11 @@
   "description": "Standard configuration for V1 prototype testing with Ethanol/N2O.",
   "geometry": {
     "throat_area_mm2": 0.0115,
+    "throat_area_uncertainty_mm2": 0.5,
     "ox_injector_area_mm2": 15.5,
     "fuel_injector_area_mm2": 20.0
   },
+
   "fluid": {
     "ox_density_kg_m3": 1000,
     "fuel_density_kg_m3": 789
@@ -22,15 +24,24 @@
     "thrust": "LC-01",
     "mass_flow_ox": "OX-FM-01",
     "mass_flow_fuel": "FU-FM-01",
-    "chamber_pressure": "IG-PT-01"
+    "chamber_pressure": "IG-PT-01",
+    "inlet_pressure_ox": "FU-FM-01",
+    "inlet_pressure_fuel": "LC-01"
   },
+    "uncertainties": {
+        "IG-PT-01": { "type": "rel", "value": 0.005 },
+        "LC-01":    { "type": "abs", "value": 5.0 },
+        "OX-FM-01": { "type": "rel", "value": 0.01 },
+        "FU-FM-01": { "type": "rel", "value": 0.01 }
+    },
   "settings": {
     "resample_freq_ms": 10,
     "steady_window_ms": 1000,
     "cv_threshold": 1.5,
 
     "target_c_star": 1450,
-    "target_isp": 220
+    "target_cf": 1.45,
+    "target_isp": 215
   },
   "reference_values": {
     "target_c_star": 1450,

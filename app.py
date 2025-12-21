@@ -1,422 +1,379 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import numpy as np
-import io
-from data_lib.config_loader import get_available_configs, load_config, validate_columns
-from data_lib.propulsion_physics import calculate_performance
 
-# Import your library
+# --- CUSTOM MODULE IMPORTS ---
+from data_lib.config_loader import get_available_configs, load_config, validate_columns
+from data_lib.propulsion_physics import (
+    calculate_performance,
+    calculate_theoretical_profile,
+    calculate_uncertainties,
+    calculate_derived_metrics
+)
 from data_lib.sensor_data_tools import (
     resample_data, smooth_signal_savgol, find_steady_window,
     integrate_data, calculate_rise_time, analyze_stability_fft
 )
+from data_lib.transient_analysis import detect_transient_events
+from data_lib.db_manager import save_test_result, get_campaign_history
 
-CONFIG_DIR = 'test_configs'
+# --- PAGE SETUP ---
+st.set_page_config(page_title="Hopper Test Data Studio", layout="wide", page_icon="🚀")
 
+# --- CSS STYLING ---
+st.markdown("""
+    <style>
+    .block-container {padding-top: 1rem;}
+    div[data-testid="stMetricValue"] {font-size: 1.4rem;}
+    </style>
+""", unsafe_allow_html=True)
 
-st.set_page_config(page_title="Hopper Test Data Studio", layout="wide", page_icon="🚀") # CHANGE TO HOPPER ICON
+# ==========================================
+# SIDEBAR: CONFIGURATION
+# ==========================================
+st.sidebar.title("🚀 Hopper Data Studio")
+st.sidebar.header("Test Configuration")
 
-# --- SIDEBAR CONFIGURATION ---
-st.sidebar.header("Configuration")
-
-# 1. Config Loader
 available_configs = get_available_configs()
 current_config = None
 selected_config_name = st.sidebar.selectbox(
-    "Test Configuration",
+    "Select Config",
     ["Generic / No Config"] + available_configs
 )
 
 if selected_config_name and selected_config_name != "Generic / No Config":
     current_config = load_config(selected_config_name)
-    st.sidebar.success(f"Loaded: {selected_config_name}")
+    st.sidebar.success(f"Active: {selected_config_name}")
 
-    # Allow overrides
-    with st.sidebar.expander("Override Settings"):
+    with st.sidebar.expander("⚙️ Override Settings"):
         settings = current_config.get('settings', {})
         freq_ms = st.number_input("Resample (ms)", value=settings.get('resample_freq_ms', 10))
         window_ms = st.number_input("Window (ms)", value=settings.get('steady_window_ms', 500))
         cv_thresh = st.number_input("CV Thresh (%)", value=settings.get('cv_threshold', 1.0))
-        geom_title = st.header("Geometry Settings")
-        # Geometry overrides
+
+        st.subheader("Geometry")
         geom = current_config.get('geometry', {})
         throat_area = st.number_input("Throat Area (mm^2)", value=geom.get('throat_area_mm2', 0.0))
-        # Update config object with overrides
         current_config['geometry']['throat_area_mm2'] = throat_area
 
-        ref_val_title = st.header("Reference Values")
-        ref_val_table = st.table(current_config["reference_values"])
+    if "reference_values" in current_config:
+        with st.sidebar.expander("ℹ️ Reference Data"):
+            st.table(current_config["reference_values"])
+
+    with st.sidebar.expander("📄 Raw Config JSON"):
+        st.json(current_config)
 else:
-    # Generic Defaults
+    # Defaults if no config
     freq_ms = st.sidebar.number_input("Resample (ms)", value=10)
     window_ms = st.sidebar.number_input("Window (ms)", value=500)
     cv_thresh = st.sidebar.number_input("CV Thresh (%)", value=1.0)
 
 
-# --- HELPER: PROCESS FILE ---
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
+
 @st.cache_data
-def process_file(uploaded_file, config):
-    # Load with header=0 to get column names
-    df_raw = pd.read_csv(uploaded_file)
-
-    # ---------------------------------------------------------
-    # STEP 0: APPLY CHANNEL MAPPING (Renaming)
-    # ---------------------------------------------------------
-    if config and 'channel_config' in config:
-        mapping = config['channel_config']
-
-        # Safety: Ensure DataFrame column names are strings to match JSON keys
-        # (Pandas might read "10001" as integer)
-        df_raw.columns = df_raw.columns.astype(str)
-
-        # Rename columns: "10001" -> "IG-PT-01"
-        df_raw.rename(columns=mapping, inplace=True)
-
-        # Verify: Did we miss any required mappings?
-        # (Optional: Print warning for unmapped columns)
-
-    # ---------------------------------------------------------
-    # STEP 1: VALIDATION & SETUP
-    # ---------------------------------------------------------
-    if config:
-        # Validate columns (Now checks for Sensor IDs like 'IG-PT-01')
-        missing_cols = validate_columns(df_raw, config)
-        if missing_cols:
-            st.error(f"⚠️ Column Mismatch! Missing: {missing_cols}")
-            return None, None, None
-
-        # Get settings
-        col_map = config.get('columns', {})
-        settings = config.get('settings', {})
-
-        # Get Sensor IDs for key variables
-        time_col = col_map.get('timestamp', 'timestamp')
-
-        # Note: col_map.get('chamber_pressure') now returns "IG-PT-01"
-        # Since we renamed the DF, df["IG-PT-01"] works instantly!
-        target_col = col_map.get('chamber_pressure', col_map.get('mass_flow_ox'))
-
-        # 2. Resample
-        f_ms = settings.get('resample_freq_ms', 10)
-
-        # Safety: Ensure time column exists (mapping might have failed if timestamp name changed)
-        if time_col not in df_raw.columns:
-            # Fallback: Try to find 'timestamp' or 'Time'
-            possible_times = [c for c in df_raw.columns if 'time' in c.lower()]
-            if possible_times:
-                time_col = possible_times[0]
-
-        df = resample_data(df_raw, time_col=time_col, freq_ms=f_ms)
-
-        # 3. Physics Calculations
-        df = calculate_performance(df, config)
-
-        # 4. Smoothing & Window
-        if target_col and target_col in df:
-            df['signal_smooth'] = smooth_signal_savgol(df, target_col)
-
-            bounds, cv_trace = find_steady_window(
-                df, 'signal_smooth', 'timestamp',
-                settings.get('steady_window_ms', 500),
-                settings.get('cv_threshold', 1.0)
-            )
-            return df, bounds, cv_trace
-
-    return None, None, None
-
-
-# --- CORE PROCESSING FUNCTION ---
-@st.cache_data
-def load_and_process(uploaded_file, config, f_ms):
+def load_and_process_data(uploaded_file, config, f_ms):
     """
-    Loads, Renames, Resamples, and Enriches data.
-    Does NOT perform steady state analysis (that comes later).
+    Master function to Load, Map, Resample, and enrich Physics.
     """
-    # 1. Load Raw
     try:
         df_raw = pd.read_csv(uploaded_file)
     except Exception as e:
         return None, f"Error reading CSV: {e}"
 
-    # 2. Rename Columns (Apply Channel Map)
+    # 1. Apply Channel Mapping
     if config and 'channel_config' in config:
         mapping = config['channel_config']
-        # Ensure raw columns are strings for mapping
-        df_raw.columns = df_raw.columns.astype(str)
+        df_raw.columns = df_raw.columns.astype(str)  # Ensure string keys
         df_raw.rename(columns=mapping, inplace=True)
 
-    # 3. Identify Time Column
-    time_col = 'timestamp'  # Default
+    # 2. Identify Time Column
+    time_col = 'timestamp'
     if config:
         time_col = config.get('columns', {}).get('timestamp', 'timestamp')
 
-    # Fallback search for time
+    # Fallback time search
     if time_col not in df_raw.columns:
         candidates = [c for c in df_raw.columns if 'time' in c.lower() or 'ts' in c.lower()]
         if candidates:
             time_col = candidates[0]
         else:
-            return None, "Could not identify Time column. Check config or CSV."
+            return None, "Time column not found. Check config mapping."
 
-    # 4. Resample
+    # 3. Resample
     df = resample_data(df_raw, time_col=time_col, freq_ms=f_ms)
 
-    # 5. Physics Calculations (Optional)
+    # 4. Physics Calculations
     if config:
         df = calculate_performance(df, config)
 
     return df, None
 
 
-def get_report_html(df, filename, stats, bounds, cv_trace, col_flow, col_press):
-    """
-    Generates the HTML report string in memory for downloading.
-    """
-    # Create Summary Text
-    summary_html = f"""
-    <div style="font-family: sans-serif; padding: 20px; background-color: #f8f9fa; border: 1px solid #ddd; border-radius: 5px; margin-bottom: 20px;">
-        <h2 style="color: #333;">Test Report: {filename}</h2>
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
-            <div><strong>Duration:</strong> {stats['duration']:.2f} s</div>
-            <div><strong>Total Mass:</strong> {stats['total_mass']:.2f} g</div>
-            <div><strong>Steady Flow:</strong> {stats['avg_flow']:.3f} g/s</div>
-            <div><strong>Avg Pressure:</strong> {stats['avg_press']:.2f} bar</div>
-            <div><strong>Rise Time:</strong> {stats.get('rise_time', 0):.3f} s</div>
-            <div><strong>Stability (CV):</strong> {stats['avg_cv']:.3f} %</div>
-        </div>
-    </div>
-    """
+@st.cache_data
+def convert_df_to_csv(df):
+    export_df = df.copy()
+    if 'timestamp' in export_df.columns:
+        export_df.insert(1, 'time_s', export_df['timestamp'] / 1000.0)
+    if '__smooth' in export_df.columns:
+        export_df.rename(columns={'__smooth': 'signal_smooth'}, inplace=True)
+    return export_df.to_csv(index=False).encode('utf-8')
 
-    # --- FIGURE 1: Overview ---
-    fig1 = go.Figure()
-    # Raw Flow
-    fig1.add_trace(go.Scatter(x=df['timestamp'], y=df[col_flow],
-                              mode='markers', name='Raw Flow',
-                              marker=dict(color='lightgray', size=4)))
-    # Smooth Flow
-    if 'flow_smooth' in df:
-        fig1.add_trace(go.Scatter(x=df['timestamp'], y=df['flow_smooth'],
-                                  mode='lines', name='Smoothed', line=dict(color='blue')))
-    # Steady Window Highlight
-    if bounds:
-        s_start, s_end = bounds
-        fig1.add_vrect(x0=s_start, x1=s_end, fillcolor="green", opacity=0.1,
-                       annotation_text="Steady Window", annotation_position="top left")
-
-    fig1.update_layout(title="Flow Analysis", height=400, template="plotly_white")
-
-    # --- FIGURE 2: Stability & FFT ---
-    # We'll make a 2-column subplot for CV trace and FFT
-    from plotly.subplots import make_subplots
-    fig2 = make_subplots(rows=1, cols=2, subplot_titles=("Stability Trace (CV)", "Combustion Instability (FFT)"))
-
-    # CV Trace
-    fig2.add_trace(go.Scatter(x=df['timestamp'], y=cv_trace,
-                              mode='lines', name='CV %', line=dict(color='orange')), row=1, col=1)
-    fig2.add_hline(y=1.0, line_dash="dash", line_color="red", row=1, col=1)
-
-    # FFT (Recalculate based on current bounds)
-    if bounds:
-        s_start, s_end = bounds
-        steady_df = df[(df['timestamp'] >= s_start) & (df['timestamp'] <= s_end)]
-        if len(steady_df) > 50:
-            freqs, psd, peak = analyze_stability_fft(steady_df, col_press)
-            fig2.add_trace(go.Scatter(x=freqs, y=psd, mode='lines', name='PSD', line=dict(color='purple')), row=1,
-                           col=2)
-            fig2.update_yaxes(type="log", row=1, col=2)
-            fig2.update_xaxes(title_text="Frequency (Hz)", row=1, col=2)
-
-    fig2.update_layout(height=400, showlegend=False, template="plotly_white")
-
-    # Combine HTML
-    html_content = f"""
-    <html>
-        <head><title>Report: {filename}</title></head>
-        <body>
-            {summary_html}
-            {fig1.to_html(full_html=False, include_plotlyjs='cdn')}
-            {fig2.to_html(full_html=False, include_plotlyjs='cdn')}
-        </body>
-    </html>
-    """
-    return html_content
-
-
-
-# --- TABS ---
-tab1, tab2 = st.tabs(["Data Viewer & Analysis", "Batch Comparison"])
 
 # ==========================================
-# TAB 1: VIEWER & ANALYSIS
+# TAB 1: DATA VIEWER & ANALYSIS
 # ==========================================
+tab1, tab2, tab3 = st.tabs(["📈 Analysis Workbench", "📑 Batch Comparison", "📅 Campaign Trends"])
+
 with tab1:
-    uploaded_file = st.file_uploader("Upload Test Data (CSV)", type=["csv"], key="single")
+    uploaded_file = st.file_uploader("Upload Test CSV", type=["csv"], key="single")
 
     if uploaded_file:
-        df, error = load_and_process(uploaded_file, current_config, freq_ms)
+        df, error = load_and_process_data(uploaded_file, current_config, freq_ms)
 
         if error:
             st.error(error)
         else:
-            # --- SELECTION BAR ---
-            col_sel, col_act = st.columns([3, 1])
-
+            # --- TOP CONTROLS ---
+            col_sel, col_tog = st.columns([3, 1])
             with col_sel:
-                # Default selection: Look for config columns, else pick first few
+                # Intelligent Default Selection
                 default_cols = []
                 if current_config:
                     cmap = current_config.get('columns', {})
-                    # prioritize pressure and flow
-                    for k in ['chamber_pressure', 'mass_flow_ox', 'thrust']:
-                        if k in cmap and cmap[k] in df.columns:
-                            default_cols.append(cmap[k])
+                    # Prioritize key physics columns
+                    for k in ['chamber_pressure', 'mass_flow_ox', 'thrust', 'isp']:
+                        val = cmap.get(k, k)  # Use mapped name or key
+                        if val in df.columns: default_cols.append(val)
 
-                if not default_cols:
-                    default_cols = df.columns[1:3].tolist()  # Skip time, take next 2
+                if not default_cols: default_cols = df.columns[1:3].tolist()
 
-                plot_cols = st.multiselect("Select Channels to Plot", df.columns, default=default_cols)
+                plot_cols = st.multiselect("Channels to Plot", df.columns, default=default_cols)
 
-            with col_act:
-                enable_analysis = st.toggle("🔎 Enable Steady State Analysis", value=False)
+            with col_tog:
+                st.write("")  # Spacer
+                enable_analysis = st.toggle("🔎 Steady State Analysis", value=True)
 
-            # --- MAIN PLOT ---
-            fig = go.Figure()
+            # --- MAIN PLOT (Dual Axis) ---
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+
             for col in plot_cols:
-                # Normalize? Maybe later. For now, raw values.
-                fig.add_trace(go.Scatter(x=df['timestamp'], y=df[col], mode='lines', name=col))
+                # Heuristic: Pressure on Left (Y1), Flow/Thrust on Right (Y2)
+                is_secondary = False
+                if any(x in col.lower() for x in ['flow', 'thrust', 'isp', 'fm', 'lc']):
+                    is_secondary = True
 
-            fig.update_layout(height=500, xaxis_title="Time (ms)", title="Sensor Data View", template="plotly_white")
+                fig.add_trace(
+                    go.Scatter(x=df['timestamp'], y=df[col], mode='lines', name=col),
+                    secondary_y=is_secondary
+                )
+
+            # Axis Styling
+            fig.update_layout(
+                title="Test Data Overview", height=500, template="plotly_white",
+                xaxis_title="Time (ms)",
+                legend=dict(orientation="h", y=1.1)
+            )
+            fig.update_yaxes(title_text="Pressure / Generic", secondary_y=False)
+            fig.update_yaxes(title_text="Flow / Thrust", secondary_y=True)
 
             # --- ANALYSIS LOGIC ---
+            avg_stats = {}  # Initialize empty dicts to prevent scope errors later
+            derived_metrics = {}
+            bounds = None
+            steady_df = pd.DataFrame()
+
             if enable_analysis:
                 st.markdown("---")
-                st.subheader("Steady State Analysis")
+                # 1. Configuration
+                c1, c2, c3 = st.columns([1, 1, 1])
+                with c1:
+                    # Select Signal for Stability
+                    target_default = plot_cols[0] if plot_cols else df.columns[1]
+                    if current_config:
+                        target_default = current_config.get('columns', {}).get('chamber_pressure', target_default)
+                    target_col = st.selectbox("Stability Signal", df.columns,
+                                              index=list(df.columns).index(
+                                                  target_default) if target_default in df.columns else 0)
 
-                # 1. Select Signal for Stability
-                # Default to the first plotted column or config pressure
-                target_default = plot_cols[0] if plot_cols else df.columns[1]
-                if current_config:
-                    target_default = current_config.get('columns', {}).get('chamber_pressure', target_default)
+                with c2:
+                    clip_view = st.checkbox("✂️ Auto-Zoom (±5s)", value=True)
 
-                target_col = st.selectbox("Signal for Stability Detection", df.columns, index=list(df.columns).index(
-                    target_default) if target_default in df.columns else 0)
+                with c3:
+                    show_theory = st.checkbox("📐 Theoretical Overlay", value=False)
 
                 # 2. Run Detection
-                # Smooth first
                 df['__smooth'] = smooth_signal_savgol(df, target_col)
                 bounds, cv_trace = find_steady_window(df, '__smooth', 'timestamp', window_ms, cv_thresh)
 
-                # 3. Display Results
-                col_res, col_fft = st.columns([1, 1])
+                # 3. Manual Override UI
+                t_min, t_max = float(df['timestamp'].min()), float(df['timestamp'].max())
+                s_def, e_def = bounds if bounds else (t_min, t_max)
 
-                with col_res:
-                    # Manual Override
-                    t_min = float(df['timestamp'].min())
-                    t_max = float(df['timestamp'].max())
+                if not bounds:
+                    st.warning("No steady state detected automatically.")
 
-                    if bounds:
-                        s_def, e_def = bounds
-                        st.success(f"Detected: {s_def:.0f} - {e_def:.0f} ms")
-                    else:
-                        s_def, e_def = t_min, t_max
-                        st.warning("No steady state detected.")
+                with st.expander("🛠 Manual Window Adjustment", expanded=(bounds is None)):
+                    s_start, s_end = st.slider("Steady Window (ms)", t_min, t_max, (float(s_def), float(e_def)), 100.0)
 
-                    use_manual = st.checkbox("Manual Cut", value=(bounds is None))
+                # 4. Updates based on Window
+                fig.add_vrect(x0=s_start, x1=s_end, fillcolor="green", opacity=0.1, annotation_text="Steady",
+                              secondary_y=False)
 
-                    if use_manual:
-                        s_start, s_end = st.slider("Steady Window", t_min, t_max, (float(s_def), float(e_def)), 100.0)
-                    else:
-                        s_start, s_end = s_def, e_def
+                # Zoom Logic
+                if clip_view:
+                    view_s = max(t_min, s_start - 3000)
+                    view_e = min(t_max, s_end + 3000)
+                    fig.update_xaxes(range=[view_s, view_e])
 
-                    # Add Window to Plot
-                    fig.add_vrect(x0=s_start, x1=s_end, fillcolor="green", opacity=0.1,
-                                  annotation_text="Analysis Window")
+                # 5. Theoretical Overlay
+                if show_theory and current_config:
+                    df_theo = calculate_theoretical_profile(df, current_config)
+                    if df_theo is not None:
+                        if 'thrust_ideal' in df_theo:
+                            fig.add_trace(go.Scatter(x=df['timestamp'], y=df_theo['thrust_ideal'],
+                                                     mode='lines', name='Ideal Thrust',
+                                                     line=dict(dash='dot', color='black')), secondary_y=True)
+
+                # RENDER MAIN PLOT
+                st.plotly_chart(fig, use_container_width=True)
+
+                # --- METRICS SECTION ---
+                mask = (df['timestamp'] >= s_start) & (df['timestamp'] <= s_end)
+                steady_df = df[mask]
+
+                if not steady_df.empty:
+                    # Calculate Metrics
+                    avg_stats = steady_df.mean().to_dict()
+                    derived_metrics = calculate_derived_metrics(avg_stats, current_config or {})
+                    uncertainties = calculate_uncertainties(avg_stats, current_config or {})
 
 
+                    # Helper for error formatting
+                    def fmt_err(key, val, unit=""):
+                        u = uncertainties.get(key, 0.0)
+                        if u == 0: return f"{val:.2f} {unit}"
+                        if u < 0.1: return f"{val:.3f} ± {u:.3f} {unit}"
+                        if u < 10: return f"{val:.2f} ± {u:.2f} {unit}"
+                        return f"{val:.0f} ± {u:.0f} {unit}"
 
-                    # --- CALCULATE & DISPLAY METRICS ---
+
                     st.subheader("🏁 Performance Report")
-                    # Stats Table
-                    mask = (df['timestamp'] >= s_start) & (df['timestamp'] <= s_end)
-                    steady_df = df[mask]
 
-                    if not steady_df.empty:
-                        # 1. Calculate Averages for ALL columns (mapped names)
-                        avg_stats = steady_df.mean().to_dict()
+                    # Row 1: Primary Physics
+                    m1, m2, m3, m4 = st.columns(4)
+                    cols_cfg = current_config.get('columns', {}) if current_config else {}
 
-                        # 2. Get Derived Metrics (Cd, Efficiencies)
-                        from data_lib.propulsion_physics import calculate_derived_metrics
+                    with m1:
+                        p_col = cols_cfg.get('chamber_pressure')
+                        if p_col in avg_stats: st.metric("Avg Pc", fmt_err('chamber_pressure', avg_stats[p_col], "bar"))
+                    with m2:
+                        t_col = cols_cfg.get('thrust')
+                        if t_col in avg_stats: st.metric("Thrust", fmt_err('thrust', avg_stats[t_col], "N"))
+                    with m3:
+                        tot_flow = avg_stats.get('mass_flow_total', 0)
+                        if tot_flow > 0: st.metric("Total Flow", fmt_err('mass_flow_total', tot_flow, "g/s"))
+                    with m4:
+                        if 'isp' in avg_stats: st.metric("Isp", fmt_err('isp', avg_stats['isp'], "s"))
 
-                        derived_metrics = calculate_derived_metrics(avg_stats, current_config or {})
+                    st.divider()
 
-                        # 3. Create a clean display grid
-                        # PRIMARY METRICS (Pressure, Flow, Thrust)
-                        m1, m2, m3 = st.columns(3)
+                    # Row 2: Derived & Efficiency
+                    d_cols = st.columns(5)
+                    metrics_list = []
+                    if 'c_star' in avg_stats: metrics_list.append(("C*", fmt_err('c_star', avg_stats['c_star'], "m/s")))
+                    if 'of_ratio' in avg_stats: metrics_list.append(("O/F", fmt_err('of_ratio', avg_stats['of_ratio'])))
+                    for k, v in derived_metrics.items(): metrics_list.append((k, f"{v:.1f}"))
 
-                        # We try to find the standard columns to show prominently
-                        cols_cfg = current_config.get('columns', {}) if current_config else {}
+                    for i, (label, val) in enumerate(metrics_list):
+                        with d_cols[i % 5]: st.metric(label, val)
 
-                        with m1:
-                            p_col = cols_cfg.get('chamber_pressure', 'chamber_pressure')
-                            if p_col in avg_stats:
-                                st.metric("Avg Pc", f"{avg_stats[p_col]:.2f} bar")
-                            elif 'pressure' in plot_cols[0].lower():  # Fallback guess
-                                st.metric("Avg Signal", f"{avg_stats[plot_cols[0]]:.2f}")
+                    # --- FFT & TRANSIENT ---
+                    col_fft, col_trans = st.columns(2)
 
-                        with m2:
-                            # Try to sum flows if they exist
-                            total_flow = avg_stats.get('mass_flow_total', 0)
-                            if total_flow > 0:
-                                st.metric("Total Flow", f"{total_flow:.3f} g/s")
+                    with col_fft:
+                        st.write("**Stability (FFT)**")
+                        if len(steady_df) > 50:
+                            freqs, psd, peak = analyze_stability_fft(steady_df, target_col)
+                            f_fft = go.Figure()
+                            f_fft.add_trace(go.Scatter(x=freqs, y=psd, mode='lines', line=dict(color='purple')))
+                            f_fft.update_layout(title=f"Peak: {peak:.1f} Hz", yaxis_type="log", height=300,
+                                                margin=dict(l=0, r=0, t=30, b=0))
+                            st.plotly_chart(f_fft, use_container_width=True)
+
+                    with col_trans:
+                        st.write("**Transient Analysis**")
+                        # Config hack to allow manual column selection for Fire Command
+                        cmd_col = cols_cfg.get('fire_command')
+
+                        # If command not in config, let user pick
+                        if not cmd_col or cmd_col not in df.columns:
+                            cmd_col = st.selectbox("Select Valve/Fire Command", ["None"] + list(df.columns))
+
+                        if cmd_col and cmd_col != "None":
+                            # Create temp config for transient detector
+                            t_cfg = current_config.copy() if current_config else {'columns': {}}
+                            if 'columns' not in t_cfg: t_cfg['columns'] = {}
+                            t_cfg['columns']['fire_command'] = cmd_col
+
+                            events = detect_transient_events(df, t_cfg, steady_bounds=(s_start, s_end))
+
+                            if events:
+                                c_t1, c_t2 = st.columns(2)
+                                c_t1.metric("Ignition Delay", f"{events.get('ignition_delay_ms', 0):.0f} ms")
+                                c_t2.metric("Shutdown Impulse", f"{events.get('shutdown_impulse_ns', 0):.2f} Ns")
+                                if events.get('t_zero'): st.caption(f"T-0 detected at {events['t_zero']:.0f} ms")
                             else:
-                                # Show single flow if only one exists
-                                f_col = cols_cfg.get('mass_flow_ox', plot_cols[0])
-                                if f_col in avg_stats:
-                                    st.metric("Avg Flow", f"{avg_stats[f_col]:.3f} g/s")
+                                st.warning("No transient events detected.")
+            else:
+                # If analysis disabled, show simple plot
+                st.plotly_chart(fig, use_container_width=True)
 
-                        with m3:
-                            t_col = cols_cfg.get('thrust', 'thrust')
-                            if t_col in avg_stats:
-                                st.metric("Thrust", f"{avg_stats[t_col]:.1f} N")
+            # --- ACTION BAR (Save & Export) ---
+            st.markdown("### 💾 Actions")
+            a1, a2 = st.columns([1, 1])
 
-                        # SECONDARY / DERIVED METRICS (Isp, C*, Cd)
-                        st.divider()
-                        d_cols = st.columns(4)
+            with a1:
+                # Save to DB
+                comments = st.text_input("Test Notes", placeholder="e.g. Test 001, Cold Flow")
+                if st.button("Save to Campaign History", disabled=steady_df.empty):
+                    # Re-calc rise time for DB
+                    rise_col = current_config.get('columns', {}).get('mass_flow_ox') or plot_cols[0]
+                    t10, t90, rise_val = calculate_rise_time(df, rise_col, s_start, avg_stats.get(rise_col, 0))
 
-                        # Helper to place metrics in the grid
-                        metric_list = []
+                    db_stats = {
+                        'duration': (s_end - s_start) / 1000.0,
+                        'avg_cv': float(cv_trace[mask].mean() if 'cv_trace' in locals() else 0),
+                        'rise_time': float(rise_val) if rise_val else 0.0,
+                        'avg_pressure': avg_stats.get(current_config.get('columns', {}).get('chamber_pressure')),
+                        'avg_thrust': avg_stats.get(current_config.get('columns', {}).get('thrust')),
+                        'mass_flow_total': avg_stats.get('mass_flow_total'),
+                        'isp': avg_stats.get('isp'),
+                        'c_star': avg_stats.get('c_star'),
+                    }
 
-                        # Add Time-Series Averages (if calculated in Step 3 of process_file)
-                        if 'isp' in avg_stats: metric_list.append(("Isp", f"{avg_stats['isp']:.1f} s"))
-                        if 'c_star' in avg_stats: metric_list.append(("C*", f"{avg_stats['c_star']:.0f} m/s"))
-                        if 'of_ratio' in avg_stats: metric_list.append(("O/F", f"{avg_stats['of_ratio']:.2f}"))
+                    save_test_result(
+                        filename=uploaded_file.name,
+                        config_name=selected_config_name,
+                        stats=db_stats,
+                        derived=derived_metrics,
+                        comments=comments
+                    )
+                    st.success("Saved to Database!")
 
-                        # Add Single-Value Derived Metrics (Cd, Eta)
-                        for k, v in derived_metrics.items():
-                            val_str = f"{v:.2f}" if v < 10 else f"{v:.1f}"  # Format logic
-                            metric_list.append((k, val_str))
-
-                        # Render the grid
-                        for i, (label, val) in enumerate(metric_list):
-                            with d_cols[i % 4]:
-                                st.metric(label, val)
-
-                    else:
-                        st.info("Select a valid window to see metrics.")
-
-                with col_fft:
-                    # FFT Analysis
-                    if len(steady_df) > 50:
-                        freqs, psd, peak = analyze_stability_fft(steady_df, target_col)
-                        fig_fft = go.Figure()
-                        fig_fft.add_trace(go.Scatter(x=freqs, y=psd, mode='lines', line=dict(color='purple')))
-                        fig_fft.update_layout(title=f"FFT: {target_col} (Peak: {peak:.1f} Hz)", yaxis_type="log",
-                                              height=350)
-                        st.plotly_chart(fig_fft, use_container_width=True)
-
-            # Show the main plot (updated with window if analysis is on)
-            st.plotly_chart(fig, use_container_width=True)
+            with a2:
+                # Export CSV
+                csv_data = convert_df_to_csv(df)
+                st.download_button(
+                    label="Download Processed CSV",
+                    data=csv_data,
+                    file_name=f"Processed_{uploaded_file.name}",
+                    mime='text/csv',
+                )
 
 # ==========================================
 # TAB 2: BATCH COMPARISON
@@ -426,34 +383,64 @@ with tab2:
     files = st.file_uploader("Upload Multiple CSVs", type=["csv"], accept_multiple_files=True, key="batch")
 
     if files:
-        # Select what to plot (e.g. comparing Chamber Pressure across tests)
-        # We need to guess available columns from the first file
-        first_df, _ = load_and_process(files[0], current_config, freq_ms)
+        # Load first file to get columns
+        first_df, _ = load_and_process_data(files[0], current_config, freq_ms)
         if first_df is not None:
-            overlay_col = st.selectbox("Select Channel to Overlay", first_df.columns, index=1)
+            overlay_col = st.selectbox("Channel to Overlay", first_df.columns, index=1)
             align_mode = st.radio("Alignment", ["Raw Time", "Align to Steady Start"], horizontal=True)
 
             fig_over = go.Figure()
 
             for f in files:
-                d, _ = load_and_process(f, current_config, freq_ms)
+                d, _ = load_and_process_data(f, current_config, freq_ms)
                 if d is not None and overlay_col in d.columns:
-                    # For alignment, we need to run detection quickly
                     x_axis = d['timestamp']
-
                     if align_mode == "Align to Steady Start":
-                        # Quick detection on the overlay column
                         d['__sm'] = smooth_signal_savgol(d, overlay_col)
                         b, _ = find_steady_window(d, '__sm', 'timestamp', window_ms, cv_thresh)
                         if b:
-                            offset = b[0]
-                            x_axis = (d['timestamp'] - offset) / 1000.0  # Seconds
+                            x_axis = (d['timestamp'] - b[0]) / 1000.0
                         else:
-                            continue  # Skip or plot raw? Let's skip for cleaner plot
+                            continue
                     else:
-                        x_axis = d['timestamp'] / 1000.0  # Seconds
+                        x_axis = d['timestamp'] / 1000.0
 
                     fig_over.add_trace(go.Scatter(x=x_axis, y=d[overlay_col], mode='lines', name=f.name))
 
-            fig_over.update_layout(height=600, title=f"Batch Comparison: {overlay_col}", xaxis_title="Time (s)")
+            fig_over.update_layout(height=600, title=f"Comparison: {overlay_col}", xaxis_title="Time (s)")
             st.plotly_chart(fig_over, use_container_width=True)
+
+# ==========================================
+# TAB 3: CAMPAIGN TRENDS
+# ==========================================
+with tab3:
+    st.header("Campaign Trends")
+    history_df = get_campaign_history()
+
+    if not history_df.empty:
+        with st.expander("Raw Database", expanded=False):
+            st.dataframe(history_df)
+
+        c_filt, c_plot = st.columns([1, 3])
+        with c_filt:
+            configs = history_df['config_name'].unique()
+            sel_conf = st.multiselect("Filter Config", configs, default=configs)
+            filtered_df = history_df[history_df['config_name'].isin(sel_conf)]
+
+        with c_plot:
+            metric_y = st.selectbox("Metric to Trend",
+                                    ['isp_s', 'c_star_ms', 'avg_thrust_n', 'eta_c_star_pct', 'rise_time_s'])
+
+        if not filtered_df.empty:
+            fig_trend = go.Figure()
+            fig_trend.add_trace(go.Scatter(
+                x=filtered_df['timestamp'], y=filtered_df[metric_y],
+                mode='lines+markers', text=filtered_df['filename'],
+                marker=dict(size=10, color='royalblue')
+            ))
+            fig_trend.update_layout(title=f"Trend: {metric_y}", height=500, template="plotly_white")
+            st.plotly_chart(fig_trend, use_container_width=True)
+
+            st.info(f"Mean {metric_y}: {filtered_df[metric_y].mean():.2f} | Std: {filtered_df[metric_y].std():.2f}")
+    else:
+        st.info("No history found. Save a test result in Tab 1 to start tracking.")
