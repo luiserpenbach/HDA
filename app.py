@@ -264,11 +264,11 @@ with tab_cold:
 
                         # Pack Result
                         row['Status'] = 'OK'
-                        row['Avg Pressure'] = avg.get(target_col_cf, 0)
+                        row['Avg Upstream Pressure [bar]'] = avg.get(target_col_cf, 0)
 
                         # Try to find flow for the table
-                        f_col = current_config.get('columns', {}).get('mass_flow_ox')
-                        if f_col: row['Avg Flow'] = avg.get(f_col, 0)
+                        f_col = current_config.get('columns', {}).get('mass_flow')
+                        if f_col: row['Avg Mass Flow [g/s]'] = avg.get(f_col, 0)
 
                         # Add Calculated Metrics (Cd, etc.)
                         row.update(metrics)
@@ -293,7 +293,7 @@ with tab_cold:
 
                     fig_cd = go.Figure()
                     fig_cd.add_trace(go.Scatter(
-                        x=valid_res['Avg Upstream Pressure'],
+                        x=valid_res['upstream_pressure'],
                         y=valid_res[cd_target],
                         mode='markers+text',
                         text=valid_res['Filename'],
@@ -307,7 +307,7 @@ with tab_cold:
 
                     fig_cd.update_layout(
                         title=f"{cd_target} vs Pressure",
-                        xaxis_title="Pressure (bar)",
+                        xaxis_title="Upstream Pressure [bar]",
                         yaxis_title="Discharge Coefficient (-)",
                         height=500
                     )

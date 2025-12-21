@@ -176,6 +176,16 @@ def calculate_derived_metrics(avg_stats, config):
         # m_dot (g/s -> kg/s), Area (mm2 -> m2), P (bar -> Pa)
         return (m_dot * 1e-3) / ((area_mm2 * 1e-6) * (2 * press_drop_bar * 1e5 * density) ** 0.5)
 
+    # Cd Orifice
+    col_mf_orf = cols.get('mass_flow')
+    if col_mf_orf and col_mf_orf in avg_stats:
+        p_up = avg_stats.get(cols.get("upstream_pressure"), 0.0)
+        p_down = 0.0#avg_stats.get(cols['downstream_pressure'], 0.0)
+        dp = p_up - p_down
+        cd = calc_cd(avg_stats[col_mf_orf], dp, fluid.get('ox_density_kg_m3'), geom.get('ox_injector_area_mm2'))
+        print(cd)
+        if cd: derived['Cd'] = cd
+
     # Cd Ox (Robust check)
     col_ox_flow = cols.get('mass_flow_ox')
     if col_ox_flow and col_ox_flow in avg_stats:

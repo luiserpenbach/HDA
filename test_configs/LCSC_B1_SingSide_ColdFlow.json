@@ -21,7 +21,7 @@
   "columns": {
     "timestamp": "timestamp",
     "mass_flow": "OX-FM-01",
-    "inlet_pressure_inj": "OX-PT-15"
+    "upstream_pressure": "OX-PT-15"
   },
   "uncertainties": {
     "IG-PT-01": { "type": "rel", "value": 0.005 },
