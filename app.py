@@ -25,8 +25,11 @@ st.set_page_config(page_title="Hopper Test Data Studio", layout="wide", page_ico
 # --- CSS STYLING ---
 st.markdown("""
     <style>
-    .block-container {padding-top: 1rem;}
+    /* Increased padding so tabs don't hide behind the header */
+    .block-container {padding-top: 3rem;} 
+
     div[data-testid="stMetricValue"] {font-size: 1.4rem;}
+    h2 {border-bottom: 1px solid #ddd; padding-bottom: 10px;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -156,7 +159,7 @@ with tab1:
 
             with col_tog:
                 st.write("")  # Spacer
-                enable_analysis = st.toggle("🔎 Steady State Analysis", value=True)
+                enable_analysis = st.toggle("🔎 Enable Analysis", value=True)
 
             # --- MAIN PLOT (Dual Axis) ---
             fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -189,71 +192,79 @@ with tab1:
 
             if enable_analysis:
                 st.markdown("---")
-                # 1. Configuration
+                st.header("🔬 Deep Dive Analysis")
+
+                # ==========================================
+                # SECTION 1: STEADY STATE ID
+                # ==========================================
+                st.subheader("1. Steady State Identification")
+
+                # Configuration Controls
                 c1, c2, c3 = st.columns([1, 1, 1])
                 with c1:
-                    # Select Signal for Stability
                     target_default = plot_cols[0] if plot_cols else df.columns[1]
                     if current_config:
                         target_default = current_config.get('columns', {}).get('chamber_pressure', target_default)
-                    target_col = st.selectbox("Stability Signal", df.columns,
+                    target_col = st.selectbox("Signal for Stability", df.columns,
                                               index=list(df.columns).index(
                                                   target_default) if target_default in df.columns else 0)
-
                 with c2:
-                    clip_view = st.checkbox("✂️ Auto-Zoom (±5s)", value=True)
-
+                    clip_view = st.checkbox("✂️ Auto-Zoom Plot (±5s)", value=True)
                 with c3:
                     show_theory = st.checkbox("📐 Theoretical Overlay", value=False)
 
-                # 2. Run Detection
+                # Run Detection
                 df['__smooth'] = smooth_signal_savgol(df, target_col)
                 bounds, cv_trace = find_steady_window(df, '__smooth', 'timestamp', window_ms, cv_thresh)
 
-                # 3. Manual Override UI
+                # Manual Override UI
                 t_min, t_max = float(df['timestamp'].min()), float(df['timestamp'].max())
                 s_def, e_def = bounds if bounds else (t_min, t_max)
 
-                if not bounds:
-                    st.warning("No steady state detected automatically.")
+                # Display Status
+                if bounds:
+                    st.success(f"✅ Stable Window Detected: {s_def:.0f} - {e_def:.0f} ms")
+                else:
+                    st.warning("⚠️ No automatic steady state detected. Please adjust window manually.")
 
-                with st.expander("🛠 Manual Window Adjustment", expanded=(bounds is None)):
-                    s_start, s_end = st.slider("Steady Window (ms)", t_min, t_max, (float(s_def), float(e_def)), 100.0)
+                with st.expander("🛠 Window Fine-Tuning", expanded=(bounds is None)):
+                    s_start, s_end = st.slider("Select Window (ms)", t_min, t_max, (float(s_def), float(e_def)), 100.0)
 
-                # 4. Updates based on Window
+                # Update Main Plot with Window
                 fig.add_vrect(x0=s_start, x1=s_end, fillcolor="green", opacity=0.1, annotation_text="Steady",
                               secondary_y=False)
-
-                # Zoom Logic
                 if clip_view:
                     view_s = max(t_min, s_start - 3000)
                     view_e = min(t_max, s_end + 3000)
                     fig.update_xaxes(range=[view_s, view_e])
 
-                # 5. Theoretical Overlay
+                # Theoretical Overlay
                 if show_theory and current_config:
                     df_theo = calculate_theoretical_profile(df, current_config)
-                    if df_theo is not None:
-                        if 'thrust_ideal' in df_theo:
-                            fig.add_trace(go.Scatter(x=df['timestamp'], y=df_theo['thrust_ideal'],
-                                                     mode='lines', name='Ideal Thrust',
-                                                     line=dict(dash='dot', color='black')), secondary_y=True)
+                    if df_theo is not None and 'thrust_ideal' in df_theo:
+                        fig.add_trace(go.Scatter(x=df['timestamp'], y=df_theo['thrust_ideal'],
+                                                 mode='lines', name='Ideal Thrust',
+                                                 line=dict(dash='dot', color='black')), secondary_y=True)
 
-                # RENDER MAIN PLOT
                 st.plotly_chart(fig, use_container_width=True)
 
-                # --- METRICS SECTION ---
+                # ==========================================
+                # SECTION 2: PERFORMANCE METRICS
+                # ==========================================
                 mask = (df['timestamp'] >= s_start) & (df['timestamp'] <= s_end)
                 steady_df = df[mask]
 
                 if not steady_df.empty:
-                    # Calculate Metrics
+                    st.markdown("---")
+                    st.subheader("2. Performance Report (Steady State)")
+
+                    # Calculate
                     avg_stats = steady_df.mean().to_dict()
                     derived_metrics = calculate_derived_metrics(avg_stats, current_config or {})
                     uncertainties = calculate_uncertainties(avg_stats, current_config or {})
 
 
-                    # Helper for error formatting
+                    # Error Formatting Helper
                     def fmt_err(key, val, unit=""):
                         u = uncertainties.get(key, 0.0)
                         if u == 0: return f"{val:.2f} {unit}"
@@ -262,9 +273,7 @@ with tab1:
                         return f"{val:.0f} ± {u:.0f} {unit}"
 
 
-                    st.subheader("🏁 Performance Report")
-
-                    # Row 1: Primary Physics
+                    # Primary Metrics
                     m1, m2, m3, m4 = st.columns(4)
                     cols_cfg = current_config.get('columns', {}) if current_config else {}
 
@@ -282,7 +291,7 @@ with tab1:
 
                     st.divider()
 
-                    # Row 2: Derived & Efficiency
+                    # Derived Metrics
                     d_cols = st.columns(5)
                     metrics_list = []
                     if 'c_star' in avg_stats: metrics_list.append(("C*", fmt_err('c_star', avg_stats['c_star'], "m/s")))
@@ -292,53 +301,89 @@ with tab1:
                     for i, (label, val) in enumerate(metrics_list):
                         with d_cols[i % 5]: st.metric(label, val)
 
-                    # --- FFT & TRANSIENT ---
-                    col_fft, col_trans = st.columns(2)
+                    # ==========================================
+                    # SECTION 3: STABILITY (FFT)
+                    # ==========================================
+                    st.markdown("---")
+                    st.subheader("3. Combustion Stability (Frequency Domain)")
 
-                    with col_fft:
-                        st.write("**Stability (FFT)**")
-                        if len(steady_df) > 50:
-                            freqs, psd, peak = analyze_stability_fft(steady_df, target_col)
-                            f_fft = go.Figure()
-                            f_fft.add_trace(go.Scatter(x=freqs, y=psd, mode='lines', line=dict(color='purple')))
-                            f_fft.update_layout(title=f"Peak: {peak:.1f} Hz", yaxis_type="log", height=300,
-                                                margin=dict(l=0, r=0, t=30, b=0))
-                            st.plotly_chart(f_fft, use_container_width=True)
+                    if len(steady_df) > 50:
+                        freqs, psd, peak = analyze_stability_fft(steady_df, target_col)
+                        f_fft = go.Figure()
+                        f_fft.add_trace(go.Scatter(x=freqs, y=psd, mode='lines', line=dict(color='purple')))
+                        f_fft.update_layout(
+                            title=f"PSD Spectrum: {target_col} (Peak: {peak:.1f} Hz)",
+                            xaxis_title="Frequency (Hz)",
+                            yaxis_title="Power Spectral Density",
+                            yaxis_type="log",
+                            height=400
+                        )
+                        st.plotly_chart(f_fft, use_container_width=True)
+                    else:
+                        st.info("Not enough steady-state data for FFT analysis.")
 
-                    with col_trans:
-                        st.write("**Transient Analysis**")
-                        # Config hack to allow manual column selection for Fire Command
-                        cmd_col = cols_cfg.get('fire_command')
+                # ==========================================
+                # SECTION 4: TRANSIENT ANALYSIS
+                # ==========================================
+                st.markdown("---")
+                st.subheader("4. Transient Analysis (Timing)")
 
-                        # If command not in config, let user pick
-                        if not cmd_col or cmd_col not in df.columns:
-                            cmd_col = st.selectbox("Select Valve/Fire Command", ["None"] + list(df.columns))
+                # Config hack to allow manual column selection
+                cols_cfg = current_config.get('columns', {}) if current_config else {}
+                cmd_col = cols_cfg.get('fire_command')
 
-                        if cmd_col and cmd_col != "None":
-                            # Create temp config for transient detector
-                            t_cfg = current_config.copy() if current_config else {'columns': {}}
-                            if 'columns' not in t_cfg: t_cfg['columns'] = {}
-                            t_cfg['columns']['fire_command'] = cmd_col
+                if not cmd_col or cmd_col not in df.columns:
+                    cmd_col = st.selectbox("Select Valve/Fire Command Signal", ["None"] + list(df.columns))
 
-                            events = detect_transient_events(df, t_cfg, steady_bounds=(s_start, s_end))
+                if cmd_col and cmd_col != "None":
+                    t_cfg = current_config.copy() if current_config else {'columns': {}}
+                    if 'columns' not in t_cfg: t_cfg['columns'] = {}
+                    t_cfg['columns']['fire_command'] = cmd_col
 
-                            if events:
-                                c_t1, c_t2 = st.columns(2)
-                                c_t1.metric("Ignition Delay", f"{events.get('ignition_delay_ms', 0):.0f} ms")
-                                c_t2.metric("Shutdown Impulse", f"{events.get('shutdown_impulse_ns', 0):.2f} Ns")
-                                if events.get('t_zero'): st.caption(f"T-0 detected at {events['t_zero']:.0f} ms")
-                            else:
-                                st.warning("No transient events detected.")
+                    events = detect_transient_events(df, t_cfg, steady_bounds=(s_start, s_end))
+
+                    if events:
+                        c_t1, c_t2, c_t3 = st.columns(3)
+                        c_t1.metric("T-0 (Valve Open)", f"{events.get('t_zero', 0):.0f} ms")
+                        c_t2.metric("Ignition Delay", f"{events.get('ignition_delay_ms', 0):.0f} ms")
+                        c_t3.metric("Shutdown Impulse", f"{events.get('shutdown_impulse_ns', 0):.2f} Ns")
+
+                        # Transient Zoom Plot
+                        if events.get('t_zero') and events.get('t_ignition'):
+                            fig_trans = go.Figure()
+                            # Zoom window
+                            z_s = events['t_zero'] - 200
+                            z_e = events['t_ignition'] + 500
+                            z_df = df[(df['timestamp'] >= z_s) & (df['timestamp'] <= z_e)]
+
+                            # Plot Pressure
+                            pc_col = cols_cfg.get('chamber_pressure', target_col)
+                            if pc_col in z_df:
+                                fig_trans.add_trace(go.Scatter(x=z_df['timestamp'], y=z_df[pc_col], name="Pressure"))
+                                # Normalize Command to match scale
+                                max_p = z_df[pc_col].max()
+                                cmd_norm = z_df[cmd_col] / z_df[cmd_col].max() * max_p
+                                fig_trans.add_trace(
+                                    go.Scatter(x=z_df['timestamp'], y=cmd_norm, name="Command", line=dict(dash='dot')))
+
+                                # Markers
+                                fig_trans.add_vline(x=events['t_zero'], line_color="green", annotation_text="T0")
+                                fig_trans.add_vline(x=events['t_ignition'], line_color="red",
+                                                    annotation_text="Ignition")
+                                fig_trans.update_layout(height=350, title="Start-up Transient Zoom",
+                                                        xaxis_title="Time (ms)")
+                                st.plotly_chart(fig_trans, use_container_width=True)
+                    else:
+                        st.info("No transient events detected. Ensure command signal has a clear rising edge.")
+
             else:
-                # If analysis disabled, show simple plot
                 st.plotly_chart(fig, use_container_width=True)
 
             # --- ACTION BAR (Save & Export) ---
-            st.markdown("### 💾 Actions")
+            st.markdown("### 💾 Actions & Export")
             a1, a2 = st.columns([1, 1])
 
             with a1:
-                # Save to DB
                 comments = st.text_input("Test Notes", placeholder="e.g. Test 001, Cold Flow")
                 if st.button("Save to Campaign History", disabled=steady_df.empty):
                     # Re-calc rise time for DB
@@ -366,10 +411,11 @@ with tab1:
                     st.success("Saved to Database!")
 
             with a2:
-                # Export CSV
+                st.write("")  # Alignment spacer
+                st.write("")
                 csv_data = convert_df_to_csv(df)
                 st.download_button(
-                    label="Download Processed CSV",
+                    label="💾 Download Processed CSV",
                     data=csv_data,
                     file_name=f"Processed_{uploaded_file.name}",
                     mime='text/csv',
@@ -383,7 +429,6 @@ with tab2:
     files = st.file_uploader("Upload Multiple CSVs", type=["csv"], accept_multiple_files=True, key="batch")
 
     if files:
-        # Load first file to get columns
         first_df, _ = load_and_process_data(files[0], current_config, freq_ms)
         if first_df is not None:
             overlay_col = st.selectbox("Channel to Overlay", first_df.columns, index=1)
