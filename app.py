@@ -3,27 +3,28 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
+import json
+import os
+from datetime import datetime
 
-# --- CUSTOM MODULE IMPORTS ---
+# --- CUSTOM IMPORTS ---
 from data_lib.config_loader import get_available_configs, load_config
 from data_lib.propulsion_physics import (
-    calculate_performance,
-    calculate_theoretical_profile,
-    calculate_uncertainties,
-    calculate_derived_metrics
+    calculate_hot_fire_series, calculate_cold_flow_metrics, calculate_hot_fire_metrics,
+    calculate_theoretical_profile
 )
 from data_lib.sensor_data_tools import (
-    resample_data, smooth_signal_savgol, find_steady_window,
+    resample_data, smooth_signal_savgol, find_steady_windows, find_steady_window,
     calculate_rise_time, analyze_stability_fft
 )
-from data_lib.reporting import generate_html_report
 from data_lib.transient_analysis import detect_transient_events
-from data_lib.db_manager import save_test_result, get_campaign_history
+from data_lib.db_manager import save_test_result, get_campaign_history, save_cold_flow_record, get_cold_flow_history, \
+    init_db
+from data_lib.reporting import generate_html_report
 
-# --- PAGE SETUP ---
-st.set_page_config(page_title="Hopper Data Studio", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Hopper Data Studio", layout="wide")
+init_db()
 
-# --- CSS STYLING ---
 st.markdown("""
     <style>
     .block-container {padding-top: 2rem;}
@@ -32,13 +33,47 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+
 # ==========================================
-# SIDEBAR: GLOBAL CONFIGURATION
+# HELPER FUNCTIONS
 # ==========================================
-st.sidebar.title("🚀 Hopper Studio")
+def get_all_columns_from_session():
+    all_cols = set()
+
+    def extract(f):
+        try:
+            f.seek(0)
+            c = pd.read_csv(f, nrows=0).columns.tolist()
+            f.seek(0)
+            return c
+        except:
+            return []
+
+    for key in ['insp_up', 'cf_single', 'cf_batch', 'hf_single', 'hf_ref']:
+        if st.session_state.get(key):
+            files = st.session_state[key]
+            if isinstance(files, list):
+                for f in files: all_cols.update(extract(f))
+            else:
+                all_cols.update(extract(files))
+    return sorted(list(all_cols))
+
+
+def guess_unit(col_name):
+    c = col_name.lower()
+    if 'press' in c or 'pt' in c: return "Pressure (bar)"
+    if 'thrust' in c or 'force' in c or 'lc' in c: return "Thrust (N)"
+    if 'flow' in c or 'fm' in c: return "Mass Flow (g/s)"
+    if 'temp' in c or 'tc' in c: return "Temperature (C)"
+    return "Value"
+
+
+# ==========================================
+# SIDEBAR
+# ==========================================
+st.sidebar.title("Hopper Studio")
 st.sidebar.header("Global Settings")
 
-# Config Loader
 available_configs = get_available_configs()
 current_config = None
 selected_config_name = st.sidebar.selectbox(
@@ -50,8 +85,7 @@ if selected_config_name and selected_config_name != "Generic / No Config":
     current_config = load_config(selected_config_name)
     st.sidebar.success(f"Active: {selected_config_name}")
 
-    # Global Overrides (Apply to all tabs)
-    with st.sidebar.expander("⚙️ Processing Settings"):
+    with st.sidebar.expander("Processing Settings"):
         settings = current_config.get('settings', {})
         freq_ms = st.number_input("Resample (ms)", value=settings.get('resample_freq_ms', 10))
         window_ms = st.number_input("Steady Window (ms)", value=settings.get('steady_window_ms', 500))
@@ -62,53 +96,67 @@ if selected_config_name and selected_config_name != "Generic / No Config":
         throat_area = st.number_input("Throat Area (mm^2)", value=geom.get('throat_area_mm2', 0.0))
         current_config['geometry']['throat_area_mm2'] = throat_area
 
-    with st.sidebar.expander("📄 View Raw Config"):
-        st.json(current_config)
+    with st.sidebar.expander("Channel Map Overrides"):
+        st.caption("Re-assign physics roles to sensors.")
+        if 'columns' not in current_config: current_config['columns'] = {}
+
+        roles = list(current_config.get('columns', {}).keys())
+        raw_cols = get_all_columns_from_session()
+        available_cols = raw_cols.copy()
+        if 'channel_config' in current_config:
+            mapping = current_config['channel_config']
+            mapped = [mapping.get(c, c) for c in raw_cols]
+            available_cols = sorted(list(set(available_cols + mapped)))
+
+        for role in roles:
+            def_val = current_config['columns'].get(role, "")
+            if available_cols:
+                options = available_cols.copy()
+                if def_val and def_val not in options:
+                    options.insert(0, def_val)
+                elif not def_val:
+                    options.insert(0, "")
+                idx = options.index(def_val) if def_val in options else 0
+                new_val = st.selectbox(role, options, index=idx, key=f"map_{role}")
+            else:
+                new_val = st.text_input(role, value=def_val, key=f"map_{role}")
+            if new_val != def_val:
+                current_config['columns'][role] = new_val.strip()
+
+    st.sidebar.markdown("---")
+    config_json = json.dumps(current_config, indent=4)
+    st.sidebar.download_button("Download Active Config", config_json, "config.json", "application/json")
+
 else:
-    # Defaults
     freq_ms = st.sidebar.number_input("Resample (ms)", value=10)
     window_ms = st.sidebar.number_input("Steady Window (ms)", value=500)
     cv_thresh = st.sidebar.number_input("CV Thresh (%)", value=1.0)
 
 
-# ==========================================
-# HELPER: UNIFIED DATA LOADER
-# ==========================================
 @st.cache_data
 def load_and_prep_file(uploaded_file, config, f_ms):
-    """
-    Standardizes loading, mapping, and resampling for all tabs.
-    """
     try:
         df_raw = pd.read_csv(uploaded_file)
     except Exception as e:
         return None, f"Error reading CSV: {e}"
 
-    # 1. Apply Channel Mapping
     if config and 'channel_config' in config:
         mapping = config['channel_config']
         df_raw.columns = df_raw.columns.astype(str)
         df_raw.rename(columns=mapping, inplace=True)
 
-    # 2. Find Time Column
     time_col = 'timestamp'
-    if config:
-        time_col = config.get('columns', {}).get('timestamp', 'timestamp')
-
+    if config: time_col = config.get('columns', {}).get('timestamp', 'timestamp')
     if time_col not in df_raw.columns:
-        # Fuzzy Search
         candidates = [c for c in df_raw.columns if 'time' in c.lower() or 'ts' in c.lower()]
         if candidates:
             time_col = candidates[0]
         else:
-            return None, "Time column not found. Check config mapping."
+            return None, "Time column not found."
 
-    # 3. Resample
     df = resample_data(df_raw, time_col=time_col, freq_ms=f_ms)
 
-    # 4. Basic Physics (Standard Calculations)
-    if config:
-        df = calculate_performance(df, config)
+    # NOTE: Physics calculation moved to specific tabs to save performance
 
     return df, None
 
@@ -124,454 +172,497 @@ def convert_df_to_csv(df):
 
 
 # ==========================================
-# MAIN TABS (THE PLUG-IN ARCHITECTURE)
+# MAIN TABS
 # ==========================================
-tab_insp, tab_cold, tab_hot, tab_db = st.tabs([
-    "General Inspector",
-    "Cold Flow / Component",
+tab_insp, tab_cfs, tab_cfb, tab_hot, tab_db = st.tabs([
+    "Inspector",
+    "Cold Flow Analysis",
+    "Cold Flow Batch",
     "Hot Fire Analysis",
-    "Campaign Record"
+    "Campaign DB"
 ])
 
 # -----------------------------------------------------------------------------
-# TAB 1: GENERAL INSPECTOR (Multi-Plot)
+# TAB 1: INSPECTOR
 # -----------------------------------------------------------------------------
 with tab_insp:
     st.header("General Data Inspector")
-    files = st.file_uploader("Upload CSVs to Inspect", accept_multiple_files=True, key="insp_up")
+    files = st.file_uploader("Upload CSVs", accept_multiple_files=True, key="insp_up")
 
     if files:
-        # File Selector
-        file_names = [f.name for f in files]
-        active_name = st.selectbox("Select File", file_names)
-        active_file = next(f for f in files if f.name == active_name)
-
-        df, err = load_and_prep_file(active_file, current_config, freq_ms)
+        f_map = {f.name: f for f in files}
+        act_name = st.selectbox("Active File", list(f_map.keys()))
+        df, err = load_and_prep_file(f_map[act_name], current_config, freq_ms)
 
         if df is not None:
-            col_ctrl, col_plot = st.columns([1, 4])
+            t_start = df['timestamp'].min()
+            df['time_s'] = (df['timestamp'] - t_start) / 1000.0
 
-            with col_ctrl:
-                st.subheader("Display Settings")
-                num_plots = st.number_input("Number of Subplots", 1, 4, 1)
+            c_set, c_plot = st.columns([1, 4])
+            with c_set:
+                n_plots = st.number_input("Subplots", 1, 4, 1)
+                configs = []
+                cols = [c for c in df.columns if c not in ['timestamp', 'time_s']]
+                for i in range(n_plots):
+                    def_s = [cols[i]] if i < len(cols) else []
+                    s = st.multiselect(f"Area {i + 1}", cols, default=def_s, key=f"p{i}")
+                    configs.append(s)
 
-                plot_configs = []
-                # Intelligent Defaults
-                all_cols = [c for c in df.columns if c != 'timestamp']
-
-                for i in range(num_plots):
-                    st.caption(f"**Plot Area {i + 1}**")
-                    # Try to pre-select something different for each plot
-                    def_sel = []
-                    if i < len(all_cols):
-                        def_sel = [all_cols[i]]
-
-                    sels = st.multiselect(f"Signals {i + 1}", all_cols, default=def_sel, key=f"p_sel_{i}")
-                    plot_configs.append(sels)
-
-            with col_plot:
-                if any(plot_configs):
-                    fig = make_subplots(rows=num_plots, cols=1, shared_xaxes=True, vertical_spacing=0.05)
-
-                    for i, signals in enumerate(plot_configs):
-                        for sig in signals:
-                            fig.add_trace(go.Scatter(x=df['timestamp'], y=df[sig], name=sig), row=i + 1, col=1)
-
-                    fig.update_layout(height=300 + (200 * (num_plots - 1)), margin=dict(t=30, b=30))
+            with c_plot:
+                if any(configs):
+                    fig = make_subplots(rows=n_plots, cols=1, shared_xaxes=True, vertical_spacing=0.05)
+                    for i, sigs in enumerate(configs):
+                        for s in sigs:
+                            fig.add_trace(go.Scatter(x=df['time_s'], y=df[s], name=s), row=i + 1, col=1)
+                        if sigs: fig.update_yaxes(title_text=guess_unit(sigs[0]), row=i + 1, col=1)
+                    fig.update_xaxes(title_text="Time (s)", row=n_plots, col=1)
+                    fig.update_layout(height=300 + (200 * (n_plots - 1)), margin=dict(t=30, b=30))
                     st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("Select signals to plot.")
 
-            # --- ANALYSIS: CORRELATION & STATS ---
-            col_corr, col_stats = st.columns([1, 1])
-
-            with col_corr:
-                st.subheader("Correlation Matrix")
-                # Drop time columns for clean sensor correlation
-                numerics = df.select_dtypes(include=[np.number])
-                drop_cols = [c for c in numerics.columns if 'time' in c.lower()]
-                corr_df = numerics.drop(columns=drop_cols)
-
-                if not corr_df.empty:
-                    corr = corr_df.corr()
-                    fig_corr = go.Figure(data=go.Heatmap(
-                        z=corr.values,
-                        x=corr.columns,
-                        y=corr.index,
-                        colorscale='RdBu',
-                        zmin=-1, zmax=1,
-                        colorbar=dict(title="Corr")
-                    ))
-                    fig_corr.update_layout(height=400, margin=dict(t=0, b=0, l=0, r=0))
-                    st.plotly_chart(fig_corr, use_container_width=True)
-                else:
-                    st.info("No numeric columns available for correlation.")
-
-            with col_stats:
-                st.subheader("Descriptive Statistics")
-                st.dataframe(df.describe().T, height=400)
+            st.dataframe(df.describe().T, height=300)
 
 # -----------------------------------------------------------------------------
-# TAB 2: COLD FLOW / COMPONENT (Batch Processor)
+# TAB 2: COLD FLOW ANALYSIS (SINGLE)
 # -----------------------------------------------------------------------------
-with tab_cold:
-    st.header("Cold Flow & Component Characterization")
+with tab_cfs:
+    st.header("Cold Flow Analysis")
 
-    col_cf_1, col_cf_2 = st.columns([1, 2])
+    col_load, col_info = st.columns([1, 1])
+    with col_load:
+        cfs_file = st.file_uploader("Upload Single Test CSV", key="cf_single")
 
-    with col_cf_1:
-        st.info("Upload multiple test files to calculate Cd vs Pressure Drop.")
-        cf_files = st.file_uploader("Upload Batch CSVs", accept_multiple_files=True, key="cf_batch")
+    with col_info:
+        if cfs_file:
+            st.subheader("Test Metadata")
+            default_id = os.path.splitext(cfs_file.name)[0]
 
-        # Settings for Batch Logic
-        st.subheader("Analysis Logic")
-        target_col_guess = "IG-PT-01"
+            c_meta_1, c_meta_2 = st.columns(2)
+            test_id = c_meta_1.text_input("Test ID", value=default_id)
+            part_name = c_meta_2.text_input("Part Name", value="Injector-01")
+            serial_num = c_meta_1.text_input("Serial Number", value="SN001")
+
+            if current_config:
+                fluid = current_config.get('fluid', {})
+                geom = current_config.get('geometry', {})
+                st.info(
+                    f"Fluid: {fluid.get('name', '?')} ({fluid.get('density_kg_m3')} kg/m³) | Orifice: {geom.get('orifice_area_mm2')} mm²")
+
+    if cfs_file:
+        df, err = load_and_prep_file(cfs_file, current_config, freq_ms)
+        if df is not None:
+            df['time_s'] = (df['timestamp'] - df['timestamp'].min()) / 1000.0
+
+            # Auto-Select Channels based on Config
+            cols_cfg = current_config.get('columns', {}) if current_config else {}
+
+            def_p = [cols_cfg.get('upstream_pressure', cols_cfg.get('inlet_pressure'))]
+            def_p = [c for c in def_p if c and c in df.columns]
+
+            def_f = [cols_cfg.get('mass_flow', cols_cfg.get('mf'))]
+            def_f = [c for c in def_f if c and c in df.columns]
+
+            st.subheader("1. Hydraulic Performance")
+            c_sel_p, c_sel_f = st.columns(2)
+            sel_p = c_sel_p.multiselect("Pressure Channels", df.columns, default=def_p)
+            sel_f = c_sel_f.multiselect("Flow Channels", df.columns, default=def_f)
+
+            fig_pf = make_subplots(specs=[[{"secondary_y": True}]])
+            for c in sel_p: fig_pf.add_trace(go.Scatter(x=df['time_s'], y=df[c], name=c), secondary_y=False)
+            for c in sel_f: fig_pf.add_trace(go.Scatter(x=df['time_s'], y=df[c], name=c, line=dict(dash='dot')),
+                                             secondary_y=True)
+            fig_pf.update_yaxes(title_text="Pressure (bar)", secondary_y=False)
+            fig_pf.update_yaxes(title_text="Mass Flow (g/s)", secondary_y=True)
+            st.plotly_chart(fig_pf, use_container_width=True)
+
+            # Temperature Plot
+            t_cols = [c for c in df.columns if any(x in c.lower() for x in ['temp', 'tc'])]
+            if t_cols:
+                fig_t = go.Figure()
+                for c in t_cols: fig_t.add_trace(go.Scatter(x=df['time_s'], y=df[c], name=c))
+                fig_t.update_layout(title="Temperature", height=250, margin=dict(t=30, b=10))
+                st.plotly_chart(fig_t, use_container_width=True)
+
+            # Analysis Controls
+            st.subheader("3. Steady State Detection")
+
+            ac1, ac2, ac3 = st.columns(3)
+            # A. Stability Sensors
+            stab_sigs = ac1.multiselect("Stability Criteria (Sensors must be stable)", df.columns, default=sel_p)
+            # B. Threshold
+            min_thresh = ac2.number_input("Min Value Threshold", value=1.0,
+                                          help="Signal must be above this value to count as a test point.")
+
+            # C. Detection
+            windows = []
+            if stab_sigs:
+                windows, max_cv = find_steady_windows(df, stab_sigs, 'timestamp', window_ms, cv_thresh, min_thresh)
+
+            selected_window = None
+
+            if not windows:
+                ac3.warning("No steady windows found meeting criteria.")
+            else:
+                # D. Window Selector
+                win_opts = []
+                for i, w in enumerate(windows):
+                    dur_s = (w[1] - w[0]) / 1000.0
+                    start_s = (w[0] - df['timestamp'].min()) / 1000.0
+                    win_opts.append(f"Window {i + 1}: {start_s:.1f}s (Dur: {dur_s:.1f}s)")
+
+                sel_idx = ac3.selectbox("Select Window", range(len(windows)), format_func=lambda x: win_opts[x])
+                selected_window = windows[sel_idx]
+
+                # Highlight on plot
+                s_s = (selected_window[0] - df['timestamp'].min()) / 1000.0
+                e_s = (selected_window[1] - df['timestamp'].min()) / 1000.0
+                fig_pf.add_vrect(x0=s_s, x1=e_s, fillcolor="green", opacity=0.2)
+
+                # Metrics
+                st.subheader("3. Results")
+                steady_df = df[(df['timestamp'] >= selected_window[0]) & (df['timestamp'] <= selected_window[1])]
+                avg = steady_df.mean().to_dict()
+
+                # Use Cold Flow Metrics Function
+                metrics = calculate_cold_flow_metrics(avg, current_config or {})
+
+                r1, r2, r3, r4 = st.columns(4)
+
+                val_p = avg.get(sel_p[0], 0) if sel_p else 0
+                val_f = avg.get(sel_f[0], 0) if sel_f else 0
+                val_t = avg.get(t_cols[0], 0) if t_cols else 0
+                val_cd = metrics.get('Cd', 0)
+
+                r1.metric("Avg Pressure", f"{val_p:.2f} bar")
+                r2.metric("Avg Flow", f"{val_f:.2f} g/s")
+                r3.metric("Avg Temp", f"{val_t:.1f} °C")
+                r4.metric("Cd", f"{val_cd:.4f}" if val_cd else "N/A")
+
+                # Save
+                comments = st.text_input("Comments", placeholder="e.g. Throttle 50%")
+                if st.button("Save to Campaign DB"):
+                    if current_config:
+                        # Append window suffix if multiple windows exist
+                        save_id = test_id
+                        if len(windows) > 1:
+                            save_id = f"{test_id}_W{sel_idx + 1}"
+
+                        record = {
+                            'test_id': save_id,
+                            'part': part_name,
+                            'serial_num': serial_num,
+                            'test_timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            'fluid': current_config['fluid'].get('name'),
+                            'avg_p_up_bar': val_p,
+                            'avg_T_up_K': val_t + 273.15,
+                            'avg_p_down_bar': 1.013,
+                            'avg_mf_g_s': val_f,
+                            'orfifice_area_mm2': current_config['geometry'].get('ox_injector_area_mm2'),
+                            'avg_rho_CALC': current_config['fluid'].get('ox_density_kg_m3'),
+                            'avg_cd_CALC': val_cd,
+                            'comments': comments
+                        }
+                        save_cold_flow_record(record)
+                        st.success(f"Saved {save_id} to Database!")
+                    else:
+                        st.error("Please load a configuration to save results.")
+
+# -----------------------------------------------------------------------------
+# TAB 3: COLD FLOW BATCH
+# -----------------------------------------------------------------------------
+with tab_cfb:
+    st.header("Cold Flow Batch Processor")
+
+    col_setup, col_run = st.columns([1, 2])
+    with col_setup:
+        st.info("Batch process multiple files for one part.")
+        cf_files = st.file_uploader("Batch CSVs", accept_multiple_files=True, key="cf_batch")
+
+        st.subheader("Batch Metadata")
+        b_part = st.text_input("Part Name", value="Injector-01", key="b_part")
+        b_serial = st.text_input("Serial Number", value="SN001", key="b_serial")
+
+        # Config Helper
+        def_p = "IG-PT-01"
         if current_config:
-            target_col_guess = current_config.get('columns', {}).get('chamber_pressure',
-                                                                     current_config.get('columns', {}).get(
-                                                                         'inlet_pressure_ox', ''))
+            def_p = current_config.get('columns', {}).get('chamber_pressure',
+                                                          current_config.get('columns', {}).get('inlet_pressure_ox',
+                                                                                                ''))
 
-        target_col_cf = st.text_input("Pressure Signal for Steady State", value=target_col_guess,
-                                      help="Column name to detect window on.")
+        # Dropdown
+        batch_cols = set()
+        if cf_files:
+            try:
+                cf_files[0].seek(0)
+                batch_cols = set(pd.read_csv(cf_files[0], nrows=0).columns)
+                cf_files[0].seek(0)
+            except:
+                pass
 
-        run_batch = st.button("Run Batch Analysis", disabled=not cf_files)
+        cf_options = list(batch_cols)
+        if current_config and 'channel_config' in current_config:
+            mapping = current_config['channel_config']
+            cf_options = sorted(list(set([mapping.get(c, c) for c in batch_cols])))
 
-    with col_cf_2:
-        if run_batch and cf_files and current_config:
-            results = []
-            progress_bar = st.progress(0)
+        if cf_options:
+            idx = cf_options.index(def_p) if def_p in cf_options else 0
+            target_p = st.selectbox("Steady Pressure Signal", cf_options, index=idx)
+        else:
+            target_p = st.text_input("Steady Pressure Signal", value=def_p)
 
+        do_batch = st.button("Run Batch", disabled=not cf_files)
+
+    with col_run:
+        if do_batch and cf_files and current_config:
+            res_list = []
+            db_records = []
+
+            bar = st.progress(0)
             for i, f in enumerate(cf_files):
-                # 1. Load
-                df_cf, _ = load_and_prep_file(f, current_config, freq_ms)
+                d, _ = load_and_prep_file(f, current_config, freq_ms)
+                if d is not None and target_p in d.columns:
+                    # Use multi-window detector with pressure as the criterion
+                    # Hardcode thresh for batch to be robust
+                    windows, _ = find_steady_windows(d, [target_p], 'timestamp', window_ms, cv_thresh, 1.0)
 
-                if df_cf is not None and target_col_cf in df_cf.columns:
-                    # 2. Find Window
-                    df_cf['__sm'] = smooth_signal_savgol(df_cf, target_col_cf)
-                    bounds, _ = find_steady_window(df_cf, '__sm', 'timestamp', window_ms, cv_thresh)
+                    tid = os.path.splitext(f.name)[0]
+                    r = {'Test ID': tid, 'Status': 'Skipped'}
 
-                    row = {'Filename': f.name, 'Status': 'Skipped'}
+                    if windows:
+                        # For batch, pick the longest window
+                        best_win = max(windows, key=lambda x: x[1] - x[0])
 
-                    if bounds:
-                        s, e = bounds
-                        steady = df_cf[(df_cf['timestamp'] >= s) & (df_cf['timestamp'] <= e)]
-
-                        # 3. Calculate Averages
+                        steady = d[(d['timestamp'] >= best_win[0]) & (d['timestamp'] <= best_win[1])]
                         avg = steady.mean().to_dict()
 
-                        # 4. Calculate Cd (using physics lib)
-                        metrics = calculate_derived_metrics(avg, current_config)
+                        # Use Cold Flow Physics
+                        mets = calculate_cold_flow_metrics(avg, current_config)
 
-                        # Pack Result
-                        row['Status'] = 'OK'
-                        row['Avg Upstream Pressure [bar]'] = avg.get(target_col_cf, 0)
+                        r.update({'Status': 'OK', 'Pressure': avg.get(target_p, 0)})
+                        r.update(mets)  # Adds Cd
 
-                        # Try to find flow for the table
-                        f_col = current_config.get('columns', {}).get('mass_flow')
-                        if f_col: row['Avg Mass Flow [g/s]'] = avg.get(f_col, 0)
+                        # Prepare DB Record
+                        cols_cfg = current_config.get('columns', {})
+                        f_col = cols_cfg.get('mass_flow_ox')
+                        val_f = avg.get(f_col, 0) if f_col else 0
+                        t_col = next((c for c in d.columns if 'temp' in c.lower()), None)
+                        val_t = avg.get(t_col, 0) if t_col else 20.0
 
-                        # Add Calculated Metrics (Cd, etc.)
-                        row.update(metrics)
+                        val_cd = mets.get('Cd', 0)
 
-                    results.append(row)
+                        db_rec = {
+                            'test_id': tid,
+                            'part': b_part,
+                            'serial_num': b_serial,
+                            'test_timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            'fluid': current_config['fluid'].get('name'),
+                            'avg_p_up_bar': avg.get(target_p, 0),
+                            'avg_T_up_K': val_t + 273.15,
+                            'avg_p_down_bar': 1.013,
+                            'avg_mf_g_s': val_f,
+                            'orfifice_area_mm2': current_config['geometry'].get('ox_injector_area_mm2'),
+                            'avg_rho_CALC': current_config['fluid'].get('ox_density_kg_m3'),
+                            'avg_cd_CALC': val_cd,
+                            'comments': 'Batch Processed'
+                        }
+                        db_records.append(db_rec)
 
-                progress_bar.progress((i + 1) / len(cf_files))
+                    res_list.append(r)
+                bar.progress((i + 1) / len(cf_files))
 
-            # Display Results
-            res_df = pd.DataFrame(results)
+            # Show Results
+            rdf = pd.DataFrame(res_list)
+            st.dataframe(rdf)
 
-            # Filter to successful
-            valid_res = res_df[res_df['Status'] == 'OK']
+            # SAVE ALL BUTTON
+            if db_records:
+                if st.button(f"Save {len(db_records)} Records to DB"):
+                    for rec in db_records:
+                        save_cold_flow_record(rec)
+                    st.success("All records saved to database!")
 
-            if not valid_res.empty:
-                st.success(f"Processed {len(valid_res)}/{len(cf_files)} files successfully.")
-
-                # Plotting Cd
-                cd_cols = [c for c in valid_res.columns if 'Cd' in c]
-                if cd_cols:
-                    cd_target = cd_cols[0]  # Pick first Cd found (Ox or Fuel)
-
-                    fig_cd = go.Figure()
-                    fig_cd.add_trace(go.Scatter(
-                        x=valid_res['upstream_pressure'],
-                        y=valid_res[cd_target],
-                        mode='markers+text',
-                        text=valid_res['Filename'],
-                        marker=dict(size=12, color='blue'),
-                        name=cd_target
-                    ))
-
-                    # Add Trendline (Average Cd)
-                    avg_cd_val = valid_res[cd_target].mean()
-                    fig_cd.add_hline(y=avg_cd_val, line_dash="dash", annotation_text=f"Avg: {avg_cd_val:.4f}")
-
-                    fig_cd.update_layout(
-                        title=f"{cd_target} vs Pressure",
-                        xaxis_title="Upstream Pressure [bar]",
-                        yaxis_title="Discharge Coefficient (-)",
-                        height=500
-                    )
-                    st.plotly_chart(fig_cd, use_container_width=True)
-
-                    st.subheader("Results Table")
-                    st.dataframe(valid_res)
-
-                    # Export
-                    csv = valid_res.to_csv(index=False).encode('utf-8')
-                    st.download_button("Download Results CSV", csv, "batch_results.csv", "text/csv")
-
-                else:
-                    st.warning(
-                        "Steady states found, but Cd could not be calculated. Check Config mapping for Flow and Inlet Pressure.")
-            else:
-                st.error("No valid steady states found in batch.")
-                st.dataframe(res_df)
+                    # Plot
+                    cd_c = [c for c in rdf.columns if 'Cd' in c]
+                    if cd_c:
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=rdf['Pressure'], y=rdf[cd_c[0]], mode='markers', text=rdf['Test ID'],
+                                                 marker=dict(size=10)))
+                        st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# TAB 3: HOT FIRE ANALYSIS (Deep Dive)
+# TAB 4: HOT FIRE ANALYSIS
 # -----------------------------------------------------------------------------
 with tab_hot:
-    st.header("Hot Fire Engineering Analysis")
+    st.header("Hot Fire Analysis")
 
-    hf_file = st.file_uploader("Upload Hot Fire CSV", key="hf_single")
+    c_main, c_ref = st.columns([1, 1])
+    with c_main:
+        hf_file = st.file_uploader("Primary Test CSV", key="hf_single")
+    with c_ref:
+        ref_file = st.file_uploader("Reference / Golden Run CSV (Optional)", key="hf_ref")
 
     if hf_file:
-        df, error = load_and_prep_file(hf_file, current_config, freq_ms)
+        df, err = load_and_prep_file(hf_file, current_config, freq_ms)
+        df_ref, _ = load_and_prep_file(ref_file, current_config, freq_ms) if ref_file else (None, None)
 
-        if error:
-            st.error(error)
+        if err:
+            st.error(err)
         else:
-            # --- 1. PLOTTING ---
-            c_sel, c_view = st.columns([3, 1])
+            # Apply Hot Fire Physics Here
+            if current_config:
+                df = calculate_hot_fire_series(df, current_config)
+
+            cols_cfg = current_config.get('columns', {}) if current_config else {}
+
+            # Auto-detect steady
+            def_t = df.columns[1]
+            if current_config: def_t = cols_cfg.get('chamber_pressure', def_t)
+            steady_target_col = def_t if def_t in df.columns else df.columns[1]
+
+            # Use legacy detection for hot fire
+            df['__sm'] = smooth_signal_savgol(df, steady_target_col)
+            bounds_ms, cv_tr = find_steady_window(df, '__sm', 'timestamp', window_ms, cv_thresh)
+
+            # Auto-detect T0
+            t0_ms = None
+            cmd = cols_cfg.get('fire_command')
+            if cmd and cmd in df:
+                t_cfg = current_config.copy() if current_config else {'columns': {}}
+                t_cfg['columns']['fire_command'] = cmd
+                ev = detect_transient_events(df, t_cfg, bounds_ms)
+                t0_ms = ev.get('t_zero')
+
+            # Controls
+            c_sel, c_align, c_opt = st.columns([2, 1, 1])
             with c_sel:
-                # Defaults based on config
-                def_cols = []
+                def_c = []
                 if current_config:
-                    cmap = current_config.get('columns', {})
-                    for k in ['chamber_pressure', 'mass_flow_ox', 'thrust']:
-                        if cmap.get(k) in df.columns: def_cols.append(cmap[k])
-                if not def_cols: def_cols = df.columns[1:3].tolist()
+                    for k in ['chamber_pressure', 'thrust', 'mass_flow_ox']:
+                        if cols_cfg.get(k) in df.columns: def_c.append(cols_cfg[k])
+                p_cols = st.multiselect("Channels", df.columns, default=def_c)
 
-                plot_cols = st.multiselect("Channels", df.columns, default=def_cols, key="hf_cols")
+            with c_align:
+                align_opts = ["File Start"]
+                if t0_ms: align_opts.append("Valve Open (T-0)")
+                if bounds_ms: align_opts.append("Steady Start")
+                align_mode = st.selectbox("Align Time (0s)", align_opts)
 
-            with c_view:
-                st.write("")
-                enable_ana = st.toggle("Enable Analysis", value=True, key="hf_tog")
+                t_offset = df['timestamp'].min()
+                if align_mode == "Valve Open (T-0)" and t0_ms:
+                    t_offset = t0_ms
+                elif align_mode == "Steady Start" and bounds_ms:
+                    t_offset = bounds_ms[0]
 
-            # Main Plot (Dual Axis)
+            with c_opt:
+                do_ana = st.toggle("Analysis Mode", value=True)
+
+            # Shift
+            df['time_s'] = (df['timestamp'] - t_offset) / 1000.0
+            if df_ref is not None: df_ref['time_s'] = (df_ref['timestamp'] - df_ref['timestamp'].min()) / 1000.0
+
+            # Plot
             fig = make_subplots(specs=[[{"secondary_y": True}]])
-            for col in plot_cols:
-                is_sec = any(x in col.lower() for x in ['flow', 'thrust', 'isp'])
-                fig.add_trace(go.Scatter(x=df['timestamp'], y=df[col], name=col), secondary_y=is_sec)
+            for c in p_cols:
+                sec = any(x in c.lower() for x in ['flow', 'thrust', 'isp'])
+                fig.add_trace(go.Scatter(x=df['time_s'], y=df[c], name=c), secondary_y=sec)
 
-            fig.update_layout(height=450, title="Test Trace", margin=dict(t=30, b=0))
+            if df_ref is not None:
+                for c in p_cols:
+                    if c in df_ref.columns:
+                        sec = any(x in c.lower() for x in ['flow', 'thrust', 'isp'])
+                        fig.add_trace(go.Scatter(x=df_ref['time_s'], y=df_ref[c], name=f"REF: {c}",
+                                                 line=dict(dash='dot', width=1), opacity=0.6), secondary_y=sec)
 
-            # --- 2. ANALYSIS LOGIC ---
-            if enable_ana:
-                # Controls
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    # Target Col
-                    def_t = plot_cols[0] if plot_cols else df.columns[1]
-                    if current_config:
-                        def_t = current_config.get('columns', {}).get('chamber_pressure', def_t)
-                    target_col = st.selectbox("Steady Signal", df.columns,
-                                              index=list(df.columns).index(def_t) if def_t in df.columns else 0)
-                with c2:
-                    show_theo = st.checkbox("Show Theoretical", value=False)
-                with c3:
-                    auto_zoom = st.checkbox("Auto-Zoom Window", value=True)
+            fig.update_layout(height=500, title=f"Test: {hf_file.name}", xaxis_title="Time (s)", margin=dict(t=30, b=0))
 
-                # Steady State
-                df['__sm'] = smooth_signal_savgol(df, target_col)
-                bounds, cv_trace = find_steady_window(df, '__sm', 'timestamp', window_ms, cv_thresh)
+            if do_ana:
+                # Logic
+                t_col = st.selectbox("Steady Signal", df.columns, index=list(df.columns).index(
+                    steady_target_col) if steady_target_col in df.columns else 0)
 
-                t_min, t_max = float(df['timestamp'].min()), float(df['timestamp'].max())
-                s_def, e_def = bounds if bounds else (t_min, t_max)
+                t_min_s = df['time_s'].min()
+                t_max_s = df['time_s'].max()
+                sd_s, ed_s = t_min_s, t_max_s
+                if bounds_ms:
+                    sd_s = (bounds_ms[0] - t_offset) / 1000.0
+                    ed_s = (bounds_ms[1] - t_offset) / 1000.0
 
-                if bounds:
-                    st.success(f"Steady: {bounds[0]:.0f} - {bounds[1]:.0f} ms")
-                    fig.add_vrect(x0=bounds[0], x1=bounds[1], fillcolor="green", opacity=0.1, secondary_y=False)
+                with st.expander("Window Adjust", expanded=(bounds_ms is None)):
+                    c1, c2 = st.columns(2)
+                    s_start_s = c1.number_input("Start (s)", value=float(sd_s), step=0.1)
+                    s_end_s = c2.number_input("End (s)", value=float(ed_s), step=0.1)
 
-                with st.expander("Adjust Window", expanded=(bounds is None)):
-                    s_start, s_end = st.slider("Window", t_min, t_max, (float(s_def), float(e_def)))
+                s_start_ms = s_start_s * 1000.0 + t_offset
+                s_end_ms = s_end_s * 1000.0 + t_offset
 
-                # Theory Overlay
-                if show_theo and current_config:
-                    df_theo = calculate_theoretical_profile(df, current_config)
-                    if df_theo is not None and 'thrust_ideal' in df_theo:
-                        fig.add_trace(go.Scatter(x=df['timestamp'], y=df_theo['thrust_ideal'], name="Ideal Thrust",
-                                                 line=dict(dash='dot', color='black')), secondary_y=True)
-
-                if auto_zoom:
-                    fig.update_xaxes(range=[max(t_min, s_start - 2000), min(t_max, s_end + 2000)])
-
+                fig.add_vrect(x0=s_start_s, x1=s_end_s, fillcolor="green", opacity=0.1, secondary_y=False)
                 st.plotly_chart(fig, use_container_width=True)
 
-                # --- 3. METRICS ---
-                mask = (df['timestamp'] >= s_start) & (df['timestamp'] <= s_end)
+                # Metrics
+                mask = (df['timestamp'] >= s_start_ms) & (df['timestamp'] <= s_end_ms)
                 steady = df[mask]
 
                 if not steady.empty:
-                    st.subheader("Performance Report")
                     avg = steady.mean().to_dict()
-                    derived = calculate_derived_metrics(avg, current_config or {})
-                    uncert = calculate_uncertainties(avg, current_config or {})
 
+                    # Hot Fire Specific Metrics
+                    der = calculate_hot_fire_metrics(avg, current_config or {})
+                    # Also include standard derived ones
+                    der.update(calculate_derived_metrics(avg, current_config or {}))
 
-                    # Formatter
-                    def fmt(k, v, u=""):
-                        err = uncert.get(k, 0)
-                        if err == 0: return f"{v:.2f} {u}"
-                        return f"{v:.1f} ± {err:.1f} {u}"
-
-
-                    # Grid
+                    st.subheader("Results")
                     m1, m2, m3, m4 = st.columns(4)
-                    cols_cfg = current_config.get('columns', {}) if current_config else {}
+                    if cols_cfg.get('chamber_pressure') in avg: m1.metric("Pc",
+                                                                          f"{avg[cols_cfg['chamber_pressure']]:.2f}")
+                    if cols_cfg.get('thrust') in avg: m2.metric("Thrust", f"{avg[cols_cfg['thrust']]:.2f}")
+                    if 'isp' in avg: m3.metric("Isp", f"{avg['isp']:.1f}")
 
-                    with m1:
-                        k = cols_cfg.get('chamber_pressure')
-                        if k in avg: st.metric("Avg Pc", fmt('chamber_pressure', avg[k], "bar"))
-                    with m2:
-                        k = cols_cfg.get('thrust')
-                        if k in avg: st.metric("Thrust", fmt('thrust', avg[k], "N"))
-                    with m3:
-                        if 'mass_flow_total' in avg: st.metric("Flow",
-                                                               fmt('mass_flow_total', avg['mass_flow_total'], "g/s"))
-                    with m4:
-                        if 'isp' in avg: st.metric("Isp", fmt('isp', avg['isp'], "s"))
+                    # Save
+                    if st.button("Save Hot Fire to DB"):
+                        # Re-use existing generic save for HF
+                        stats = {
+                            'duration': (s_end_ms - s_start_ms) / 1000.0,
+                            'avg_cv': float(cv_tr[mask].mean()),
+                            'avg_pressure': avg.get(cols_cfg.get('chamber_pressure')),
+                            'avg_thrust': avg.get(cols_cfg.get('thrust')),
+                            'mass_flow_total': avg.get('mass_flow_total'),
+                            'isp': avg.get('isp'),
+                            'c_star': avg.get('c_star')
+                        }
+                        save_test_result(hf_file.name, selected_config_name, stats, der, "Hot Fire Analysis")
+                        st.toast("Saved!")
 
-                    st.divider()
-                    d_cols = st.columns(5)
-                    met_list = []
-                    if 'c_star' in avg: met_list.append(("C*", fmt('c_star', avg['c_star'], "m/s")))
-                    if 'of_ratio' in avg: met_list.append(("O/F", fmt('of_ratio', avg['of_ratio'])))
-                    for k, v in derived.items(): met_list.append((k, f"{v:.2f}"))
-
-                    for i, (l, v) in enumerate(met_list):
-                        with d_cols[i % 5]: st.metric(l, v)
-
-                    # --- 4. TRANSIENT & FFT ---
-                    c_fft, c_trans = st.columns(2)
-                    with c_fft:
-                        st.markdown("**Stability (FFT)**")
-                        freqs, psd, peak = analyze_stability_fft(steady, target_col)
-                        f_fft = go.Figure(go.Scatter(x=freqs, y=psd, mode='lines', line=dict(color='purple')))
-                        f_fft.update_layout(title=f"Peak: {peak:.1f} Hz", yaxis_type="log", height=300,
-                                            margin=dict(t=30, b=0))
-                        st.plotly_chart(f_fft, use_container_width=True)
-
-                    with c_trans:
-                        st.markdown("**Transients**")
-                        # Transient Logic
-                        cmd = cols_cfg.get('fire_command')
-                        if not cmd or cmd not in df:
-                            cmd = st.selectbox("Fire Command", ["None"] + list(df.columns))
-
-                        if cmd and cmd != "None":
-                            # Temp config for transient func
-                            t_cfg = current_config.copy() if current_config else {'columns': {}}
-                            if 'columns' not in t_cfg: t_cfg['columns'] = {}
-                            t_cfg['columns']['fire_command'] = cmd
-
-                            ev = detect_transient_events(df, t_cfg, (s_start, s_end))
-                            if ev:
-                                c1, c2 = st.columns(2)
-                                c1.metric("Ign. Delay", f"{ev.get('ignition_delay_ms', 0):.0f} ms")
-                                c2.metric("Shut. Impulse", f"{ev.get('shutdown_impulse_ns', 0):.2f} Ns")
-                            else:
-                                st.caption("No clear edges found.")
-
-                    # --- 5. SAVE ---
-                    st.markdown("Actions & Reporting")
-                    col_act_1, col_act_2, col_act_3 = st.columns([2, 1, 1])
-
-                    with col_act_1:
-                        notes = st.text_input("Test Notes", placeholder="e.g. Nominal run, new injector...")
-
-                        if st.button("Save to Test Point to Campaign DB"):
-                            # (Existing DB Save Logic...)
-                            rise_k = cols_cfg.get('mass_flow_ox') or target_col
-                            _, _, r_time = calculate_rise_time(df, rise_k, s_start, avg.get(rise_k, 0))
-
-                            db_stats = {
-                                'duration': (s_end - s_start) / 1000.0,
-                                'avg_cv': float(cv_trace[mask].mean()),
-                                'rise_time': float(r_time) if r_time else 0.0,
-                                'avg_pressure': avg.get(cols_cfg.get('chamber_pressure')),
-                                'avg_thrust': avg.get(cols_cfg.get('thrust')),
-                                'mass_flow_total': avg.get('mass_flow_total'),
-                                'isp': avg.get('isp'),
-                                'c_star': avg.get('c_star')
-                            }
-                            save_test_result(hf_file.name, selected_config_name, db_stats, derived, notes)
-                            st.success("Saved!")
-
-                    with col_act_2:
-                        st.write("")  # Spacer to align buttons
-                        st.write("")
-                        # Generate Report Button
-                        # We gather the string-formatted metrics for the report
-                        report_stats = {k: fmt(k, v) for k, v in avg.items() if k in [
-                            cols_cfg.get('chamber_pressure'), cols_cfg.get('thrust'), 'mass_flow_total', 'isp'
-                        ]}
-                        report_derived = {k: f"{v:.2f}" for k, v in derived.items()}
-
-                        # Gather Figures (Main Plot + FFT)
-                        # Note: We use the figure objects 'fig' and 'f_fft' created earlier in the script
-                        report_figs = [fig]
-                        if 'f_fft' in locals(): report_figs.append(f_fft)
-                        if 'fig_trans' in locals(): report_figs.append(fig_trans)
-
-                        html_bytes = generate_html_report(
-                            test_metadata={'Filename': hf_file.name, 'Config': selected_config_name},
-                            stats=report_stats,
-                            derived=report_derived,
-                            figures=report_figs,
-                            notes=notes
-                        )
-
-                        st.download_button(
-                            label="📄 Download Report",
-                            data=html_bytes,
-                            file_name=f"Report_{hf_file.name.replace('.csv', '.html')}",
-                            mime='text/html'
-                        )
-
-                    with col_act_3:
-                        st.write("")  # Spacer
-                        st.write("")
-                        csv_dl = convert_df_to_csv(df)
-                        st.download_button("Download CSV", csv_dl, f"Proc_{hf_file.name}", "text/csv")
             else:
                 st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# TAB 4: CAMPAIGN DB
+# TAB 5: CAMPAIGN DB
 # -----------------------------------------------------------------------------
 with tab_db:
     st.header("Campaign History")
-    hist = get_campaign_history()
 
-    if not hist.empty:
-        st.dataframe(hist)
+    type_view = st.radio("View Database", ["Cold Flow Campaign", "Hot Fire Results"], horizontal=True)
 
-        c_filter, c_trend = st.columns([1, 3])
-        with c_filter:
-            confs = hist['config_name'].unique()
-            sel = st.multiselect("Filter Config", confs, default=confs)
-            df_filt = hist[hist['config_name'].isin(sel)]
+    if type_view == "Cold Flow Campaign":
+        cf_df = get_cold_flow_history()
+        if not cf_df.empty:
+            st.dataframe(cf_df)
 
-        with c_trend:
-            metric = st.selectbox("Trend Metric",
-                                  ['isp_s', 'c_star_ms', 'avg_pressure_bar', 'rise_time_s', 'eta_c_star_pct'])
-            if not df_filt.empty:
-                f_trend = go.Figure(go.Scatter(
-                    x=df_filt['timestamp'], y=df_filt[metric],
-                    mode='lines+markers', text=df_filt['filename']
-                ))
-                f_trend.update_layout(height=400, title=f"Trend: {metric}")
-                st.plotly_chart(f_trend, use_container_width=True)
+            st.subheader("Trends")
+            c1, c2 = st.columns(2)
+            metric = c1.selectbox("Metric", ['avg_cd_CALC', 'avg_mf_g_s', 'avg_p_up_bar'])
+            part_filter = c2.multiselect("Filter Part", cf_df['part'].unique(), default=cf_df['part'].unique())
+
+            df_plot = cf_df[cf_df['part'].isin(part_filter)]
+            if not df_plot.empty:
+                fig = go.Figure(
+                    go.Scatter(x=df_plot['test_timestamp'], y=df_plot[metric], mode='markers', text=df_plot['test_id']))
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No Cold Flow records found.")
+
     else:
-        st.info("No history yet.")
+        h = get_campaign_history()
+        if not h.empty:
+            st.dataframe(h)
+        else:
+            st.info("No Hot Fire records found.")

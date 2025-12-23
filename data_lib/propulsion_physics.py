@@ -2,21 +2,21 @@ import numpy as np
 import pandas as pd
 
 # --- CONSTANTS ---
-g0 = 9.80665  # Standard Gravity (m/s^2)
+g0 = 9.80665
 
 
 # ==========================================
-# 1. ACTUAL PERFORMANCE (Time-Series)
+# 1. HOT FIRE TIME-SERIES (Heavy Physics)
 # ==========================================
-def calculate_performance(df, config):
+def calculate_hot_fire_series(df, config):
     """
-    Enriches the DataFrame with propulsion metrics (Isp, C*, etc.)
+    Applies Combustion Physics (Isp, C*, O/F) to the time-series DataFrame.
+    Only call this for Hot Fire tests.
     """
     df_calc = df.copy()
     cols = config.get('columns', {})
     geom = config.get('geometry', {})
 
-    # Retrieve mapped column names
     col_pc = cols.get('chamber_pressure')
     col_thrust = cols.get('thrust')
     col_m_ox = cols.get('mass_flow_ox')
@@ -31,7 +31,6 @@ def calculate_performance(df, config):
         # O/F Ratio
         with np.errstate(divide='ignore', invalid='ignore'):
             df_calc['of_ratio'] = df[col_m_ox] / df[col_m_fuel]
-            df_calc['of_ratio'] = df_calc['of_ratio'].replace([np.inf, -np.inf], np.nan)
 
     elif col_m_ox and col_m_ox in df:
         m_dot_total = df[col_m_ox]
@@ -46,32 +45,97 @@ def calculate_performance(df, config):
 
         with np.errstate(divide='ignore', invalid='ignore'):
             df_calc['c_star'] = (pc_pa * ath_m2) / m_dot_kg
-            df_calc.loc[m_dot_total < 0.1, 'c_star'] = np.nan
 
-    # 3. Isp (Specific Impulse)
+    # 3. Isp & Cf
     if col_thrust and m_dot_total is not None and col_thrust in df:
         thrust_n = df[col_thrust]
         m_dot_kg = m_dot_total * 1e-3
-
         with np.errstate(divide='ignore', invalid='ignore'):
             df_calc['isp'] = thrust_n / (m_dot_kg * g0)
-            df_calc.loc[m_dot_total < 0.1, 'isp'] = np.nan
 
-    # 4. Cf (Thrust Coefficient)
-    if col_thrust and col_pc and ath_mm2 and col_thrust in df and col_pc in df:
-        ath_m2 = ath_mm2 * 1e-6
-        thrust_n = df[col_thrust]
-        pc_pa = df[col_pc] * 1e5
-
-        with np.errstate(divide='ignore', invalid='ignore'):
-            df_calc['cf'] = thrust_n / (pc_pa * ath_m2)
-            df_calc.loc[df[col_pc] < 0.1, 'cf'] = np.nan
+            if col_pc and ath_mm2 and col_pc in df:
+                ath_m2 = ath_mm2 * 1e-6
+                pc_pa = df[col_pc] * 1e5
+                df_calc['cf'] = thrust_n / (pc_pa * ath_m2)
 
     return df_calc
 
 
 # ==========================================
-# 2. THEORETICAL PROFILES
+# 2. COLD FLOW METRICS (Single Point)
+# ==========================================
+def calculate_cold_flow_metrics(avg_stats, config):
+    """
+    Calculates Cd based on average values.
+    Strictly follows: Fluid/Area from Config, Pressures/Flow from Columns.
+    """
+    derived = {}
+
+    # 1. Extract Config Parameters
+    fluid = config.get('fluid', {})
+    geom = config.get('geometry', {})
+    cols = config.get('columns', {})
+
+    # Prioritize 'density_kg_m3' key, fallback to others
+    density = fluid.get('density_kg_m3') or fluid.get('ox_density_kg_m3') or fluid.get('water_density_kg_m3')
+
+    # Prioritize 'orifice_area_mm2', fallback to injector area
+    area_mm2 = geom.get('orifice_area_mm2') or geom.get('injector_area_mm2')
+
+    # 2. Extract Sensor Data
+    # Look for explicitly named 'upstream'/'downstream' keys, fallback to standard mapping
+    k_up = cols.get('upstream_pressure') or cols.get('inlet_pressure' )or cols.get('injector_pressure')
+    k_down = cols.get('downstream_pressure')
+    k_flow = cols.get('mass_flow') or cols.get('mf')
+
+    p_up = avg_stats.get(k_up)
+    m_dot = avg_stats.get(k_flow)
+
+    # "if no downstream_pressure given assume 0 bar"
+    p_down = avg_stats.get(k_down, 0.0) if k_down else 0.0
+
+    # 3. Calculate Cd
+    if p_up is not None and m_dot is not None and density and area_mm2:
+        if p_up > p_down and area_mm2 > 0 and density > 0:
+            dp_bar = p_up - p_down
+
+            # Formula: m_dot = Cd * A * sqrt(2 * rho * dP)
+            # Cd = m_dot / (A * sqrt(2 * rho * dP))
+            # Units: m_dot(kg/s), A(m2), P(Pa), rho(kg/m3)
+
+            m_kg_s = m_dot * 1e-3
+            a_m2 = area_mm2 * 1e-6
+            dp_pa = dp_bar * 1e5
+
+            denom = a_m2 * np.sqrt(2 * density * dp_pa)
+            if denom > 0:
+                derived['Cd'] = m_kg_s / denom
+                derived['dP (bar)'] = dp_bar
+
+    return derived
+
+
+# ==========================================
+# 3. HOT FIRE METRICS (Single Point)
+# ==========================================
+def calculate_hot_fire_metrics(avg_stats, config):
+    """
+    Calculates Efficiencies (Eta Isp, etc.) for Hot Fire.
+    """
+    derived = {}
+    targets = config.get('settings', {})
+
+    if 'c_star' in avg_stats and targets.get('target_c_star'):
+        derived['η C* (%)'] = (avg_stats['c_star'] / targets['target_c_star']) * 100.0
+
+    if 'isp' in avg_stats and targets.get('target_isp'):
+        derived['η Isp (%)'] = (avg_stats['isp'] / targets['target_isp']) * 100.0
+
+    return derived
+
+
+# ==========================================
+# 4. THEORETICAL PROFILES
 # ==========================================
 def calculate_theoretical_profile(df, config):
     cols = config.get('columns', {})
@@ -99,7 +163,7 @@ def calculate_theoretical_profile(df, config):
 
 
 # ==========================================
-# 3. UNCERTAINTIES
+# 5. UNCERTAINTIES
 # ==========================================
 def calculate_uncertainties(avg_stats, config):
     u_map = config.get('uncertainties', {})
@@ -152,63 +216,3 @@ def calculate_uncertainties(avg_stats, config):
     return errors
 
 
-# ==========================================
-# 4. DERIVED METRICS (Robust for Cold Flow)
-# ==========================================
-def calculate_derived_metrics(avg_stats, config):
-    derived = {}
-    geom = config.get('geometry', {})
-    fluid = config.get('fluid', {})
-    targets = config.get('settings', {})
-    cols = config.get('columns', {})
-
-    # Hot Fire Efficiencies
-    if 'c_star' in avg_stats and targets.get('target_c_star'):
-        derived['η C* (%)'] = (avg_stats['c_star'] / targets['target_c_star']) * 100.0
-    if 'cf' in avg_stats and targets.get('target_cf'):
-        derived['η Cf (%)'] = (avg_stats['cf'] / targets['target_cf']) * 100.0
-    if 'isp' in avg_stats and targets.get('target_isp'):
-        derived['η Isp (%)'] = (avg_stats['isp'] / targets['target_isp']) * 100.0
-
-    # Cold Flow Cd Helper
-    def calc_cd(m_dot, press_drop_bar, density, area_mm2):
-        if area_mm2 <= 0 or density <= 0 or press_drop_bar <= 0: return None
-        # m_dot (g/s -> kg/s), Area (mm2 -> m2), P (bar -> Pa)
-        return (m_dot * 1e-3) / ((area_mm2 * 1e-6) * (2 * press_drop_bar * 1e5 * density) ** 0.5)
-
-    # Cd Orifice
-    col_mf_orf = cols.get('mass_flow')
-    if col_mf_orf and col_mf_orf in avg_stats:
-        p_up = avg_stats.get(cols.get("upstream_pressure"), 0.0)
-        p_down = 0.0#avg_stats.get(cols['downstream_pressure'], 0.0)
-        dp = p_up - p_down
-        cd = calc_cd(avg_stats[col_mf_orf], dp, fluid.get('ox_density_kg_m3'), geom.get('ox_injector_area_mm2'))
-        print(cd)
-        if cd: derived['Cd'] = cd
-
-    # Cd Ox (Robust check)
-    col_ox_flow = cols.get('mass_flow_ox')
-    if col_ox_flow and col_ox_flow in avg_stats:
-        p_out = avg_stats.get(cols.get('chamber_pressure'), 0.0)
-        p_in = avg_stats.get(cols.get('inlet_pressure_ox'),
-                             p_out)  # If no inlet, assume P_out=P_in (user err) or check mapping
-
-        # Cold Flow assumption: 'chamber_pressure' usually maps to the upstream sensor in simple configs,
-        # or we assume P_out is ambient (0 gauge).
-        # Let's use strict config mapping: user must map 'inlet_pressure_ox' for Cd.
-
-        if 'inlet_pressure_ox' in cols:
-            p_in = avg_stats.get(cols['inlet_pressure_ox'], 0.0)
-            # Delta P = Pin - Pout (if Pout exists, else 0 gauge)
-            dp = p_in - p_out if p_in > p_out else p_in
-
-            cd = calc_cd(avg_stats[col_ox_flow], dp, fluid.get('ox_density_kg_m3'), geom.get('ox_injector_area_mm2'))
-            if cd: derived['Cd (Ox)'] = cd
-
-    # Cd Fuel
-    col_fu_flow = cols.get('mass_flow_fuel')
-    if col_fu_flow and col_fu_flow in avg_stats:
-        # Similar logic for fuel
-        pass
-
-    return derived
