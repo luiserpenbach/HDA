@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 from scipy.signal import savgol_filter, welch
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
 
 
 def resample_data(df, time_col='timestamp', freq_ms=10):
@@ -193,3 +195,154 @@ def find_steady_windows(df, col_names, time_col='timestamp', window_ms=1000, cv_
                 windows.append((ts, te))
 
     return windows, max_cv_trace
+
+
+def find_steady_windows_ml(df, col_names, time_col='timestamp',
+                           window_ms=500,
+                           contamination=0.15,
+                           min_duration_ms=1000,
+                           min_val=0.0,
+                           active_test_only=True):
+    """
+    ML-based steady state detection using Isolation Forest anomaly detection.
+
+    IMPORTANT: For test data, we FIRST filter to "active test" region (signal > min_val),
+    THEN detect stable windows within that region. This prevents the algorithm from
+    treating the entire test as an "anomaly" compared to baseline.
+
+    Args:
+        df: DataFrame with test data
+        col_names: List of column names to analyze for stability
+        time_col: Name of timestamp column (in milliseconds)
+        window_ms: Rolling window size for feature extraction (default: 500ms)
+        contamination: Expected proportion of outliers WITHIN THE TEST (0.0-0.5).
+                      Represents transients/instabilities during the test itself.
+                      Lower = stricter (fewer, longer windows)
+                      Higher = more permissive (more, shorter windows)
+        min_duration_ms: Minimum window duration to keep
+        min_val: Signal threshold to define "active test" region
+        active_test_only: If True, only analyze data where signal > min_val
+
+    Returns:
+        windows: List of tuples [(start_ms, end_ms), ...]
+        predictions: Series of stability predictions (1=stable, -1=transient)
+    """
+
+    if isinstance(col_names, str):
+        col_names = [col_names]
+
+    # Validate columns
+    missing = [c for c in col_names if c not in df.columns]
+    if missing:
+        raise ValueError(f"Columns not found in dataframe: {missing}")
+
+    # Prepare data
+    sub = df[[time_col] + col_names].sort_values(time_col).copy()
+
+    # --- CRITICAL: PRE-FILTER TO ACTIVE TEST REGION ---
+    if active_test_only and min_val > 0:
+        # Create mask for "active test" - where ANY sensor exceeds threshold
+        active_mask = pd.Series(False, index=sub.index)
+        for col in col_names:
+            active_mask |= (sub[col].abs() > min_val)
+
+        # Only analyze the active test region
+        sub_active = sub[active_mask].copy()
+
+        if len(sub_active) < 10:
+            # Not enough active data
+            return [], pd.Series([], dtype=int)
+
+        # Store original indices for later alignment
+        original_indices = sub_active.index
+    else:
+        sub_active = sub.copy()
+        original_indices = sub.index
+
+    # Calculate rolling window size in samples
+    dt = sub_active[time_col].diff().median()
+    if np.isnan(dt) or dt <= 0:
+        dt = 10.0
+    win_samples = max(3, int(window_ms / dt))
+
+    # --- FEATURE ENGINEERING ---
+    features = []
+    feature_names = []
+
+    for col in col_names:
+        # Ensure no NaNs
+        sub_active[col] = sub_active[col].ffill().bfill()
+
+        rolling = sub_active[col].rolling(window=win_samples, center=True, min_periods=1)
+
+        # Feature 1: Rolling Mean (signal level)
+        feat_mean = rolling.mean()
+        features.append(feat_mean)
+        feature_names.append(f"{col}_mean")
+
+        # Feature 2: Rolling Std (variability)
+        feat_std = rolling.std()
+        features.append(feat_std)
+        feature_names.append(f"{col}_std")
+
+        # Feature 3: First Derivative (rate of change)
+        feat_diff = sub_active[col].diff().abs()
+        features.append(feat_diff)
+        feature_names.append(f"{col}_trend")
+
+        # Feature 4: CV (normalized variability) - KEY METRIC
+        safe_mean = feat_mean.copy()
+        safe_mean[safe_mean.abs() < 1e-6] = np.nan
+        feat_cv = (feat_std / safe_mean.abs()) * 100.0
+        features.append(feat_cv)
+        feature_names.append(f"{col}_cv")
+
+    # Combine features
+    X = pd.concat(features, axis=1)
+    X.columns = feature_names
+
+    # Handle NaN/Inf
+    X = X.replace([np.inf, -np.inf], np.nan)
+    X = X.fillna(X.median())
+
+    # --- SCALING ---
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    # --- ANOMALY DETECTION ---
+    # Within the test region, find the "normal" stable behavior
+    clf = IsolationForest(
+        contamination=contamination,  # Expected % of transients WITHIN TEST
+        random_state=42,
+        n_estimators=100,
+        max_samples='auto',
+        bootstrap=False
+    )
+
+    predictions_active = clf.fit_predict(X_scaled)
+
+    # Inliers (1) = Stable test conditions
+    # Outliers (-1) = Transients within test
+    sub_active['stable'] = predictions_active == 1
+
+    # --- EXTRACT WINDOWS ---
+    sub_active['group'] = (sub_active['stable'] != sub_active['stable'].shift()).cumsum()
+
+    windows = []
+    stable_groups = sub_active[sub_active['stable'] == True]
+
+    if not stable_groups.empty:
+        for group_id, grp in stable_groups.groupby('group'):
+            t_start = grp[time_col].min()
+            t_end = grp[time_col].max()
+            duration = t_end - t_start
+
+            if duration >= min_duration_ms:
+                windows.append((t_start, t_end))
+
+    # --- ALIGN PREDICTIONS WITH ORIGINAL DATAFRAME ---
+    # Create full prediction series (including baseline as "transient")
+    predictions_full = pd.Series(-1, index=sub.index, name='ml_prediction')
+    predictions_full.loc[original_indices] = predictions_active
+
+    return windows, predictions_full

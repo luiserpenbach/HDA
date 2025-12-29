@@ -15,12 +15,18 @@ from data_lib.propulsion_physics import (
 )
 from data_lib.sensor_data_tools import (
     resample_data, smooth_signal_savgol, find_steady_windows, find_steady_window,
-    calculate_rise_time, analyze_stability_fft
+    calculate_rise_time, analyze_stability_fft, find_steady_windows_ml
 )
 from data_lib.transient_analysis import detect_transient_events
 from data_lib.db_manager import save_test_result, get_campaign_history, save_cold_flow_record, get_cold_flow_history, \
     init_db
 from data_lib.reporting import generate_html_report
+from data_lib.spc_analysis import (
+    calculate_control_limits,
+    detect_control_violations,
+    plot_spc_chart,
+    calculate_process_capability
+)
 
 st.set_page_config(page_title="Hopper Data Studio", layout="wide")
 init_db()
@@ -127,6 +133,20 @@ if selected_config_name and selected_config_name != "Generic / No Config":
     config_json = json.dumps(current_config, indent=4)
     st.sidebar.download_button("Download Active Config", config_json, "config.json", "application/json")
 
+    with st.sidebar.expander("🔍 Quick Compare"):
+        compare_ids = st.multiselect("Select Tests to Compare",
+                                     get_cold_flow_history()['test_id'].tolist())
+        if compare_ids:
+            comparison_df = get_cold_flow_history()
+            comparison_df = comparison_df[comparison_df['test_id'].isin(compare_ids)]
+
+            fig = go.Figure()
+            for idx, row in comparison_df.iterrows():
+                fig.add_trace(go.Bar(name=row['test_id'],
+                                     x=['Cd', 'Flow', 'Pressure'],
+                                     y=[row['avg_cd_CALC'], row['avg_mf_g_s'], row['avg_p_up_bar']]))
+            st.plotly_chart(fig)
+
 else:
     freq_ms = st.sidebar.number_input("Resample (ms)", value=10)
     window_ms = st.sidebar.number_input("Steady Window (ms)", value=500)
@@ -174,7 +194,8 @@ def convert_df_to_csv(df):
 # ==========================================
 # MAIN TABS
 # ==========================================
-tab_insp, tab_cfs, tab_cfb, tab_hot, tab_db = st.tabs([
+tab_config, tab_insp, tab_cfs, tab_cfb, tab_hot, tab_db = st.tabs([
+    "Test Config Manager",
     "Inspector",
     "Cold Flow Analysis",
     "Cold Flow Batch",
@@ -182,8 +203,48 @@ tab_insp, tab_cfs, tab_cfb, tab_hot, tab_db = st.tabs([
     "Campaign DB"
 ])
 
+with tab_config:
+    st.header("⚙ Configuration Manager")
+
+    col1, col2 = st.columns([1, 2])
+
+    with col1:
+        st.subheader("Available Configs")
+        configs = get_available_configs()
+
+        for cfg in configs:
+            with st.expander(cfg):
+                if st.button("Load", key=f"load_{cfg}"):
+                    current_config = load_config(cfg)
+                if st.button("Edit", key=f"edit_{cfg}"):
+                    st.session_state['editing_config'] = cfg
+                if st.button("Delete", key=f"del_{cfg}"):
+                    os.remove(f"test_configs/{cfg}.json")
+                    st.rerun()
+
+    with col2:
+        st.subheader("Config Editor")
+
+        if 'editing_config' in st.session_state:
+            cfg = load_config(st.session_state['editing_config'])
+
+            # JSON editor
+            edited_json = st.text_area("Configuration JSON",
+                                       json.dumps(cfg, indent=2),
+                                       height=400)
+
+            if st.button("Save Changes"):
+                try:
+                    new_cfg = json.loads(edited_json)
+                    with open(f"test_configs/{st.session_state['editing_config']}.json", 'w') as f:
+                        json.dump(new_cfg, f, indent=2)
+                    st.success("Saved!")
+                except Exception as e:
+                    st.error(f"Invalid JSON: {e}")
+
+
 # -----------------------------------------------------------------------------
-# TAB 1: INSPECTOR
+# TAB 2: INSPECTOR
 # -----------------------------------------------------------------------------
 with tab_insp:
     st.header("General Data Inspector")
@@ -266,15 +327,19 @@ with tab_cfs:
             sel_p = c_sel_p.multiselect("Pressure Channels", df.columns, default=def_p)
             sel_f = c_sel_f.multiselect("Flow Channels", df.columns, default=def_f)
 
+            # --- PLOT SETUP ---
+            # Create a placeholder to render the plot LATER, after we add the window
+            plot_placeholder = st.empty()
+
             fig_pf = make_subplots(specs=[[{"secondary_y": True}]])
             for c in sel_p: fig_pf.add_trace(go.Scatter(x=df['time_s'], y=df[c], name=c), secondary_y=False)
             for c in sel_f: fig_pf.add_trace(go.Scatter(x=df['time_s'], y=df[c], name=c, line=dict(dash='dot')),
                                              secondary_y=True)
             fig_pf.update_yaxes(title_text="Pressure (bar)", secondary_y=False)
             fig_pf.update_yaxes(title_text="Mass Flow (g/s)", secondary_y=True)
-            st.plotly_chart(fig_pf, use_container_width=True)
+            fig_pf.update_layout(height=400, margin=dict(t=10, b=10))
 
-            # Temperature Plot
+            # Temperature Plot (Can remain static as it's separate)
             t_cols = [c for c in df.columns if any(x in c.lower() for x in ['temp', 'tc'])]
             if t_cols:
                 fig_t = go.Figure()
@@ -285,17 +350,133 @@ with tab_cfs:
             # Analysis Controls
             st.subheader("3. Steady State Detection")
 
-            ac1, ac2, ac3 = st.columns(3)
-            # A. Stability Sensors
-            stab_sigs = ac1.multiselect("Stability Criteria (Sensors must be stable)", df.columns, default=sel_p)
-            # B. Threshold
-            min_thresh = ac2.number_input("Min Value Threshold", value=1.0,
-                                          help="Signal must be above this value to count as a test point.")
+            # Add algorithm selector
+            ac_algo, ac1, ac2, ac3 = st.columns([1, 2, 1, 1])
 
-            # C. Detection
+            detection_method = ac_algo.selectbox(
+                "Method",
+                ["CV-based (Classic)", "ML-based (Advanced)"],
+                help="CV: Fast, threshold-based. ML: Slower but more robust to noise."
+            )
+
+            # A. Stability Sensors
+            stab_sigs = ac1.multiselect(
+                "Stability Criteria (Sensors must be stable)",
+                df.columns,
+                default=sel_p,
+                help="Select sensors that must ALL be stable simultaneously"
+            )
+
+            # B. Threshold
+            min_thresh = ac2.number_input(
+                "Min Value Threshold",
+                value=1.0,
+                help="Signal must be above this value to count as a test point."
+            )
+
+            # C. Detection Parameters
             windows = []
-            if stab_sigs:
-                windows, max_cv = find_steady_windows(df, stab_sigs, 'timestamp', window_ms, cv_thresh, min_thresh)
+            predictions = None
+
+            if detection_method == "CV-based (Classic)":
+                # Original CV-based detection
+                if stab_sigs:
+                    windows, max_cv = find_steady_windows(
+                        df, stab_sigs, 'timestamp',
+                        window_ms, cv_thresh, min_thresh
+                    )
+
+                    # Display CV plot in expander
+                    with st.expander("📊 Stability Trace (CV Method)"):
+                        fig_cv = go.Figure()
+                        fig_cv.add_trace(go.Scatter(
+                            x=df['time_s'],
+                            y=max_cv,
+                            name='Max CV %',
+                            line=dict(color='orange')
+                        ))
+                        fig_cv.add_hline(
+                            y=cv_thresh,
+                            line_dash="dash",
+                            line_color="red",
+                            annotation_text=f"Threshold: {cv_thresh}%"
+                        )
+                        fig_cv.update_layout(
+                            height=250,
+                            yaxis_title="CV %",
+                            xaxis_title="Time (s)",
+                            margin=dict(t=20, b=20)
+                        )
+                        st.plotly_chart(fig_cv, use_container_width=True)
+
+            else:  # ML-based
+                contamination = ac3.slider(
+                    "Contamination",
+                    0.05, 0.30, 0.15, 0.05,
+                    help="Expected % of TRANSIENT data within the test. Lower = stricter."  # UPDATED
+                )
+
+                if stab_sigs:
+                    try:
+                        windows, predictions = find_steady_windows_ml(
+                            df, stab_sigs, 'timestamp',
+                            window_ms=window_ms,
+                            contamination=contamination,
+                            min_duration_ms=window_ms,  # At least one window duration
+                            min_val=min_thresh
+                        )
+
+                        # Display ML predictions plot
+                        with st.expander("🤖 ML Stability Classification"):
+                            # Create visual of predictions
+                            pred_visual = predictions.map({1: 'Stable', -1: 'Transient'})
+
+                            fig_ml = go.Figure()
+
+                            # Plot first stability signal with color coding
+                            if stab_sigs[0] in df.columns:
+                                # Stable regions in green
+                                stable_mask = predictions == 1
+                                stable_data = df[stable_mask]
+                                transient_data = df[~stable_mask]
+
+                                fig_ml.add_trace(go.Scatter(
+                                    x=transient_data['time_s'],
+                                    y=transient_data[stab_sigs[0]],
+                                    mode='markers',
+                                    name='Transient',
+                                    marker=dict(color='lightcoral', size=3, opacity=0.6)
+                                ))
+
+                                fig_ml.add_trace(go.Scatter(
+                                    x=stable_data['time_s'],
+                                    y=stable_data[stab_sigs[0]],
+                                    mode='markers',
+                                    name='Stable',
+                                    marker=dict(color='lightgreen', size=3)
+                                ))
+
+                            fig_ml.update_layout(
+                                height=250,
+                                yaxis_title=f"{stab_sigs[0]}",
+                                xaxis_title="Time (s)",
+                                margin=dict(t=20, b=20)
+                            )
+                            st.plotly_chart(fig_ml, use_container_width=True)
+
+                            # Statistics
+                            stable_pct = (predictions == 1).sum() / len(predictions) * 100
+                            test_pct = ((predictions == 1) | (predictions == -1)).sum() / len(predictions) * 100
+
+                            st.caption(
+                                f"✅ Stable: {stable_pct:.1f}% of total | "
+                                f"⚠️ Test Region: {test_pct:.1f}% | "
+                                f"⬜ Baseline: {100 - test_pct:.1f}%"
+                            )
+
+                    except Exception as e:
+                        st.error(f"ML Detection Error: {e}")
+                        windows = []
 
             selected_window = None
 
@@ -312,10 +493,13 @@ with tab_cfs:
                 sel_idx = ac3.selectbox("Select Window", range(len(windows)), format_func=lambda x: win_opts[x])
                 selected_window = windows[sel_idx]
 
-                # Highlight on plot
+                # Highlight on plot (This updates fig_pf)
                 s_s = (selected_window[0] - df['timestamp'].min()) / 1000.0
                 e_s = (selected_window[1] - df['timestamp'].min()) / 1000.0
                 fig_pf.add_vrect(x0=s_s, x1=e_s, fillcolor="green", opacity=0.2)
+                # Visible Vertical Lines
+                fig_pf.add_vline(x=s_s, line_width=2, line_dash="dash", line_color="green")
+                fig_pf.add_vline(x=e_s, line_width=2, line_dash="dash", line_color="green")
 
                 # Metrics
                 st.subheader("3. Results")
@@ -365,6 +549,10 @@ with tab_cfs:
                         st.success(f"Saved {save_id} to Database!")
                     else:
                         st.error("Please load a configuration to save results.")
+
+            # --- FINAL PLOT RENDER ---
+            # We call this AT THE END so the rectangle (vrect) added above is included.
+            plot_placeholder.plotly_chart(fig_pf, use_container_width=True)
 
 # -----------------------------------------------------------------------------
 # TAB 3: COLD FLOW BATCH
@@ -635,34 +823,289 @@ with tab_hot:
                 st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# TAB 5: CAMPAIGN DB
+# TAB 5: CAMPAIGN DB WITH SPC
 # -----------------------------------------------------------------------------
 with tab_db:
-    st.header("Campaign History")
+    st.header("Campaign History & SPC Analysis")
 
-    type_view = st.radio("View Database", ["Cold Flow Campaign", "Hot Fire Results"], horizontal=True)
+    type_view = st.radio(
+        "View Database",
+        ["Cold Flow Campaign", "Hot Fire Results"],
+        horizontal=True
+    )
 
     if type_view == "Cold Flow Campaign":
         cf_df = get_cold_flow_history()
+
         if not cf_df.empty:
-            st.dataframe(cf_df)
+            # Ensure timestamps are datetime
+            cf_df['test_timestamp'] = pd.to_datetime(cf_df['test_timestamp'])
+            cf_df = cf_df.sort_values('test_timestamp')
 
-            st.subheader("Trends")
-            c1, c2 = st.columns(2)
-            metric = c1.selectbox("Metric", ['avg_cd_CALC', 'avg_mf_g_s', 'avg_p_up_bar'])
-            part_filter = c2.multiselect("Filter Part", cf_df['part'].unique(), default=cf_df['part'].unique())
+            # --- DATA TABLE ---
+            with st.expander("📊 Raw Data Table", expanded=False):
+                st.dataframe(cf_df, use_container_width=True)
 
-            df_plot = cf_df[cf_df['part'].isin(part_filter)]
-            if not df_plot.empty:
-                fig = go.Figure(
-                    go.Scatter(x=df_plot['test_timestamp'], y=df_plot[metric], mode='markers', text=df_plot['test_id']))
-                st.plotly_chart(fig, use_container_width=True)
+            # --- SPC CONFIGURATION ---
+            st.subheader("📈 Statistical Process Control")
+
+            col_config1, col_config2, col_config3 = st.columns(3)
+
+            with col_config1:
+                # Metric selection
+                available_metrics = [
+                    'avg_cd_CALC',
+                    'avg_mf_g_s',
+                    'avg_p_up_bar',
+                    'avg_T_up_K'
+                ]
+                metric = st.selectbox(
+                    "Metric to Monitor",
+                    available_metrics,
+                    format_func=lambda x: {
+                        'avg_cd_CALC': 'Discharge Coefficient (Cd)',
+                        'avg_mf_g_s': 'Mass Flow (g/s)',
+                        'avg_p_up_bar': 'Pressure (bar)',
+                        'avg_T_up_K': 'Temperature (K)'
+                    }.get(x, x)
+                )
+
+            with col_config2:
+                # Part filter
+                all_parts = cf_df['part'].unique().tolist()
+                part_filter = st.multiselect(
+                    "Filter by Part",
+                    all_parts,
+                    default=all_parts
+                )
+
+            with col_config3:
+                # SPC method
+                spc_method = st.selectbox(
+                    "Control Limit Method",
+                    ['3sigma', 'individuals'],
+                    format_func=lambda x: {
+                        '3sigma': '3-Sigma (Standard)',
+                        'individuals': 'X-mR (Robust)'
+                    }.get(x, x)
+                )
+
+            # Filter data
+            df_plot = cf_df[cf_df['part'].isin(part_filter)].copy()
+
+            if len(df_plot) < 2:
+                st.warning("Need at least 2 data points for SPC analysis.")
+            else:
+                # --- SPECIFICATION LIMITS ---
+                with st.expander("⚙️ Specification Limits (Optional)", expanded=False):
+                    st.caption("Define customer/design requirements (USL/LSL)")
+
+                    col_spec1, col_spec2, col_spec3 = st.columns(3)
+
+                    enable_specs = col_spec1.checkbox("Enable Spec Limits")
+                    spec_limits = None
+
+                    if enable_specs:
+                        usl = col_spec2.number_input(
+                            "Upper Spec Limit (USL)",
+                            value=float(df_plot[metric].max() * 1.1),
+                            format="%.4f"
+                        )
+                        lsl = col_spec3.number_input(
+                            "Lower Spec Limit (LSL)",
+                            value=float(df_plot[metric].min() * 0.9),
+                            format="%.4f"
+                        )
+                        spec_limits = {'usl': usl, 'lsl': lsl}
+
+                # --- CALCULATE SPC ---
+                from data_lib.spc_analysis import (
+                    calculate_control_limits,
+                    detect_control_violations,
+                    plot_spc_chart,
+                    calculate_process_capability
+                )
+
+                limits = calculate_control_limits(
+                    df_plot[metric].values,
+                    method=spc_method
+                )
+
+                violations = detect_control_violations(
+                    df_plot[metric].values,
+                    limits,
+                    timestamps=df_plot['test_timestamp']
+                )
+
+                # --- SPC CHART ---
+                fig_spc = plot_spc_chart(
+                    data=df_plot[metric],
+                    timestamps=df_plot['test_timestamp'],
+                    metric_name=metric,
+                    limits=limits,
+                    spec_limits=spec_limits,
+                    violations=violations,
+                    highlight_recent=5  # Highlight last 5 tests
+                )
+
+                st.plotly_chart(fig_spc, use_container_width=True)
+
+                # --- METRICS SUMMARY ---
+                st.subheader("Process Metrics")
+
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+
+                col_m1.metric(
+                    "Process Mean",
+                    f"{limits['mean']:.4f}",
+                    delta=None
+                )
+
+                col_m2.metric(
+                    "Std Deviation",
+                    f"{limits['std']:.4f}",
+                    delta=None
+                )
+
+                col_m3.metric(
+                    "Sample Size",
+                    f"{limits['n']}",
+                    delta=None
+                )
+
+                # Violations count
+                n_violations = len(violations) if not violations.empty else 0
+                col_m4.metric(
+                    "Control Violations",
+                    f"{n_violations}",
+                    delta=None,
+                    delta_color="inverse"
+                )
+
+                # --- VIOLATIONS TABLE ---
+                if not violations.empty:
+                    st.subheader("⚠️ Control Chart Violations")
+
+
+                    # Color code by severity
+                    def highlight_severity(row):
+                        colors = {
+                            'critical': 'background-color: #ffcccc',
+                            'warning': 'background-color: #fff4cc',
+                            'info': 'background-color: #cce5ff'
+                        }
+                        return [colors.get(row['severity'], '')] * len(row)
+
+
+                    styled_violations = violations.style.apply(
+                        highlight_severity,
+                        axis=1
+                    )
+
+                    st.dataframe(
+                        styled_violations,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                    # Export violations
+                    csv_violations = violations.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "📥 Download Violations Report",
+                        csv_violations,
+                        f"spc_violations_{metric}.csv",
+                        "text/csv"
+                    )
+
+                # --- PROCESS CAPABILITY ---
+                if spec_limits:
+                    st.subheader("Process Capability Analysis")
+
+                    capability = calculate_process_capability(
+                        df_plot[metric],
+                        spec_limits
+                    )
+
+                    col_cap1, col_cap2, col_cap3 = st.columns(3)
+
+                    if 'Cp' in capability:
+                        col_cap1.metric(
+                            "Cp (Potential)",
+                            f"{capability['Cp']:.2f}",
+                            help="Process capability if perfectly centered"
+                        )
+
+                    if 'Cpk' in capability:
+                        cpk_value = capability['Cpk']
+                        col_cap2.metric(
+                            "Cpk (Actual)",
+                            f"{cpk_value:.2f}",
+                            delta="Good" if cpk_value >= 1.33 else "Poor",
+                            delta_color="normal" if cpk_value >= 1.33 else "inverse",
+                            help="Actual capability accounting for process centering"
+                        )
+
+                    if 'interpretation' in capability:
+                        col_cap3.info(f"**Assessment:** {capability['interpretation']}")
+
+                # --- TREND ANALYSIS ---
+                with st.expander("📉 Trend Analysis", expanded=False):
+                    # Rolling statistics
+                    window_size = st.slider(
+                        "Rolling Window Size",
+                        min_value=3,
+                        max_value=min(20, len(df_plot)),
+                        value=5
+                    )
+
+                    df_plot['rolling_mean'] = df_plot[metric].rolling(
+                        window=window_size,
+                        center=True
+                    ).mean()
+
+                    df_plot['rolling_std'] = df_plot[metric].rolling(
+                        window=window_size,
+                        center=True
+                    ).std()
+
+                    fig_trend = go.Figure()
+
+                    # Raw data
+                    fig_trend.add_trace(go.Scatter(
+                        x=df_plot['test_timestamp'],
+                        y=df_plot[metric],
+                        mode='markers',
+                        name='Data',
+                        marker=dict(size=6, color='lightblue')
+                    ))
+
+                    # Rolling mean
+                    fig_trend.add_trace(go.Scatter(
+                        x=df_plot['test_timestamp'],
+                        y=df_plot['rolling_mean'],
+                        mode='lines',
+                        name=f'Rolling Mean ({window_size})',
+                        line=dict(color='red', width=2)
+                    ))
+
+                    fig_trend.update_layout(
+                        title=f"Trend: {metric}",
+                        xaxis_title="Date",
+                        yaxis_title=metric,
+                        height=350
+                    )
+
+                    st.plotly_chart(fig_trend, use_container_width=True)
+
         else:
-            st.info("No Cold Flow records found.")
+            st.info("No Cold Flow records found. Run some tests and save to database!")
 
-    else:
+    else:  # Hot Fire Results
         h = get_campaign_history()
         if not h.empty:
-            st.dataframe(h)
+            st.dataframe(h, use_container_width=True)
+
+            # TODO: Add SPC for hot fire metrics (Isp, C*, etc.)
+            st.info("SPC for Hot Fire metrics coming soon!")
         else:
             st.info("No Hot Fire records found.")
