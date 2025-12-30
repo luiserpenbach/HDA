@@ -59,7 +59,7 @@ def generate_html_report(test_metadata, stats, derived, figures, notes=""):
     </head>
     <body>
         <div class="header">
-            <h1>🚀 Test Analysis Report</h1>
+            <h1> Test Analysis Report</h1>
             <div class="meta">
                 File: {test_metadata.get('Filename')} | 
                 Config: {test_metadata.get('Config')} | 
@@ -67,15 +67,15 @@ def generate_html_report(test_metadata, stats, derived, figures, notes=""):
             </div>
         </div>
 
-        {f'<div class="notes"><strong>📝 Notes:</strong> {notes}</div>' if notes else ''}
+        {f'<div class="notes"><strong> Notes:</strong> {notes}</div>' if notes else ''}
 
         <div class="grid-container">
             <div class="card">
-                <h2>📊 Primary Statistics</h2>
+                <h2> Primary Statistics</h2>
                 <table>{stats_rows}</table>
             </div>
             <div class="card">
-                <h2>⚙️ Performance Metrics</h2>
+                <h2> Performance Metrics</h2>
                 <table>{derived_rows}</table>
             </div>
         </div>

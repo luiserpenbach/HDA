@@ -18,9 +18,9 @@ from core.spc import analyze_campaign_spc
 from core.reporting import generate_campaign_report, generate_test_report
 from core.uncertainty import MeasurementWithUncertainty
 
-st.set_page_config(page_title="Reports & Export", page_icon="📋", layout="wide")
+st.set_page_config(page_title="Reports & Export", page_icon="RPT", layout="wide")
 
-st.title("📋 Reports & Export")
+st.title("Reports & Export")
 st.markdown("Generate professional reports and export data packages.")
 
 # =============================================================================
@@ -28,7 +28,7 @@ st.markdown("Generate professional reports and export data packages.")
 # =============================================================================
 
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("Settings")
     
     campaigns = get_available_campaigns()
     
@@ -55,10 +55,10 @@ if selected_campaign:
     
     if df is not None and len(df) > 0:
         tab1, tab2, tab3, tab4 = st.tabs([
-            "📊 Campaign Report", 
-            "📄 Test Reports", 
-            "💾 Data Export",
-            "🎓 Qualification Package"
+            "Campaign Report", 
+            "Test Reports", 
+            "Data Export",
+            " Qualification Package"
         ])
         
         # =============================================================================
@@ -100,7 +100,7 @@ if selected_campaign:
                             if lsl != 0.0 or usl != 1.0:
                                 specs[param] = {'lsl': lsl, 'usl': usl}
                 
-                generate_report = st.button("📊 Generate Report", type="primary")
+                generate_report = st.button("Generate Report", type="primary")
             
             with col2:
                 if generate_report and selected_params:
@@ -123,7 +123,7 @@ if selected_campaign:
                                 st.components.v1.html(html, height=600, scrolling=True)
                             
                             st.download_button(
-                                "⬇️ Download HTML Report",
+                                "Download HTML Report",
                                 html,
                                 file_name=f"{selected_campaign}_report.html",
                                 mime="text/html"
@@ -149,7 +149,7 @@ if selected_campaign:
                 with col1:
                     selected_test = st.selectbox("Select Test", test_ids)
                     include_config = st.checkbox("Include config snapshot", value=False)
-                    generate_test_btn = st.button("📄 Generate Test Report")
+                    generate_test_btn = st.button("Generate Test Report")
                 
                 with col2:
                     if generate_test_btn and selected_test:
@@ -194,7 +194,7 @@ if selected_campaign:
                             st.success("Report generated!")
                             
                             st.download_button(
-                                "⬇️ Download Test Report",
+                                "Download Test Report",
                                 html,
                                 file_name=f"{selected_test}_report.html",
                                 mime="text/html"
@@ -231,7 +231,7 @@ if selected_campaign:
             with col2:
                 st.subheader("Export")
                 
-                if st.button("📥 Generate Export", type="primary"):
+                if st.button("Generate Export", type="primary"):
                     try:
                         export_df = df[selected_cols].copy()
                         
@@ -245,7 +245,7 @@ if selected_campaign:
                         
                         if export_format == "CSV":
                             st.download_button(
-                                "⬇️ Download CSV",
+                                "Download CSV",
                                 export_df.to_csv(index=False),
                                 file_name=f"{selected_campaign}_export.csv",
                                 mime="text/csv"
@@ -265,7 +265,7 @@ if selected_campaign:
                                 meta_df.to_excel(writer, sheet_name='Metadata', index=False)
                             
                             st.download_button(
-                                "⬇️ Download Excel",
+                                "Download Excel",
                                 buffer.getvalue(),
                                 file_name=f"{selected_campaign}_export.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -280,7 +280,7 @@ if selected_campaign:
                                 'data': export_df.to_dict(orient='records')
                             }
                             st.download_button(
-                                "⬇️ Download JSON",
+                                "Download JSON",
                                 json.dumps(export_data, indent=2, default=str),
                                 file_name=f"{selected_campaign}_export.json",
                                 mime="application/json"
@@ -294,7 +294,7 @@ if selected_campaign:
             st.divider()
             st.subheader("Traceability Report")
             
-            if st.button("📋 Generate Traceability Report"):
+            if st.button("Generate Traceability Report"):
                 try:
                     lines = [
                         "=" * 70,
@@ -326,7 +326,7 @@ if selected_campaign:
                     report_text = "\n".join(lines)
                     
                     st.download_button(
-                        "⬇️ Download Traceability Report",
+                        "Download Traceability Report",
                         report_text,
                         file_name=f"{selected_campaign}_traceability.txt",
                         mime="text/plain"
@@ -368,7 +368,7 @@ if selected_campaign:
             with col2:
                 st.subheader("Generate Package")
                 
-                if st.button("🎓 Generate Qualification Package", type="primary"):
+                if st.button(" Generate Qualification Package", type="primary"):
                     with st.spinner("Generating package..."):
                         try:
                             zip_buffer = io.BytesIO()
@@ -450,7 +450,7 @@ if selected_campaign:
                             st.success("Qualification package generated!")
                             
                             st.download_button(
-                                "⬇️ Download Qualification Package (ZIP)",
+                                "Download Qualification Package (ZIP)",
                                 zip_buffer.getvalue(),
                                 file_name=f"{selected_campaign}_qual_package.zip",
                                 mime="application/zip"
@@ -465,4 +465,4 @@ if selected_campaign:
         st.info("No test data in selected campaign.")
 
 else:
-    st.info("👈 Select a campaign in the sidebar")
+    st.info("Select a campaign in the sidebar")

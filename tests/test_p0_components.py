@@ -143,7 +143,7 @@ class TestTraceability:
             assert hash1 == hash2  # Same file, same hash
             assert len(hash1) == 7 + 64  # 'sha256:' + 64 hex chars
             
-            print(f"✓ File hash: {hash1[:30]}...")
+            print(f"[PASS] File hash: {hash1[:30]}...")
         finally:
             os.unlink(temp_path)
     
@@ -160,7 +160,7 @@ class TestTraceability:
         assert hash1 == hash2  # Same data, same hash
         assert hash1 != hash3  # Different data, different hash
         
-        print(f"✓ DataFrame hashing works correctly")
+        print(f"[PASS] DataFrame hashing works correctly")
     
     def test_compute_config_hash(self):
         """Test config hashing."""
@@ -175,7 +175,7 @@ class TestTraceability:
         assert hash1 == hash2  # Order shouldn't matter
         assert hash1 != hash3  # Different content, different hash
         
-        print(f"✓ Config hashing is order-independent")
+        print(f"[PASS] Config hashing is order-independent")
     
     def test_data_traceability_from_dataframe(self):
         """Test DataTraceability creation from DataFrame."""
@@ -198,7 +198,7 @@ class TestTraceability:
         record = trace.to_dict()
         assert 'analysis_timestamp_utc' in record
         
-        print(f"✓ DataTraceability from DataFrame works")
+        print(f"[PASS] DataTraceability from DataFrame works")
     
     def test_processing_record(self):
         """Test ProcessingRecord."""
@@ -217,7 +217,7 @@ class TestTraceability:
         data = record.to_dict()
         assert 'detection_parameters' in data
         
-        print(f"✓ ProcessingRecord works")
+        print(f"[PASS] ProcessingRecord works")
 
 
 class TestUncertainty:
@@ -238,7 +238,7 @@ class TestUncertainty:
         assert u_abs == 1.0  # 1% of 100
         assert u_rel == 0.01
         
-        print(f"✓ Relative uncertainty: {reading} ± {u_abs}")
+        print(f"[PASS] Relative uncertainty: {reading} ± {u_abs}")
     
     def test_sensor_uncertainty_absolute(self):
         """Test absolute uncertainty."""
@@ -251,7 +251,7 @@ class TestUncertainty:
         u_abs = sensor.get_absolute_uncertainty(500.0)
         assert u_abs == 5.0
         
-        print(f"✓ Absolute uncertainty: ±{u_abs}")
+        print(f"[PASS] Absolute uncertainty: ±{u_abs}")
     
     def test_cd_uncertainty_calculation(self):
         """Test Cd uncertainty propagation."""
@@ -271,7 +271,7 @@ class TestUncertainty:
         assert result.uncertainty > 0
         assert result.relative_uncertainty_percent < 10  # Should be reasonable
         
-        print(f"✓ Cd with uncertainty: {result}")
+        print(f"[PASS] Cd with uncertainty: {result}")
     
     def test_cold_flow_uncertainties(self):
         """Test full cold flow uncertainty calculation."""
@@ -292,7 +292,7 @@ class TestUncertainty:
         assert cd.value > 0
         assert cd.uncertainty > 0
         
-        print(f"✓ Cold flow uncertainties calculated")
+        print(f"[PASS] Cold flow uncertainties calculated")
         for name, meas in results.items():
             print(f"    {name}: {meas}")
     
@@ -303,7 +303,7 @@ class TestUncertainty:
         assert '±' in formatted
         assert '0.654' in formatted or '0.6543' in formatted
         
-        print(f"✓ Formatted: {formatted}")
+        print(f"[PASS] Formatted: {formatted}")
 
 
 class TestQCChecks:
@@ -318,7 +318,7 @@ class TestQCChecks:
         result = check_timestamp_monotonic(df, 'timestamp')
         
         assert result.status == QCStatus.PASS
-        print(f"✓ Monotonic check passed: {result.message}")
+        print(f"[PASS] Monotonic check passed: {result.message}")
     
     def test_timestamp_monotonic_fail(self):
         """Test monotonic timestamp check - failing case."""
@@ -330,7 +330,7 @@ class TestQCChecks:
         
         assert result.status == QCStatus.FAIL
         assert result.blocking == True
-        print(f"✓ Monotonic check failed as expected: {result.message}")
+        print(f"[PASS] Monotonic check failed as expected: {result.message}")
     
     def test_timestamp_gaps(self):
         """Test gap detection."""
@@ -342,7 +342,7 @@ class TestQCChecks:
         
         assert result.status in (QCStatus.WARN, QCStatus.FAIL)
         assert result.details['n_gaps'] == 1
-        print(f"✓ Gap detection: {result.message}")
+        print(f"[PASS] Gap detection: {result.message}")
     
     def test_flatline_detection(self):
         """Test flatline detection."""
@@ -356,7 +356,7 @@ class TestQCChecks:
         
         # Should detect the flatline
         assert result.status in (QCStatus.WARN, QCStatus.FAIL)
-        print(f"✓ Flatline detection: {result.message}")
+        print(f"[PASS] Flatline detection: {result.message}")
     
     def test_nan_ratio(self):
         """Test NaN ratio check."""
@@ -367,7 +367,7 @@ class TestQCChecks:
         result = check_nan_ratio(df, 'sensor', max_nan_ratio=0.05)
         
         assert result.status in (QCStatus.WARN, QCStatus.FAIL)
-        print(f"✓ NaN ratio check: {result.message}")
+        print(f"[PASS] NaN ratio check: {result.message}")
     
     def test_full_qc_pipeline(self):
         """Test complete QC pipeline."""
@@ -379,7 +379,7 @@ class TestQCChecks:
         assert isinstance(report, QCReport)
         assert len(report.checks) > 0
         
-        print(f"✓ Full QC Report:")
+        print(f"[PASS] Full QC Report:")
         print(f"    Passed: {report.passed}")
         print(f"    Summary: {report.summary}")
         
@@ -396,9 +396,9 @@ class TestQCChecks:
         # Should not raise if passed
         try:
             assert_qc_passed(report, raise_on_fail=True)
-            print(f"✓ QC assertion passed")
+            print(f"[PASS] QC assertion passed")
         except ValueError as e:
-            print(f"✓ QC assertion raised: {e}")
+            print(f"[PASS] QC assertion raised: {e}")
 
 
 class TestConfigValidation:
@@ -416,7 +416,7 @@ class TestConfigValidation:
             if hasattr(validated.fluid, 'get_density'):
                 assert validated.fluid.get_density() == 1000
         
-        print(f"✓ Valid cold flow config validated")
+        print(f"[PASS] Valid cold flow config validated")
     
     def test_missing_required_field(self):
         """Test that missing required fields raise errors."""
@@ -436,7 +436,7 @@ class TestConfigValidation:
             assert False, "Should have raised ValueError"
         except ValueError as e:
             assert 'orifice_area' in str(e).lower() or 'geometry' in str(e).lower()
-            print(f"✓ Missing field caught: {str(e)[:80]}...")
+            print(f"[PASS] Missing field caught: {str(e)[:80]}...")
     
     def test_missing_column_mapping(self):
         """Test that missing column mappings raise errors."""
@@ -455,7 +455,7 @@ class TestConfigValidation:
             assert False, "Should have raised ValueError"
         except ValueError as e:
             assert 'pressure' in str(e).lower() or 'flow' in str(e).lower()
-            print(f"✓ Missing column mapping caught: {str(e)[:80]}...")
+            print(f"[PASS] Missing column mapping caught: {str(e)[:80]}...")
     
     def test_auto_detect_config_type(self):
         """Test automatic config type detection."""
@@ -467,7 +467,7 @@ class TestConfigValidation:
         assert validated is not None
         assert hasattr(validated, 'config_name')
         
-        print(f"✓ Auto-detected config type: cold_flow")
+        print(f"[PASS] Auto-detected config type: cold_flow")
 
 
 def run_all_tests():
@@ -499,7 +499,7 @@ def run_all_tests():
                 method()
                 passed += 1
             except Exception as e:
-                print(f"✗ {method_name}: {e}")
+                print(f"[FAIL] {method_name}: {e}")
                 failed += 1
     
     print("\n" + "=" * 60)

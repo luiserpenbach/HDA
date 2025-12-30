@@ -65,7 +65,7 @@ class TestComparison:
                 'Difference': f"{c.difference:+.4g}",
                 'Δ%': f"{c.percent_difference:+.2f}%",
                 'Tolerance': f"±{c.tolerance:.2f}%",
-                'Status': '✓' if c.within_tolerance else '✗',
+                'Status': '' if c.within_tolerance else '',
             }
             for c in self.comparisons
         ])
@@ -80,7 +80,7 @@ class TestComparison:
         ]
         
         for c in self.comparisons:
-            status = "✓" if c.within_tolerance else "✗"
+            status = "" if c.within_tolerance else ""
             lines.append(
                 f"  {status} {c.parameter}: {c.percent_difference:+.2f}% "
                 f"(tolerance: ±{c.tolerance:.1f}%)"
@@ -736,7 +736,7 @@ def format_campaign_comparison(comparison: Dict[str, Any]) -> str:
     ]
     
     for param, data in comparison['parameters'].items():
-        status = "✓" if data['means_equivalent'] else "✗"
+        status = "" if data['means_equivalent'] else ""
         lines.append(
             f"{param:<20} {data['mean_a']:>12.4g} {data['mean_b']:>12.4g} "
             f"{data['mean_diff_pct']:>+7.2f}% {status:>8}"

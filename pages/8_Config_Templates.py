@@ -17,9 +17,9 @@ from core.templates import (
     validate_config_against_template,
 )
 
-st.set_page_config(page_title="Config Templates", page_icon="📝", layout="wide")
+st.set_page_config(page_title="Config Templates", page_icon="", layout="wide")
 
-st.title("📝 Configuration Templates")
+st.title(" Configuration Templates")
 st.markdown("Manage configuration templates for consistent test analysis.")
 
 # Initialize template manager
@@ -30,7 +30,7 @@ manager = TemplateManager()
 # =============================================================================
 
 with st.sidebar:
-    st.header("⚙️ Actions")
+    st.header("Actions")
     
     action = st.radio(
         "Select action",
@@ -42,7 +42,7 @@ with st.sidebar:
 # =============================================================================
 
 if action == "Browse Templates":
-    st.header("📚 Available Templates")
+    st.header(" Available Templates")
     
     templates = manager.list_templates()
     
@@ -67,7 +67,7 @@ if action == "Browse Templates":
         
         # Display templates
         for template_info in filtered:
-            with st.expander(f"{'📦' if template_info['builtin'] else '📄'} {template_info['name']}"):
+            with st.expander(f"{'' if template_info['builtin'] else ''} {template_info['name']}"):
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
@@ -96,13 +96,13 @@ if action == "Browse Templates":
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    if st.button("📋 Use Template", key=f"use_{template_info['id']}"):
+                    if st.button("Use Template", key=f"use_{template_info['id']}"):
                         config = create_config_from_template(template_info['id'])
                         st.session_state['active_config'] = config
                         st.success("Template loaded to active config!")
                 
                 with col2:
-                    if st.button("📥 Export", key=f"export_{template_info['id']}"):
+                    if st.button("Export", key=f"export_{template_info['id']}"):
                         template = manager.get_template(template_info['id'])
                         if template:
                             st.download_button(
@@ -115,7 +115,7 @@ if action == "Browse Templates":
                 
                 with col3:
                     if not template_info['builtin']:
-                        if st.button("🗑️ Delete", key=f"delete_{template_info['id']}"):
+                        if st.button(" Delete", key=f"delete_{template_info['id']}"):
                             if manager.delete_template(template_info['id']):
                                 st.success("Deleted!")
                                 st.rerun()
@@ -125,7 +125,7 @@ if action == "Browse Templates":
 # =============================================================================
 
 elif action == "Create Template":
-    st.header("➕ Create New Template")
+    st.header("Create New Template")
     
     tab1, tab2 = st.tabs(["From Scratch", "From Existing"])
     
@@ -202,7 +202,7 @@ elif action == "Create Template":
         settings['sample_rate_hz'] = st.number_input("Sample Rate (Hz)", value=100, min_value=1)
         
         # Create template
-        if st.button("💾 Save Template", type="primary"):
+        if st.button("Save Template", type="primary"):
             try:
                 template = ConfigTemplate(
                     name=name,
@@ -240,7 +240,7 @@ elif action == "Create Template":
             height=200
         )
         
-        if st.button("📋 Create from Parent"):
+        if st.button("Create from Parent"):
             try:
                 overrides = json.loads(overrides_json)
                 
@@ -259,7 +259,7 @@ elif action == "Create Template":
 # =============================================================================
 
 elif action == "Import/Export":
-    st.header("📤 Import / Export Templates")
+    st.header("Import / Export Templates")
     
     col1, col2 = st.columns(2)
     
@@ -276,7 +276,7 @@ elif action == "Import/Export":
                 
                 import_id = st.text_input("Template ID (optional)", value="")
                 
-                if st.button("📥 Import"):
+                if st.button("Import"):
                     # Save to temp file and import
                     import tempfile
                     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
@@ -292,7 +292,7 @@ elif action == "Import/Export":
     with col2:
         st.subheader("Export All Templates")
         
-        if st.button("📦 Export All Custom Templates"):
+        if st.button(" Export All Custom Templates"):
             templates = manager.list_templates(include_builtin=False)
             
             if not templates:
@@ -323,7 +323,7 @@ elif action == "Import/Export":
         - `hot_fire_n2o_htpb` - N2O/HTPB hybrid
         """)
         
-        if st.button("📥 Export Built-in Templates"):
+        if st.button("Export Built-in Templates"):
             export_data = {}
             for tid, template in BUILTIN_TEMPLATES.items():
                 export_data[tid] = template.to_dict()

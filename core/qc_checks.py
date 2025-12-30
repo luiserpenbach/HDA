@@ -60,7 +60,7 @@ class QCCheckResult:
         }
     
     def __str__(self) -> str:
-        icon = {'PASS': '✓', 'WARN': '⚠', 'FAIL': '✗', 'SKIP': '○'}[self.status.value]
+        icon = {'PASS': '', 'WARN': '[WARN]', 'FAIL': '', 'SKIP': ''}[self.status.value]
         return f"[{icon}] {self.name}: {self.message}"
 
 
@@ -940,9 +940,9 @@ def format_qc_for_display(report: QCReport) -> str:
     
     # Header
     if report.passed:
-        lines.append("## ✅ Quality Control: PASSED")
+        lines.append("##  Quality Control: PASSED")
     else:
-        lines.append("## ❌ Quality Control: FAILED")
+        lines.append("##  Quality Control: FAILED")
     
     lines.append("")
     lines.append(f"**Summary:** {report.summary['passed']} passed, "
@@ -952,20 +952,20 @@ def format_qc_for_display(report: QCReport) -> str:
     
     # Group by status
     if report.blocking_failures:
-        lines.append("### ❌ Blocking Failures")
+        lines.append("###  Blocking Failures")
         for check in report.blocking_failures:
             lines.append(f"- **{check.name}**: {check.message}")
         lines.append("")
     
     if report.warnings:
-        lines.append("### ⚠️ Warnings")
+        lines.append("### [WARN] Warnings")
         for check in report.warnings:
             lines.append(f"- **{check.name}**: {check.message}")
         lines.append("")
     
     passed_checks = [c for c in report.checks if c.status == QCStatus.PASS]
     if passed_checks:
-        lines.append("### ✅ Passed Checks")
+        lines.append("###  Passed Checks")
         for check in passed_checks:
             lines.append(f"- {check.name}")
     

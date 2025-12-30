@@ -192,14 +192,14 @@ def generate_cold_flow_test_report(test_data, config, figures, steady_window_inf
     <body>
         <div class="container">
             <div class="header">
-                <h1>❄️ Cold Flow Test Report</h1>
+                <h1> Cold Flow Test Report</h1>
                 <div class="subtitle">{test_id}</div>
             </div>
 
             <div class="content">
                 <!-- Key Metrics -->
                 <div class="section">
-                    <h2>📊 Key Performance Metrics</h2>
+                    <h2> Key Performance Metrics</h2>
                     <div class="metrics-grid">
                         <div class="metric-card">
                             <div class="metric-label">Discharge Coefficient</div>
@@ -226,7 +226,7 @@ def generate_cold_flow_test_report(test_data, config, figures, steady_window_inf
 
                 <!-- Test Information -->
                 <div class="section">
-                    <h2>ℹ️ Test Information</h2>
+                    <h2>ℹ Test Information</h2>
                     <table class="info-table">
                         <tr>
                             <td>Test ID</td>
@@ -261,7 +261,7 @@ def generate_cold_flow_test_report(test_data, config, figures, steady_window_inf
 
                 <!-- Configuration Details -->
                 <div class="section">
-                    <h2>⚙️ Test Configuration</h2>
+                    <h2> Test Configuration</h2>
                     <table class="info-table">
                         <tr>
                             <td>Orifice Area</td>
@@ -284,13 +284,13 @@ def generate_cold_flow_test_report(test_data, config, figures, steady_window_inf
 
                 <!-- Charts -->
                 <div class="section">
-                    <h2>📈 Data Visualization</h2>
+                    <h2> Data Visualization</h2>
                     {fig_htmls}
                 </div>
 
                 <!-- Comments -->
                 <div class="section">
-                    <h2>💬 Comments</h2>
+                    <h2> Comments</h2>
                     <p>{test_data.get('comments', 'No comments provided.')}</p>
                 </div>
             </div>
@@ -429,14 +429,14 @@ def generate_cold_flow_campaign_report(campaign_name, df, summary_stats, figures
     <body>
         <div class="container">
             <div class="header">
-                <h1>❄️ Cold Flow Campaign Report</h1>
+                <h1> Cold Flow Campaign Report</h1>
                 <div style="font-size: 1.5em; margin-top: 10px;">{campaign_name}</div>
             </div>
 
             <div class="content">
                 <!-- Summary Statistics -->
                 <div class="section">
-                    <h2>📊 Campaign Summary</h2>
+                    <h2> Campaign Summary</h2>
                     <div class="stats-grid">
                         <div class="stat-card">
                             <div class="label">Total Tests</div>
@@ -459,7 +459,7 @@ def generate_cold_flow_campaign_report(campaign_name, df, summary_stats, figures
 
                 <!-- Parts Summary -->
                 <div class="section">
-                    <h2>🔧 Parts Performance Summary</h2>
+                    <h2> Parts Performance Summary</h2>
                     <table class="data-table">
                         <thead>
                             <tr>
@@ -479,7 +479,7 @@ def generate_cold_flow_campaign_report(campaign_name, df, summary_stats, figures
 
                 <!-- Charts -->
                 <div class="section">
-                    <h2>📈 Campaign Analytics</h2>
+                    <h2> Campaign Analytics</h2>
                     {fig_htmls}
                 </div>
             </div>
@@ -607,14 +607,14 @@ def generate_hot_fire_test_report(test_data, test_df, config, figures):
     <body>
         <div class="container">
             <div class="header">
-                <h1>🔥 Hot Fire Test Report</h1>
+                <h1> Hot Fire Test Report</h1>
                 <div style="font-size: 1.2em; margin-top: 10px;">{test_id}</div>
             </div>
 
             <div class="content">
                 <!-- Key Metrics -->
                 <div class="section">
-                    <h2>🚀 Performance Metrics</h2>
+                    <h2> Performance Metrics</h2>
                     <div class="metrics-grid">
                         <div class="metric-card">
                             <div class="metric-label">Chamber Pressure</div>
@@ -651,7 +651,7 @@ def generate_hot_fire_test_report(test_data, test_df, config, figures):
 
                 <!-- Test Info -->
                 <div class="section">
-                    <h2>ℹ️ Test Information</h2>
+                    <h2>ℹ Test Information</h2>
                     <table class="info-table">
                         <tr>
                             <td>Test ID</td>
@@ -674,7 +674,7 @@ def generate_hot_fire_test_report(test_data, test_df, config, figures):
 
                 <!-- Charts -->
                 <div class="section">
-                    <h2>📈 Time-Series Data</h2>
+                    <h2> Time-Series Data</h2>
                     {fig_htmls}
                 </div>
             </div>
@@ -774,14 +774,14 @@ def generate_hot_fire_campaign_report(campaign_name, df, summary_stats, figures)
     <body>
         <div class="container">
             <div class="header">
-                <h1>🔥 Hot Fire Campaign Report</h1>
+                <h1> Hot Fire Campaign Report</h1>
                 <div style="font-size: 1.5em; margin-top: 10px;">{campaign_name}</div>
             </div>
 
             <div class="content">
                 <!-- Summary -->
                 <div class="section">
-                    <h2>📊 Campaign Summary</h2>
+                    <h2> Campaign Summary</h2>
                     <div class="stats-grid">
                         <div class="stat-card">
                             <div class="label">Total Tests</div>
@@ -807,7 +807,7 @@ def generate_hot_fire_campaign_report(campaign_name, df, summary_stats, figures)
 
                 <!-- Charts -->
                 <div class="section">
-                    <h2>📈 Campaign Analytics</h2>
+                    <h2> Campaign Analytics</h2>
                     {fig_htmls}
                 </div>
             </div>

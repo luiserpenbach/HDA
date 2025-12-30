@@ -99,7 +99,7 @@ class AnomalyReport:
         ]
         
         for channel, health in sorted(self.sensor_health.items()):
-            status = "✓" if health > 0.9 else ("⚠" if health > 0.7 else "✗")
+            status = "" if health > 0.9 else ("[WARN]" if health > 0.7 else "")
             lines.append(f"  {status} {channel}: {health:.1%}")
         
         if self.has_critical:

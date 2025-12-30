@@ -349,13 +349,13 @@ def generate_qc_section(qc_report: Dict[str, Any]) -> str:
         status = check.get('status', 'PASS')
         if status == 'PASS':
             icon_class = 'qc-pass'
-            icon = '✓'
+            icon = ''
         elif status == 'WARN':
             icon_class = 'qc-warn'
             icon = '!'
         else:
             icon_class = 'qc-fail'
-            icon = '✗'
+            icon = ''
         
         check_items.append(f"""
             <li>
@@ -502,9 +502,9 @@ def generate_test_report(
     <div class="report-header">
         <h1>{title}</h1>
         <div class="report-meta">
-            <span>📋 Type: {test_type_display}</span>
-            <span>👤 Analyst: {analyst}</span>
-            <span>📅 Date: {timestamp[:10]}</span>
+            <span> Type: {test_type_display}</span>
+            <span> Analyst: {analyst}</span>
+            <span> Date: {timestamp[:10]}</span>
         </div>
     </div>
     """)
@@ -611,8 +611,8 @@ def generate_campaign_report(
     <div class="report-header">
         <h1>{title}</h1>
         <div class="report-meta">
-            <span>📊 Tests: {len(df)}</span>
-            <span>📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</span>
+            <span> Tests: {len(df)}</span>
+            <span> Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</span>
         </div>
     </div>
     """)
@@ -685,7 +685,7 @@ def generate_campaign_report(
             if analysis.has_trend:
                 report_parts.append(f"""
                 <p style="color: var(--warning-color);">
-                    ⚠️ Trend detected: {analysis.trend_direction}
+                    [WARN] Trend detected: {analysis.trend_direction}
                 </p>
                 """)
         

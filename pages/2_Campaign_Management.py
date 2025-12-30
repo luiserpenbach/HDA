@@ -19,9 +19,9 @@ from core.campaign_manager_v2 import (
     get_test_traceability,
 )
 
-st.set_page_config(page_title="Campaign Management", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Campaign Management", page_icon="CM", layout="wide")
 
-st.title("📈 Campaign Management")
+st.title("Campaign Management")
 st.markdown("Create and manage test campaigns with full data traceability.")
 
 # =============================================================================
@@ -57,7 +57,7 @@ with st.sidebar:
     new_type = st.selectbox("Campaign Type", ["cold_flow", "hot_fire"])
     new_desc = st.text_area("Description", height=100)
 
-    if st.button("➕ Create Campaign", use_container_width=True):
+    if st.button("Create Campaign", use_container_width=True):
         if new_name:
             try:
                 create_campaign(
@@ -104,7 +104,7 @@ if selected_campaign:
     st.divider()
 
     # Tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "📋 Data Table", "🔍 Traceability", "📤 Export"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Data Table", "Traceability", "Export"])
 
     # =============================================================================
     # TAB 1: Overview
@@ -238,7 +238,7 @@ if selected_campaign:
 
             # Download
             st.download_button(
-                "⬇️ Download CSV",
+                "Download CSV",
                 df.to_csv(index=False),
                 file_name=f"{selected_campaign}_data.csv",
                 mime="text/csv"
@@ -278,7 +278,7 @@ if selected_campaign:
             with col2:
                 st.markdown("**Integrity Verification**")
 
-                if st.button("🔐 Verify Data Integrity"):
+                if st.button("Verify Data Integrity"):
                     try:
                         # This would need the original file to verify
                         st.info("To verify integrity, upload the original test data file.")
@@ -293,9 +293,9 @@ if selected_campaign:
                             )
 
                             if is_valid:
-                                st.success("✓ Data integrity verified")
+                                st.success("[PASS] Data integrity verified")
                             else:
-                                st.error("✗ Data integrity check failed")
+                                st.error("[FAIL] Data integrity check failed")
                     except Exception as e:
                         st.error(f"Verification error: {e}")
 
@@ -346,7 +346,7 @@ if selected_campaign:
                     export_df = df[cols_to_export]
 
                     st.download_button(
-                        "⬇️ Download CSV",
+                        "Download CSV",
                         export_df.to_csv(index=False),
                         file_name=f"{selected_campaign}_export.csv",
                         mime="text/csv"
@@ -365,7 +365,7 @@ if selected_campaign:
 
                             with open(f.name, 'rb') as excel_file:
                                 st.download_button(
-                                    "⬇️ Download Excel",
+                                    "Download Excel",
                                     excel_file.read(),
                                     file_name=f"{selected_campaign}_export.xlsx",
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -384,7 +384,7 @@ if selected_campaign:
                     }
 
                     st.download_button(
-                        "⬇️ Download JSON",
+                        "Download JSON",
                         json.dumps(export_data, indent=2, default=str),
                         file_name=f"{selected_campaign}_export.json",
                         mime="application/json"
@@ -393,4 +393,4 @@ if selected_campaign:
             st.info("No test data to export.")
 
 else:
-    st.info("👈 Select or create a campaign in the sidebar")
+    st.info("Select or create a campaign in the sidebar")

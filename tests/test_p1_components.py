@@ -96,7 +96,7 @@ class TestSPC:
         assert i_limits.lcl < i_limits.center_line
         assert mr_limits.center_line > 0
         
-        print(f"✓ I-MR limits: CL={i_limits.center_line:.3f}, UCL={i_limits.ucl:.3f}, LCL={i_limits.lcl:.3f}")
+        print(f"[PASS] I-MR limits: CL={i_limits.center_line:.3f}, UCL={i_limits.ucl:.3f}, LCL={i_limits.lcl:.3f}")
     
     def test_western_electric_rules_no_violation(self):
         """Test Western Electric rules with in-control data."""
@@ -115,7 +115,7 @@ class TestSPC:
         # Most points should have no violations
         n_violations = sum(1 for v in violations if len(v) > 0)
         
-        print(f"✓ Western Electric rules: {n_violations} points with violations out of {len(values)}")
+        print(f"[PASS] Western Electric rules: {n_violations} points with violations out of {len(values)}")
     
     def test_western_electric_beyond_3sigma(self):
         """Test detection of point beyond 3 sigma."""
@@ -131,7 +131,7 @@ class TestSPC:
         violations = check_western_electric_rules(values, limits)
         
         assert ViolationType.BEYOND_3SIGMA in violations[-1]
-        print(f"✓ Beyond 3σ violation detected")
+        print(f"[PASS] Beyond 3σ violation detected")
     
     def test_calculate_capability(self):
         """Test process capability calculation."""
@@ -144,7 +144,7 @@ class TestSPC:
         assert capability.cpk is not None
         assert capability.cp > 0
         
-        print(f"✓ Capability: Cp={capability.cp:.2f}, Cpk={capability.cpk:.2f}")
+        print(f"[PASS] Capability: Cp={capability.cp:.2f}, Cpk={capability.cpk:.2f}")
         print(f"  {capability.summary()}")
     
     def test_detect_trend_no_trend(self):
@@ -155,7 +155,7 @@ class TestSPC:
         has_trend, direction, slope = detect_trend(values)
         
         # Random data shouldn't have strong trend
-        print(f"✓ Trend detection (random): has_trend={has_trend}, direction={direction}")
+        print(f"[PASS] Trend detection (random): has_trend={has_trend}, direction={direction}")
     
     def test_detect_trend_with_trend(self):
         """Test trend detection with trending data."""
@@ -166,7 +166,7 @@ class TestSPC:
         assert has_trend == True
         assert direction == 'increasing'
         
-        print(f"✓ Trend detection (increasing): direction={direction}, slope={slope:.4f}")
+        print(f"[PASS] Trend detection (increasing): direction={direction}, slope={slope:.4f}")
     
     def test_create_imr_chart(self):
         """Test full I-MR chart creation."""
@@ -183,7 +183,7 @@ class TestSPC:
         assert analysis.n_points == len(df)
         assert analysis.limits.center_line > 0
         
-        print(f"✓ I-MR Chart: {analysis.n_points} points, {analysis.n_violations} violations")
+        print(f"[PASS] I-MR Chart: {analysis.n_points} points, {analysis.n_violations} violations")
         print(f"  Limits: CL={analysis.limits.center_line:.4f}, UCL={analysis.limits.ucl:.4f}")
         
         if analysis.capability:
@@ -208,7 +208,7 @@ class TestReporting:
         assert 'Cd' in html
         assert '0.654' in html or '0.6540' in html
         
-        print(f"✓ Measurement table generated ({len(html)} chars)")
+        print(f"[PASS] Measurement table generated ({len(html)} chars)")
     
     def test_generate_test_report(self):
         """Test single test report generation."""
@@ -248,7 +248,7 @@ class TestReporting:
         assert 'Quality Control' in html
         assert 'Traceability' in html
         
-        print(f"✓ Test report generated ({len(html)} chars)")
+        print(f"[PASS] Test report generated ({len(html)} chars)")
     
     def test_generate_campaign_report(self):
         """Test campaign report generation."""
@@ -264,7 +264,7 @@ class TestReporting:
         assert 'Test Campaign' in html
         assert 'Summary Statistics' in html
         
-        print(f"✓ Campaign report generated ({len(html)} chars)")
+        print(f"[PASS] Campaign report generated ({len(html)} chars)")
     
     def test_save_report(self):
         """Test saving report to file."""
@@ -283,7 +283,7 @@ class TestReporting:
             
             assert 'Test Report' in content
             
-            print(f"✓ Report saved to file")
+            print(f"[PASS] Report saved to file")
         finally:
             os.unlink(temp_path)
 
@@ -306,7 +306,7 @@ class TestBatchAnalysis:
         assert d['test_id'] == 'CF-001'
         assert d['success'] == True
         
-        print(f"✓ BatchTestResult: {result.test_id}")
+        print(f"[PASS] BatchTestResult: {result.test_id}")
     
     def test_batch_analysis_report(self):
         """Test BatchAnalysisReport."""
@@ -329,7 +329,7 @@ class TestBatchAnalysis:
         assert report.failed == 1
         assert report.qc_failed == 1
         
-        print(f"✓ BatchAnalysisReport: {report.successful}/{report.total_files} successful")
+        print(f"[PASS] BatchAnalysisReport: {report.successful}/{report.total_files} successful")
         print(f"  {report.summary()}")
     
     def test_extract_test_id_from_path(self):
@@ -340,7 +340,7 @@ class TestBatchAnalysis:
         
         assert test_id == 'CF-001_20240115'
         
-        print(f"✓ Test ID extracted: {test_id}")
+        print(f"[PASS] Test ID extracted: {test_id}")
     
     def test_discover_test_files(self):
         """Test file discovery."""
@@ -355,7 +355,7 @@ class TestBatchAnalysis:
             assert len(files) == 3
             assert all(f.suffix == '.csv' for f in files)
             
-            print(f"✓ Discovered {len(files)} test files")
+            print(f"[PASS] Discovered {len(files)} test files")
     
     def test_load_csv_with_timestamp(self):
         """Test CSV loading with timestamp handling."""
@@ -372,7 +372,7 @@ class TestBatchAnalysis:
             assert 'timestamp' in df.columns
             assert len(df) == 3
             
-            print(f"✓ CSV loaded with timestamp column")
+            print(f"[PASS] CSV loaded with timestamp column")
         finally:
             os.unlink(temp_path)
 
@@ -402,7 +402,7 @@ class TestExport:
             assert 'Hopper Data Studio' in content
             assert 'test_id' in content
             
-            print(f"✓ CSV export successful")
+            print(f"[PASS] CSV export successful")
         finally:
             os.unlink(temp_path)
     
@@ -429,7 +429,7 @@ class TestExport:
             assert 'tests' in data
             assert len(data['tests']) == len(df)
             
-            print(f"✓ JSON export successful ({len(data['tests'])} tests)")
+            print(f"[PASS] JSON export successful ({len(data['tests'])} tests)")
         finally:
             os.unlink(temp_path)
     
@@ -452,7 +452,7 @@ class TestExport:
             assert 'CF-001' in content
             assert 'sha256' in content
             
-            print(f"✓ Traceability report created")
+            print(f"[PASS] Traceability report created")
         finally:
             os.unlink(temp_path)
 
@@ -486,7 +486,7 @@ def run_all_tests():
                 method()
                 passed += 1
             except Exception as e:
-                print(f"✗ {method_name}: {e}")
+                print(f"[FAIL] {method_name}: {e}")
                 failed += 1
     
     print("\n" + "=" * 60)
