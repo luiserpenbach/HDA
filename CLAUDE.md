@@ -25,11 +25,11 @@
 ├── requirements.txt            # Python dependencies
 ├── .gitignore                  # Git ignore rules
 │
-├── core/                       # Engineering integrity modules (P0, P1, P2)
+├── core/                       # Engineering integrity modules
 │   ├── __init__.py            # Core module exports
 │   ├── README.md              # Core module documentation
 │   │
-│   ├── # P0 Components (Non-negotiable)
+│   ├── # Core Engineering Integrity
 │   ├── traceability.py        # SHA-256 hashing, audit trails, data integrity
 │   ├── uncertainty.py         # Error propagation, measurement uncertainty
 │   ├── qc_checks.py           # Pre-analysis quality control validation
@@ -37,13 +37,13 @@
 │   ├── campaign_manager_v2.py # SQLite database with full traceability
 │   ├── integrated_analysis.py # High-level analysis API
 │   │
-│   ├── # P1 Components (High Priority)
+│   ├── # Analysis & Reporting
 │   ├── spc.py                 # Statistical Process Control (SPC)
 │   ├── reporting.py           # HTML report generation
 │   ├── batch_analysis.py      # Multi-file batch processing
 │   ├── export.py              # Data export (CSV, Excel, JSON)
 │   │
-│   ├── # P2 Components (Advanced Features)
+│   ├── # Advanced Features
 │   ├── advanced_anomaly.py    # Multi-type anomaly detection
 │   ├── comparison.py          # Test-to-test and golden reference comparison
 │   ├── templates.py           # Configuration template management
@@ -87,37 +87,35 @@
 │   └── INJ-CF-C1-Var2_Characterization.db
 │
 └── tests/                      # Test suite
-    ├── test_p0_components.py  # P0 component tests
-    ├── test_p1_components.py  # P1 component tests
-    └── test_p2_components.py  # P2 component tests
+    ├── test_p0_components.py  # Core integrity tests
+    ├── test_p1_components.py  # Analysis & reporting tests
+    └── test_p2_components.py  # Advanced features tests
 ```
 
 ---
 
 ## Architecture & Design Principles
 
-### Component Priority Levels
+### Core Engineering Integrity
 
-The codebase is organized into three priority levels:
+The platform is built around ensuring data quality and traceability:
 
-**P0 (Non-negotiable)** - Core engineering integrity:
-- **Traceability**: Every data point must be traceable to its source
+- **Traceability**: Every data point must be traceable to its source via SHA-256 hashing
 - **Uncertainty**: All measurements must include uncertainty quantification
 - **QC Checks**: Data must pass quality checks before analysis
 - **Config Validation**: All configurations must be schema-validated
-- **Campaign Manager v2**: Database storage with full audit trails
-- **Integrated Analysis**: Unified API that enforces P0 requirements
+- **Campaign Manager**: Database storage with full audit trails
+- **Integrated Analysis**: Unified API that enforces integrity requirements
 
-**P1 (High Priority)** - Production features:
-- **SPC**: Statistical Process Control for process monitoring
-- **Reporting**: Professional HTML reports with traceability
+### Key Features
+
+- **Statistical Process Control**: Monitor process stability with control charts and capability indices
+- **Reporting**: Professional HTML reports with full traceability
 - **Batch Analysis**: Parallel processing of multiple test files
-- **Export**: Rich data export with metadata
-
-**P2 (Advanced Features)** - Enhanced capabilities:
-- **Advanced Anomaly Detection**: Multi-algorithm anomaly detection
-- **Data Comparison**: Test-to-test and golden reference comparison
-- **Configuration Templates**: Template inheritance system
+- **Data Export**: Rich export capabilities (CSV, Excel, JSON) with metadata
+- **Anomaly Detection**: Multi-algorithm detection for data quality
+- **Data Comparison**: Test-to-test and golden reference comparisons
+- **Configuration Templates**: Reusable template system with inheritance
 
 ### Key Design Patterns
 
@@ -146,18 +144,18 @@ Raw Data (CSV) → QC Checks → Analysis → Uncertainty Calculation → Databa
 ### Making Code Changes
 
 1. **Always read before editing**: Never modify files without reading them first
-2. **Maintain P0 integrity**: When modifying analysis code, ensure P0 components (traceability, uncertainty, QC) remain intact
+2. **Maintain engineering integrity**: When modifying analysis code, ensure core components (traceability, uncertainty, QC) remain intact
 3. **Follow existing patterns**: Match the coding style and patterns already in use
 4. **Update tests**: If changing core logic, update relevant tests in `tests/`
 5. **Preserve backward compatibility**: Database schema changes require migration logic
 
 ### Adding New Features
 
-1. **Determine priority level**: Is this P0, P1, or P2?
-2. **Use existing infrastructure**: Leverage `core/integrated_analysis.py` for analysis workflows
-3. **Add uncertainty**: All new metrics must include uncertainty calculation
-4. **Add QC checks**: If analyzing new data types, add appropriate QC checks
-5. **Update exports**: If adding new fields, update `core/export.py` to include them
+1. **Use existing infrastructure**: Leverage `core/integrated_analysis.py` for analysis workflows
+2. **Add uncertainty**: All new metrics must include uncertainty calculation
+3. **Add QC checks**: If analyzing new data types, add appropriate QC checks
+4. **Update exports**: If adding new fields, update `core/export.py` to include them
+5. **Update documentation**: Keep this file and docstrings current
 
 ### Working with Streamlit Pages
 
@@ -248,7 +246,7 @@ def analyze_cold_flow_test(
     metadata: dict | None = None,
 ) -> AnalysisResult:
     """
-    Analyze cold flow test with full P0 integrity.
+    Analyze cold flow test with full engineering integrity.
 
     Args:
         df: Test data DataFrame with timestamp column
@@ -308,10 +306,10 @@ def test_feature_name():
 # All tests
 python -m pytest tests/ -v
 
-# Specific priority level
-python tests/test_p0_components.py
-python tests/test_p1_components.py
-python tests/test_p2_components.py
+# Individual test suites
+python tests/test_p0_components.py  # Core integrity tests
+python tests/test_p1_components.py  # Analysis & reporting tests
+python tests/test_p2_components.py  # Advanced features tests
 ```
 
 ---
@@ -636,13 +634,13 @@ streamlit run app.py
 ### Before Making Changes
 
 1. ✅ **READ the relevant files first** - Never modify code you haven't read
-2. ✅ **Understand the component priority** - Is this P0, P1, or P2?
+2. ✅ **Understand the architecture** - Review the core engineering integrity components
 3. ✅ **Check for existing patterns** - Match the style already in use
 4. ✅ **Review tests** - Understand expected behavior from tests
 
 ### When Writing Code
 
-1. ✅ **Maintain P0 integrity** - Never break traceability, uncertainty, or QC
+1. ✅ **Maintain engineering integrity** - Never break traceability, uncertainty, or QC
 2. ✅ **Use dataclasses** - For structured data, use `@dataclass`
 3. ✅ **Add docstrings** - Document function purpose, args, returns
 4. ✅ **Handle errors gracefully** - Provide helpful error messages
@@ -674,10 +672,10 @@ streamlit run app.py
 
 ## Module Reference Quick Guide
 
-### Core Modules (Import Priority)
+### Core Modules
 
 ```python
-# P0 - Always required for analysis
+# Engineering Integrity (Core)
 from core.integrated_analysis import analyze_cold_flow_test, analyze_hot_fire_test
 from core.qc_checks import run_qc_checks, assert_qc_passed
 from core.traceability import create_full_traceability_record
@@ -685,13 +683,13 @@ from core.uncertainty import calculate_cold_flow_uncertainties
 from core.config_validation import validate_config
 from core.campaign_manager_v2 import save_to_campaign, get_campaign_data
 
-# P1 - Production features
+# Analysis & Reporting
 from core.spc import create_imr_chart, analyze_campaign_spc
 from core.reporting import generate_test_report, generate_campaign_report
 from core.batch_analysis import run_batch_analysis, batch_cold_flow_analysis
 from core.export import export_campaign_excel, export_for_qualification
 
-# P2 - Advanced features
+# Advanced Features
 from core.advanced_anomaly import run_anomaly_detection
 from core.comparison import compare_tests, compare_to_golden
 from core.templates import TemplateManager, create_config_from_template
@@ -711,10 +709,11 @@ from core.templates import TemplateManager, create_config_from_template
 ## Version History
 
 - **v2.0.0** - Engineering Integrity System (current)
-  - P0/P1/P2 component architecture
+  - Core engineering integrity components (traceability, uncertainty, QC)
   - Full traceability with SHA-256 hashing
   - Comprehensive uncertainty propagation
   - Schema version 3 database
+  - Advanced analysis features (SPC, reporting, batch processing)
 
 - **v1.x** - Initial implementation
   - Basic analysis capabilities
