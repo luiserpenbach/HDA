@@ -724,6 +724,17 @@ try:
 except ImportError:
     TEST_FOLDER_SUPPORT = False
 
+# Import fluid properties module
+try:
+    from core.fluid_properties import (
+        get_fluid_properties, FluidProperties, FluidState,
+        COOLPROP_AVAILABLE, list_available_fluids
+    )
+    FLUID_PROPS_SUPPORT = True
+except ImportError:
+    COOLPROP_AVAILABLE = False
+    FLUID_PROPS_SUPPORT = False
+
 # Data source selection
 st.header("1. Load Test Data")
 
@@ -1222,6 +1233,64 @@ if df_raw is not None:
                 value=loaded_meta.get('notes', '')
             )
 
+        # Test Conditions (fluid properties via CoolProp)
+        with st.expander("Test Conditions", expanded=True):
+            st.caption("Fluid properties calculated via CoolProp from these inputs")
+
+            # Common fluid options
+            fluid_options = [
+                "", "Water", "Nitrogen", "Air", "Helium", "Oxygen",
+                "Ethanol", "Isopropanol", "Methanol",
+                "NitrousOxide", "CarbonDioxide", "Hydrogen", "Methane"
+            ]
+
+            # Get default from loaded metadata
+            default_fluid = loaded_meta.get('test_fluid', '')
+            if default_fluid and default_fluid not in fluid_options:
+                fluid_options.insert(1, default_fluid)
+
+            default_idx = fluid_options.index(default_fluid) if default_fluid in fluid_options else 0
+
+            test_fluid = st.selectbox(
+                "Test Fluid",
+                options=fluid_options,
+                index=default_idx,
+                help="Select fluid for property calculation via CoolProp"
+            )
+
+            col_temp, col_press = st.columns(2)
+            with col_temp:
+                fluid_temp_C = st.number_input(
+                    "Fluid Temperature [C]",
+                    value=loaded_meta.get('fluid_temperature_K', 293.15) - 273.15,
+                    format="%.1f",
+                    help="Fluid temperature for property lookup"
+                )
+            with col_press:
+                fluid_press_bar = st.number_input(
+                    "Fluid Pressure [bar]",
+                    value=loaded_meta.get('fluid_pressure_Pa', 101325.0) / 1e5,
+                    format="%.2f",
+                    help="Fluid pressure for property lookup"
+                )
+
+            # Convert to SI units
+            fluid_temperature_K = fluid_temp_C + 273.15
+            fluid_pressure_Pa = fluid_press_bar * 1e5
+
+            # Show calculated properties if fluid module available
+            if test_fluid and FLUID_PROPS_SUPPORT:
+                try:
+                    props = get_fluid_properties(test_fluid, fluid_temperature_K, fluid_pressure_Pa)
+                    if props:
+                        st.success(f"Density: {props.density_kg_m3:.2f} kg/m3 | "
+                                  f"Viscosity: {props.viscosity_Pa_s*1000:.4f} mPa.s | "
+                                  f"Phase: {props.phase}")
+                        if not COOLPROP_AVAILABLE:
+                            st.info("Using fallback values. Install CoolProp for accurate properties: pip install CoolProp")
+                except Exception as e:
+                    st.warning(f"Could not calculate properties: {e}")
+
         run_analysis = st.button("Run Analysis", type="primary", use_container_width=True)
 
     with col2:
@@ -1236,7 +1305,24 @@ if df_raw is not None:
                         'facility': facility,
                         'notes': notes,
                         'test_folder': st.session_state.get('test_folder_path'),
+                        # Test conditions
+                        'test_fluid': test_fluid,
+                        'fluid_temperature_K': fluid_temperature_K,
+                        'fluid_pressure_Pa': fluid_pressure_Pa,
                     }
+
+                    # Get fluid properties and add to metadata
+                    if test_fluid and FLUID_PROPS_SUPPORT:
+                        try:
+                            fluid_props = get_fluid_properties(test_fluid, fluid_temperature_K, fluid_pressure_Pa)
+                            if fluid_props:
+                                metadata['fluid_density_kg_m3'] = fluid_props.density_kg_m3
+                                metadata['fluid_density_uncertainty_kg_m3'] = fluid_props.density_kg_m3 * fluid_props.density_uncertainty
+                                metadata['fluid_viscosity_Pa_s'] = fluid_props.viscosity_Pa_s
+                                metadata['fluid_phase'] = fluid_props.phase
+                                metadata['fluid_source'] = fluid_props.source
+                        except Exception:
+                            pass
 
                     # Determine file path for traceability
                     # If loaded from test folder with a real file, use that path
