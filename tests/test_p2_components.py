@@ -18,11 +18,11 @@ def test_section(name):
 
 
 def test_pass(msg):
-    print(f"✓ {msg}")
+    print(f"[PASS] {msg}")
 
 
 def test_fail(msg):
-    print(f"✗ {msg}")
+    print(f"[FAIL] {msg}")
     global failures
     failures += 1
 

@@ -27,7 +27,7 @@ from core.traceability import compute_file_hash
 from core.reporting import generate_test_report, save_report
 from core.campaign_manager_v2 import get_available_campaigns, save_to_campaign
 
-st.set_page_config(page_title="Single Test Analysis", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Single Test Analysis", page_icon="STA", layout="wide")
 
 st.title("Single Test Analysis")
 st.markdown("Analyze individual cold flow or hot fire tests with full engineering integrity.")
@@ -1168,7 +1168,7 @@ if df_raw is not None:
 
                 with col1:
                     status_color = "green" if qc_report.passed else "red"
-                    st.markdown(f"### :{status_color}[{'✓ PASSED' if qc_report.passed else '✗ FAILED'}]")
+                    st.markdown(f"### :{status_color}[{'PASSED' if qc_report.passed else 'FAILED'}]")
 
                 with col2:
                     st.metric("Checks Passed", qc_report.summary.get('passed', 0))
@@ -1180,7 +1180,7 @@ if df_raw is not None:
                 # Show details
                 with st.expander("QC Check Details"):
                     for check in qc_report.checks:
-                        icon = "✓" if check.status.name == "PASS" else ("⚠️" if check.status.name == "WARN" else "✗")
+                        icon = "[PASS]" if check.status.name == "PASS" else ("[WARN]" if check.status.name == "WARN" else "[FAIL]")
                         st.markdown(f"{icon} **{check.name}**: {check.message}")
 
             except Exception as e:
@@ -1436,7 +1436,7 @@ if df_raw is not None:
         # SAVE & EXPORT
         # =============================================================================
 
-        st.header("6️⃣ Save & Export")
+        st.header("6. Save & Export")
 
         col1, col2, col3 = st.columns(3)
 
@@ -1449,7 +1449,7 @@ if df_raw is not None:
             if campaign_options:
                 selected_campaign = st.selectbox("Select Campaign", campaign_options)
 
-                if st.button("💾 Save to Campaign"):
+                if st.button("Save to Campaign"):
                     try:
                         record = result.to_database_record(test_type)
                         record['part'] = part_number
@@ -1467,7 +1467,7 @@ if df_raw is not None:
         with col2:
             st.subheader("Generate Report")
 
-            if st.button("📄 Generate HTML Report"):
+            if st.button("Generate HTML Report"):
                 try:
                     # Convert measurements for report
                     measurements_dict = {}
@@ -1495,7 +1495,7 @@ if df_raw is not None:
                     )
 
                     st.download_button(
-                        "⬇️ Download Report",
+                        "Download Report",
                         html,
                         file_name=f"{test_id}_report.html",
                         mime="text/html"
@@ -1508,7 +1508,7 @@ if df_raw is not None:
 
             export_format = st.selectbox("Format", ["JSON", "CSV"])
 
-            if st.button("📥 Export Results"):
+            if st.button("Export Results"):
                 try:
                     if export_format == "JSON":
                         export_data = {
@@ -1526,7 +1526,7 @@ if df_raw is not None:
                         }
 
                         st.download_button(
-                            "⬇️ Download JSON",
+                            "Download JSON",
                             json.dumps(export_data, indent=2, default=str),
                             file_name=f"{test_id}_results.json",
                             mime="application/json"
@@ -1543,7 +1543,7 @@ if df_raw is not None:
 
                         csv_df = pd.DataFrame(csv_data)
                         st.download_button(
-                            "⬇️ Download CSV",
+                            "Download CSV",
                             csv_df.to_csv(index=False),
                             file_name=f"{test_id}_results.csv",
                             mime="text/csv"
@@ -1552,4 +1552,4 @@ if df_raw is not None:
                     st.error(f"Export error: {e}")
 
 else:
-    st.info("👆 Upload a CSV file to begin analysis")
+    st.info("Upload a CSV file to begin analysis")

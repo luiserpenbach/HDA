@@ -375,13 +375,13 @@ def run_tests():
         test_name = test_func.__name__
         try:
             test_func()
-            print(f"✓ {test_name}")
+            print(f"[PASS] {test_name}")
             passed += 1
         except AssertionError as e:
-            print(f"✗ {test_name}: {e}")
+            print(f"[FAIL] {test_name}: {e}")
             failed += 1
         except Exception as e:
-            print(f"✗ {test_name}: {type(e).__name__}: {e}")
+            print(f"[FAIL] {test_name}: {type(e).__name__}: {e}")
             failed += 1
 
     print()

@@ -24,9 +24,9 @@ from core.comparison import (
 )
 from core.campaign_manager_v2 import get_available_campaigns, get_campaign_data
 
-st.set_page_config(page_title="Data Comparison", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Data Comparison", page_icon="", layout="wide")
 
-st.title("⚖️ Data Comparison & Regression")
+st.title(" Data Comparison & Regression")
 st.markdown("Compare tests, create golden references, and analyze correlations.")
 
 # =============================================================================
@@ -34,7 +34,7 @@ st.markdown("Compare tests, create golden references, and analyze correlations."
 # =============================================================================
 
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("Settings")
     
     mode = st.radio(
         "Analysis Mode",
@@ -71,7 +71,7 @@ if selected_campaign:
     # =============================================================================
     
     if mode == "Test Comparison":
-        st.header("📊 Test-to-Test Comparison")
+        st.header("Test-to-Test Comparison")
         
         if 'test_id' not in df.columns:
             st.error("Campaign must have test_id column")
@@ -96,7 +96,7 @@ if selected_campaign:
         # Tolerance
         default_tol = st.slider("Default tolerance (%)", 1.0, 20.0, 5.0, 0.5)
         
-        if st.button("🔄 Compare Tests", type="primary"):
+        if st.button("Compare Tests", type="primary"):
             if test_a == test_b:
                 st.warning("Select different tests")
             else:
@@ -113,7 +113,7 @@ if selected_campaign:
                 st.subheader("Comparison Results")
                 
                 status_color = "green" if result.overall_pass else "red"
-                st.markdown(f"### :{status_color}[{'✓ PASS' if result.overall_pass else '✗ FAIL'}]")
+                st.markdown(f"### :{status_color}[{'[PASS] PASS' if result.overall_pass else '[FAIL] FAIL'}]")
                 st.caption(f"{result.n_within_tolerance}/{result.n_parameters} parameters within tolerance")
                 
                 # Results table
@@ -139,7 +139,7 @@ if selected_campaign:
     # =============================================================================
     
     elif mode == "Golden Reference":
-        st.header("🏆 Golden Reference")
+        st.header(" Golden Reference")
         
         tab1, tab2 = st.tabs(["Create Golden", "Compare to Golden"])
         
@@ -160,7 +160,7 @@ if selected_campaign:
             with col2:
                 tol_mult = st.slider("Tolerance multiplier (× σ)", 1.0, 5.0, 3.0)
             
-            if st.button("🏆 Create Golden Reference"):
+            if st.button(" Create Golden Reference"):
                 if not params_for_golden:
                     st.warning("Select at least one parameter")
                 else:
@@ -187,7 +187,7 @@ if selected_campaign:
                         
                         # Download
                         st.download_button(
-                            "📥 Download Golden Reference",
+                            "Download Golden Reference",
                             json.dumps(golden.to_dict(), indent=2),
                             file_name=f"{golden_name}.json",
                             mime="application/json"
@@ -222,14 +222,14 @@ if selected_campaign:
             if golden and 'test_id' in df.columns:
                 test_to_compare = st.selectbox("Select test", df['test_id'].tolist())
                 
-                if st.button("🔄 Compare to Golden"):
+                if st.button("Compare to Golden"):
                     row = df[df['test_id'] == test_to_compare].iloc[0]
                     test_data = {p: float(row[p]) for p in golden.parameters.keys() if pd.notna(row.get(p))}
                     
                     result = compare_to_golden(test_data, test_to_compare, golden)
                     
                     status_color = "green" if result.overall_pass else "red"
-                    st.markdown(f"### :{status_color}[{'✓ PASS' if result.overall_pass else '✗ FAIL'}]")
+                    st.markdown(f"### :{status_color}[{'[PASS] PASS' if result.overall_pass else '[FAIL] FAIL'}]")
                     
                     st.dataframe(result.to_dataframe(), use_container_width=True, hide_index=True)
     
@@ -238,7 +238,7 @@ if selected_campaign:
     # =============================================================================
     
     elif mode == "Regression":
-        st.header("📈 Regression Analysis")
+        st.header("Regression Analysis")
         
         col1, col2 = st.columns(2)
         
@@ -248,7 +248,7 @@ if selected_campaign:
             y_param = st.selectbox("Y Parameter (Dependent)", 
                                    [c for c in numeric_cols if c != x_param])
         
-        if st.button("📈 Run Regression"):
+        if st.button("Run Regression"):
             x = df[x_param].values
             y = df[y_param].values
             
@@ -307,7 +307,7 @@ if selected_campaign:
     # =============================================================================
     
     elif mode == "Correlation":
-        st.header("🔗 Correlation Analysis")
+        st.header(" Correlation Analysis")
         
         params_for_corr = st.multiselect(
             "Parameters to analyze",
@@ -317,7 +317,7 @@ if selected_campaign:
         
         threshold = st.slider("Strong correlation threshold", 0.5, 0.95, 0.7, 0.05)
         
-        if st.button("🔗 Calculate Correlations") and params_for_corr:
+        if st.button(" Calculate Correlations") and params_for_corr:
             try:
                 corr_matrix = calculate_correlation_matrix(df, params_for_corr)
                 
@@ -349,7 +349,7 @@ if selected_campaign:
                 
                 # Download matrix
                 st.download_button(
-                    "📥 Download Correlation Matrix",
+                    "Download Correlation Matrix",
                     corr_matrix.to_dataframe().to_csv(),
                     file_name="correlation_matrix.csv",
                     mime="text/csv"
@@ -363,7 +363,7 @@ if selected_campaign:
     # =============================================================================
     
     elif mode == "Campaign Comparison":
-        st.header("📊 Campaign Comparison")
+        st.header("Campaign Comparison")
         
         if len(campaigns) < 2:
             st.warning("Need at least 2 campaigns to compare")
@@ -377,7 +377,7 @@ if selected_campaign:
                 default=metric_cols[:5] if len(metric_cols) > 5 else metric_cols
             )
             
-            if st.button("📊 Compare Campaigns") and params_to_compare:
+            if st.button("Compare Campaigns") and params_to_compare:
                 df_b = get_campaign_data(campaign_b)
                 
                 if df_b is None or len(df_b) == 0:
@@ -404,7 +404,7 @@ if selected_campaign:
                             f'Mean ({selected_campaign})': f"{data['mean_a']:.4g}",
                             f'Mean ({campaign_b})': f"{data['mean_b']:.4g}",
                             'Δ%': f"{data['mean_diff_pct']:+.2f}%",
-                            'Status': '✓' if data['means_equivalent'] else '✗',
+                            'Status': '' if data['means_equivalent'] else '',
                         })
                     
                     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
@@ -424,4 +424,4 @@ if selected_campaign:
                     st.text(format_campaign_comparison(result))
 
 else:
-    st.info("👈 Select a campaign in the sidebar")
+    st.info("Select a campaign in the sidebar")

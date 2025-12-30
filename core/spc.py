@@ -702,7 +702,7 @@ def format_spc_summary(analysis: SPCAnalysis) -> str:
     if analysis.has_trend:
         lines.extend([
             "",
-            f"### ⚠️ Trend Detected",
+            f"### [WARN] Trend Detected",
             f"- Direction: {analysis.trend_direction}",
             f"- Slope: {analysis.trend_slope:.6f} per test",
         ])

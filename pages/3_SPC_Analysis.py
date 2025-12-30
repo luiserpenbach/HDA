@@ -20,9 +20,9 @@ from core.spc import (
     ViolationType,
 )
 
-st.set_page_config(page_title="SPC Analysis", page_icon="📉", layout="wide")
+st.set_page_config(page_title="SPC Analysis", page_icon="SPC", layout="wide")
 
-st.title("📉 Statistical Process Control")
+st.title("Statistical Process Control")
 st.markdown("Monitor process stability with control charts and capability analysis.")
 
 
@@ -164,7 +164,7 @@ def plot_capability_histogram(values, usl=None, lsl=None, target=None):
 # =============================================================================
 
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("Settings")
     
     # Campaign selection
     campaigns = get_available_campaigns()
@@ -265,7 +265,7 @@ if df is not None and selected_parameter:
     st.divider()
     
     # Tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Control Chart", "📈 Capability", "⚠️ Violations", "📋 Summary"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Control Chart", "Capability", "[WARN] Violations", "Summary"])
     
     # =============================================================================
     # TAB 1: Control Chart
@@ -374,14 +374,14 @@ if df is not None and selected_parameter:
             for vtype, count in sorted(violation_counts.items(), key=lambda x: -x[1]):
                 st.markdown(f"- **{vtype}**: {count} occurrences")
         else:
-            st.success("✓ No out-of-control points detected")
+            st.success("[PASS] No out-of-control points detected")
         
         # Trend detection
         st.divider()
         st.subheader("Trend Analysis")
         
         if analysis.has_trend:
-            st.warning(f"⚠️ **Trend Detected**: {analysis.trend_direction}")
+            st.warning(f"[WARN] **Trend Detected**: {analysis.trend_direction}")
             st.text(f"Slope: {analysis.trend_slope:.6f} per test")
             st.markdown("""
             A significant trend indicates the process may be drifting. 
@@ -392,7 +392,7 @@ if df is not None and selected_parameter:
             - Measurement drift
             """)
         else:
-            st.success("✓ No significant trend detected")
+            st.success("[PASS] No significant trend detected")
     
     # =============================================================================
     # TAB 4: Summary
@@ -411,7 +411,7 @@ if df is not None and selected_parameter:
         
         with col1:
             st.download_button(
-                "📥 Download Summary (Markdown)",
+                "Download Summary (Markdown)",
                 summary_md,
                 file_name=f"spc_summary_{selected_parameter}.md",
                 mime="text/markdown"
@@ -436,14 +436,14 @@ if df is not None and selected_parameter:
             
             import json
             st.download_button(
-                "📥 Download Results (JSON)",
+                "Download Results (JSON)",
                 json.dumps(export_data, indent=2),
                 file_name=f"spc_results_{selected_parameter}.json",
                 mime="application/json"
             )
 
 else:
-    st.info("👈 Select a campaign and parameter in the sidebar to begin SPC analysis.")
+    st.info("Select a campaign and parameter in the sidebar to begin SPC analysis.")
     
     # Show SPC overview
     st.divider()

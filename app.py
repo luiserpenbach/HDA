@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Page configuration
 st.set_page_config(
     page_title="Hopper Data Studio",
-    page_icon="🚀",
+    page_icon="HDS",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -68,7 +68,7 @@ st.markdown('<p class="sub-header">Propulsion Test Data Analysis Platform</p>', 
 # Version and integrity badge
 col1, col2, col3 = st.columns([1, 1, 2])
 with col1:
-    st.markdown('<span class="integrity-badge">✓ Engineering Integrity v2.0</span>', unsafe_allow_html=True)
+    st.markdown('<span class="integrity-badge">Engineering Integrity v2.0</span>', unsafe_allow_html=True)
 with col2:
     st.caption("Core Version: 2.0.0")
 
@@ -89,24 +89,24 @@ col1, col2 = st.columns(2)
 with col1:
     st.markdown("""
     <div class="feature-card">
-        <h4>📊 Single Test Analysis</h4>
-        <p>Analyze individual cold flow or hot fire tests with automatic steady-state detection, 
+        <h4>Single Test Analysis</h4>
+        <p>Analyze individual cold flow or hot fire tests with automatic steady-state detection,
         full uncertainty propagation, and pre-analysis QC checks.</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("""
     <div class="feature-card">
-        <h4>📈 Campaign Management</h4>
-        <p>Track test campaigns with full data traceability. Every result is linked to its 
+        <h4>Campaign Management</h4>
+        <p>Track test campaigns with full data traceability. Every result is linked to its
         source data via cryptographic hashes.</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("""
     <div class="feature-card">
-        <h4>🔄 Batch Processing</h4>
-        <p>Process multiple test files efficiently with consistent configuration, 
+        <h4>Batch Processing</h4>
+        <p>Process multiple test files efficiently with consistent configuration,
         parallel execution, and aggregate reporting.</p>
     </div>
     """, unsafe_allow_html=True)
@@ -114,24 +114,24 @@ with col1:
 with col2:
     st.markdown("""
     <div class="feature-card">
-        <h4>📉 Statistical Process Control</h4>
-        <p>Monitor process stability with control charts, Western Electric rules, 
+        <h4>Statistical Process Control</h4>
+        <p>Monitor process stability with control charts, Western Electric rules,
         trend detection, and capability indices (Cpk).</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("""
     <div class="feature-card">
-        <h4>📋 Report Generation</h4>
-        <p>Generate professional HTML reports with full traceability records, 
+        <h4>Report Generation</h4>
+        <p>Generate professional HTML reports with full traceability records,
         uncertainty tables, and QC summaries.</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("""
     <div class="feature-card">
-        <h4>💾 Data Export</h4>
-        <p>Export campaign data with full metadata to CSV, Excel, JSON, or 
+        <h4>Data Export</h4>
+        <p>Export campaign data with full metadata to CSV, Excel, JSON, or
         create qualification-ready documentation packages.</p>
     </div>
     """, unsafe_allow_html=True)
@@ -154,7 +154,7 @@ with col3:
 
 # Navigation hint
 st.markdown("---")
-st.markdown("👈 **Use the sidebar to navigate between analysis pages**")
+st.markdown("**Use the sidebar to navigate between analysis pages**")
 
 # Footer
 st.markdown("---")

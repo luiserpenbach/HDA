@@ -16,9 +16,9 @@ from core.advanced_anomaly import (
     AnomalySeverity,
 )
 
-st.set_page_config(page_title="Anomaly Detection", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="Anomaly Detection", page_icon="AD", layout="wide")
 
-st.title("🔍 Advanced Anomaly Detection")
+st.title("Advanced Anomaly Detection")
 st.markdown("Comprehensive anomaly detection with sensor health monitoring.")
 
 # Initialize session state
@@ -32,7 +32,7 @@ if 'anomaly_df' not in st.session_state:
 # =============================================================================
 
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("Settings")
     
     st.subheader("Detection Parameters")
     
@@ -48,7 +48,7 @@ with st.sidebar:
 # MAIN CONTENT
 # =============================================================================
 
-st.header("1️⃣ Upload Test Data")
+st.header("1. Upload Test Data")
 
 uploaded_file = st.file_uploader("Upload CSV file", type=['csv'])
 
@@ -64,7 +64,7 @@ df = st.session_state.anomaly_df
 
 if df is not None:
     st.divider()
-    st.header("2️⃣ Select Channels")
+    st.header("2. Select Channels")
     
     numeric_cols = [c for c in df.columns if df[c].dtype in ['float64', 'int64']]
     
@@ -103,9 +103,9 @@ if df is not None:
             correlation_pairs = pairs if pairs else None
     
     st.divider()
-    st.header("3️⃣ Run Analysis")
+    st.header("3. Run Analysis")
     
-    if st.button("🔍 Detect Anomalies", type="primary"):
+    if st.button("Detect Anomalies", type="primary"):
         if not selected_channels:
             st.warning("Select at least one channel")
         else:
@@ -124,7 +124,7 @@ if df is not None:
         report = st.session_state.anomaly_report
         
         st.divider()
-        st.header("4️⃣ Results")
+        st.header("4. Results")
         
         col1, col2, col3, col4 = st.columns(4)
         
@@ -139,7 +139,7 @@ if df is not None:
             avg_health = np.mean(list(report.sensor_health.values())) if report.sensor_health else 0
             st.metric("Avg Health", f"{avg_health:.0%}")
         
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "🔍 Details", "💚 Health", "📈 Visualization"])
+        tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Details", "Health", "Visualization"])
         
         with tab1:
             st.subheader("Anomaly Summary")
@@ -157,12 +157,12 @@ if df is not None:
                         st.markdown(f"- {atype}: {count}")
                 with col2:
                     st.markdown("**By Severity:**")
-                    st.markdown(f"- 🔴 Critical: {report.critical_count}")
-                    st.markdown(f"- 🟡 Warning: {report.warning_count}")
+                    st.markdown(f"- Critical: {report.critical_count}")
+                    st.markdown(f"- Warning: {report.warning_count}")
                     info_count = report.total_anomalies - report.critical_count - report.warning_count
-                    st.markdown(f"- 🔵 Info: {info_count}")
+                    st.markdown(f"- Info: {info_count}")
             else:
-                st.success("✓ No anomalies detected!")
+                st.success("[PASS] No anomalies detected!")
             
             st.divider()
             st.text(report.summary())
@@ -192,7 +192,7 @@ if df is not None:
                 st.dataframe(filtered_df, use_container_width=True, hide_index=True)
                 
                 st.download_button(
-                    "📥 Download Anomaly Report",
+                    "Download Anomaly Report",
                     anomaly_df.to_csv(index=False),
                     file_name="anomaly_report.csv",
                     mime="text/csv"
@@ -209,13 +209,13 @@ if df is not None:
                 for channel, health in sorted_health:
                     if health >= 0.9:
                         color = "green"
-                        status = "✓ Good"
+                        status = "[PASS] Good"
                     elif health >= 0.7:
                         color = "orange"
-                        status = "⚠ Fair"
+                        status = "[WARN] Fair"
                     else:
                         color = "red"
-                        status = "✗ Poor"
+                        status = "[FAIL] Poor"
                     
                     col1, col2, col3 = st.columns([2, 1, 1])
                     with col1:
@@ -279,7 +279,7 @@ if df is not None:
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
-                st.markdown("**Legend:** 🔴 Critical | 🟡 Warning | 🟢 Info")
+                st.markdown("**Legend:** Critical | Warning | Info")
 
 else:
-    st.info("👆 Upload a CSV file to begin anomaly detection")
+    st.info("Upload a CSV file to begin anomaly detection")

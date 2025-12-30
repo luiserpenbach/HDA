@@ -25,9 +25,9 @@ from core.batch_analysis import (
 from core.campaign_manager_v2 import get_available_campaigns, save_to_campaign
 from core.integrated_analysis import analyze_cold_flow_test, analyze_hot_fire_test
 
-st.set_page_config(page_title="Batch Processing", page_icon="🔄", layout="wide")
+st.set_page_config(page_title="Batch Processing", page_icon="BP", layout="wide")
 
-st.title("🔄 Batch Processing")
+st.title("Batch Processing")
 st.markdown("Process multiple test files efficiently with consistent configuration.")
 
 # Initialize session state
@@ -148,7 +148,7 @@ def analyze_file_wrapper(df, config, test_id, file_path):
 # =============================================================================
 
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.header("Configuration")
     
     test_type = st.selectbox(
         "Test Type",
@@ -186,7 +186,7 @@ with st.sidebar:
 # MAIN CONTENT
 # =============================================================================
 
-st.header("1️⃣ Upload Files")
+st.header("1. Upload Files")
 
 uploaded_files = st.file_uploader(
     "Upload CSV files",
@@ -223,14 +223,14 @@ st.divider()
 # PROCESSING
 # =============================================================================
 
-st.header("2️⃣ Run Batch Analysis")
+st.header("2. Run Batch Analysis")
 
 col1, col2 = st.columns([1, 2])
 
 with col1:
     batch_id = st.text_input("Batch ID", value=f"batch_{datetime.now().strftime('%Y%m%d_%H%M')}")
     
-    run_batch = st.button("🚀 Process All Files", type="primary", use_container_width=True)
+    run_batch = st.button("Process All Files", type="primary", use_container_width=True)
 
 with col2:
     if run_batch and uploaded_files:
@@ -313,7 +313,7 @@ if st.session_state.batch_report:
     report = st.session_state.batch_report
     
     st.divider()
-    st.header("3️⃣ Results")
+    st.header("3. Results")
     
     # Summary metrics
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -330,7 +330,7 @@ if st.session_state.batch_report:
         st.metric("Time (s)", f"{report.total_time_s:.1f}")
     
     # Results table
-    tabs = st.tabs(["📊 All Results", "✓ Successful", "✗ Failed", "📤 Export"])
+    tabs = st.tabs(["All Results", "[PASS] Successful", "[FAIL] Failed", "Export"])
     
     with tabs[0]:
         results_df = report.to_dataframe()
@@ -344,7 +344,7 @@ if st.session_state.batch_report:
             for r in successful:
                 row = {
                     'Test ID': r.test_id,
-                    'QC Passed': '✓' if r.qc_passed else '✗',
+                    'QC Passed': '' if r.qc_passed else '',
                 }
                 if r.measurements:
                     for k, v in list(r.measurements.items())[:3]:
@@ -379,7 +379,7 @@ if st.session_state.batch_report:
             # CSV export
             csv_data = report.to_dataframe().to_csv(index=False)
             st.download_button(
-                "📥 Download CSV",
+                "Download CSV",
                 csv_data,
                 file_name=f"{report.batch_id}_results.csv",
                 mime="text/csv"
@@ -400,7 +400,7 @@ if st.session_state.batch_report:
                 'results': [r.to_dict() for r in report.results],
             }
             st.download_button(
-                "📥 Download JSON",
+                "Download JSON",
                 json.dumps(json_data, indent=2, default=str),
                 file_name=f"{report.batch_id}_results.json",
                 mime="application/json"
@@ -409,7 +409,7 @@ if st.session_state.batch_report:
         with col3:
             # Summary text
             st.download_button(
-                "📥 Download Summary",
+                "Download Summary",
                 report.summary(),
                 file_name=f"{report.batch_id}_summary.txt",
                 mime="text/plain"
@@ -431,7 +431,7 @@ if st.session_state.batch_report:
                 save_qc_passed_only = st.checkbox("Only save QC-passed tests", value=True)
             
             with col2:
-                if st.button("💾 Save to Campaign"):
+                if st.button("Save to Campaign"):
                     saved = 0
                     skipped = 0
                     
