@@ -3,7 +3,7 @@ import os
 import glob
 
 # Path to your config folder
-CONFIG_DIR = "test_configs"
+CONFIG_DIR = "configs"
 
 
 def get_available_configs():
