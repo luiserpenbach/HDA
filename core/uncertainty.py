@@ -24,6 +24,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 import warnings
 
+try:
+    from . import fluid_properties
+    FLUID_PROPERTIES_AVAILABLE = True
+except ImportError:
+    FLUID_PROPERTIES_AVAILABLE = False
+    fluid_properties = None
+
 
 class UncertaintyType(Enum):
     """Types of uncertainty specification."""
@@ -261,6 +268,75 @@ def parse_geometry_uncertainties(config: Dict[str, Any]) -> Dict[str, GeometryUn
     return uncertainties
 
 
+def get_fluid_density_and_uncertainty(
+    config: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None
+) -> Tuple[float, float]:
+    """
+    Get fluid density and uncertainty using the fluid_properties module.
+
+    Tries to use CoolProp via fluid_properties module first, falls back to
+    hardcoded config values if unavailable.
+
+    Args:
+        config: Test configuration
+        metadata: Optional test metadata with fluid conditions
+
+    Returns:
+        Tuple of (density_kg_m3, uncertainty_kg_m3)
+    """
+    fluid = config.get('fluid', {})
+
+    # Try fluid_properties module if available
+    if FLUID_PROPERTIES_AVAILABLE and fluid_properties:
+        try:
+            # Try to get from metadata first
+            if metadata:
+                try:
+                    density, uncertainty = fluid_properties.get_density_from_metadata(metadata)
+                    return density, uncertainty
+                except (ValueError, KeyError):
+                    pass
+
+            # Try to construct from config
+            fluid_name = (
+                metadata.get('test_fluid', '') if metadata else '' or
+                fluid.get('name', '') or
+                fluid.get('fluid', '')
+            )
+
+            if fluid_name:
+                T_K = (
+                    metadata.get('fluid_temperature_K', 293.15) if metadata else
+                    fluid.get('temperature_K', 293.15)
+                )
+                P_Pa = (
+                    metadata.get('fluid_pressure_Pa', 101325.0) if metadata else
+                    fluid.get('pressure_Pa', 101325.0)
+                )
+
+                density, uncertainty = fluid_properties.get_density(
+                    fluid=fluid_name,
+                    T_K=T_K,
+                    P_Pa=P_Pa
+                )
+                return density, uncertainty
+
+        except Exception as e:
+            warnings.warn(f"Failed to get fluid properties via fluid_properties module: {e}")
+
+    # Fallback to config values
+    density = (
+        fluid.get('density_kg_m3') or
+        fluid.get('ox_density_kg_m3') or
+        fluid.get('water_density_kg_m3') or
+        1000  # Default to water
+    )
+    uncertainty = fluid.get('density_uncertainty_kg_m3', density * 0.005)  # Default 0.5%
+
+    return density, uncertainty
+
+
 # =============================================================================
 # COLD FLOW UNCERTAINTY PROPAGATION
 # =============================================================================
@@ -341,89 +417,84 @@ def calculate_cd_uncertainty(
 def calculate_cold_flow_uncertainties(
     avg_values: Dict[str, float],
     config: Dict[str, Any],
-    sensor_uncertainties: Optional[Dict[str, SensorUncertainty]] = None
+    sensor_uncertainties: Optional[Dict[str, SensorUncertainty]] = None,
+    metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, MeasurementWithUncertainty]:
     """
     Calculate all cold flow metrics with uncertainties.
-    
+
     Args:
         avg_values: Dictionary of averaged sensor values
         config: Test configuration
         sensor_uncertainties: Pre-parsed sensor uncertainties (optional)
-        
+        metadata: Test metadata for fluid property lookup (optional)
+
     Returns:
         Dictionary of measurements with uncertainties
     """
     results = {}
-    
+
     # Parse uncertainties if not provided
     if sensor_uncertainties is None:
         sensor_uncertainties = parse_uncertainty_config(config)
-    
+
     geom_uncertainties = parse_geometry_uncertainties(config)
-    
+
     # Get column mappings
     cols = config.get('columns', {})
     geom = config.get('geometry', {})
-    fluid = config.get('fluid', {})
-    
+
     # Extract values and uncertainties
     p_up_col = cols.get('upstream_pressure') or cols.get('inlet_pressure')
     p_down_col = cols.get('downstream_pressure')
     mf_col = cols.get('mass_flow') or cols.get('mf')
-    
+
     p_up = avg_values.get(p_up_col, 0)
     p_down = avg_values.get(p_down_col, 0) if p_down_col else 0
     mass_flow = avg_values.get(mf_col, 0)
-    
+
     # Get sensor uncertainties
     u_p_up = 0.0
     u_p_down = 0.0
     u_mf = 0.0
-    
+
     if p_up_col and p_up_col in sensor_uncertainties:
         u_p_up = sensor_uncertainties[p_up_col].get_absolute_uncertainty(p_up)
-    
+
     if p_down_col and p_down_col in sensor_uncertainties:
         u_p_down = sensor_uncertainties[p_down_col].get_absolute_uncertainty(p_down)
-    
+
     if mf_col and mf_col in sensor_uncertainties:
         u_mf = sensor_uncertainties[mf_col].get_absolute_uncertainty(mass_flow)
-    
+
     # Delta P and uncertainty
     delta_p = p_up - p_down
     u_delta_p = np.sqrt(u_p_up**2 + u_p_down**2)
-    
+
     # Store pressure measurements
     results['pressure_upstream'] = MeasurementWithUncertainty(
         value=p_up, uncertainty=u_p_up, unit='bar', name='pressure_upstream'
     )
-    
+
     results['mass_flow'] = MeasurementWithUncertainty(
         value=mass_flow, uncertainty=u_mf, unit='g/s', name='mass_flow'
     )
-    
+
     results['delta_p'] = MeasurementWithUncertainty(
         value=delta_p, uncertainty=u_delta_p, unit='bar', name='delta_p'
     )
-    
+
     # Get geometry
     area_key = 'orifice_area_mm2'
     area = geom.get(area_key, 0)
     u_area = geom.get('orifice_area_uncertainty_mm2', 0)
-    
+
     if area_key in geom_uncertainties:
         u_area = geom_uncertainties[area_key].uncertainty
-    
-    # Get density
-    density = (
-        fluid.get('density_kg_m3') or 
-        fluid.get('ox_density_kg_m3') or 
-        fluid.get('water_density_kg_m3') or 
-        1000  # Default to water
-    )
-    u_density = fluid.get('density_uncertainty_kg_m3', density * 0.005)  # Default 0.5%
-    
+
+    # Get density using fluid_properties module
+    density, u_density = get_fluid_density_and_uncertainty(config, metadata)
+
     # Calculate Cd with uncertainty
     if area > 0 and delta_p > 0 and mass_flow > 0:
         results['Cd'] = calculate_cd_uncertainty(
@@ -436,7 +507,7 @@ def calculate_cold_flow_uncertainties(
             density_kg_m3=density,
             u_density_kg_m3=u_density
         )
-    
+
     return results
 
 
