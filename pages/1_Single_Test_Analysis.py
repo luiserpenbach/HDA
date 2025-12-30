@@ -716,7 +716,7 @@ with st.sidebar:
 
 # Import test folder utilities
 try:
-    from core.test_folder import (
+    from core.test_metadata import (
         load_test_from_folder, load_test_metadata, find_raw_data_file,
         find_config_file, TestMetadata
     )
