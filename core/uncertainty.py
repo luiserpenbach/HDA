@@ -1,0 +1,768 @@
+"""
+Uncertainty Quantification Module
+=================================
+Provides rigorous error propagation for all propulsion metrics.
+
+Key principle: Every metric must have error bars. You don't make 
+hardware decisions on point estimates.
+
+Uncertainty Sources:
+- Sensor uncertainties (from calibration)
+- Geometry tolerances (from manufacturing)
+- Fluid property uncertainties (from temperature, etc.)
+- Statistical uncertainty (from measurement variation)
+
+Propagation Methods:
+- Analytical (for simple formulas)
+- Monte Carlo (for complex calculations)
+"""
+
+import numpy as np
+import pandas as pd
+from typing import Dict, Any, Optional, Tuple, List, Union
+from dataclasses import dataclass, field
+from enum import Enum
+import warnings
+
+
+class UncertaintyType(Enum):
+    """Types of uncertainty specification."""
+    ABSOLUTE = "abs"           # Fixed value (e.g., ±0.5 bar)
+    RELATIVE = "rel"           # Fraction of reading (e.g., ±1%)
+    PERCENT_FS = "pct_fs"      # Percent of full scale
+    PERCENT_READING = "pct_rd" # Percent of reading (same as relative)
+
+
+@dataclass
+class SensorUncertainty:
+    """
+    Uncertainty specification for a single sensor.
+    
+    Attributes:
+        sensor_id: Sensor identifier (e.g., 'PT-01')
+        u_type: Type of uncertainty specification
+        value: Uncertainty value
+        full_scale: Full scale value (required for PERCENT_FS type)
+        unit: Physical unit of the measurement
+    """
+    sensor_id: str
+    u_type: UncertaintyType
+    value: float
+    full_scale: Optional[float] = None
+    unit: Optional[str] = None
+    
+    def get_absolute_uncertainty(self, reading: float) -> float:
+        """
+        Calculate absolute uncertainty for a given reading.
+        
+        Args:
+            reading: The measured value
+            
+        Returns:
+            Absolute uncertainty in same units as reading
+        """
+        if self.u_type == UncertaintyType.ABSOLUTE:
+            return self.value
+        
+        elif self.u_type in (UncertaintyType.RELATIVE, UncertaintyType.PERCENT_READING):
+            return abs(reading * self.value)
+        
+        elif self.u_type == UncertaintyType.PERCENT_FS:
+            if self.full_scale is None:
+                raise ValueError(f"Full scale required for PERCENT_FS type: {self.sensor_id}")
+            return self.full_scale * self.value
+        
+        else:
+            raise ValueError(f"Unknown uncertainty type: {self.u_type}")
+    
+    def get_relative_uncertainty(self, reading: float) -> float:
+        """
+        Calculate relative uncertainty (fraction) for a given reading.
+        
+        Args:
+            reading: The measured value
+            
+        Returns:
+            Relative uncertainty as fraction (not percent)
+        """
+        if abs(reading) < 1e-10:
+            return float('inf')
+        
+        return self.get_absolute_uncertainty(reading) / abs(reading)
+
+
+@dataclass
+class GeometryUncertainty:
+    """
+    Uncertainty specification for geometric parameters.
+    
+    Attributes:
+        parameter: Parameter name (e.g., 'orifice_area')
+        nominal_value: Nominal value
+        uncertainty: Absolute uncertainty
+        unit: Physical unit
+    """
+    parameter: str
+    nominal_value: float
+    uncertainty: float
+    unit: str
+    
+    @property
+    def relative_uncertainty(self) -> float:
+        """Relative uncertainty as fraction."""
+        if self.nominal_value == 0:
+            return float('inf')
+        return self.uncertainty / self.nominal_value
+
+
+@dataclass
+class MeasurementWithUncertainty:
+    """
+    A measurement value with its associated uncertainty.
+    
+    Attributes:
+        value: Central/mean value
+        uncertainty: Absolute uncertainty (1-sigma)
+        unit: Physical unit
+        name: Parameter name for display
+        
+    The uncertainty is assumed to be 1-sigma (68% confidence).
+    For 95% confidence, multiply by 1.96.
+    """
+    value: float
+    uncertainty: float
+    unit: str = ""
+    name: str = ""
+    
+    @property
+    def relative_uncertainty(self) -> float:
+        """Relative uncertainty as fraction."""
+        if abs(self.value) < 1e-10:
+            return float('inf')
+        return self.uncertainty / abs(self.value)
+    
+    @property
+    def relative_uncertainty_percent(self) -> float:
+        """Relative uncertainty as percentage."""
+        return self.relative_uncertainty * 100
+    
+    def __str__(self) -> str:
+        return f"{self.value:.4g} ± {self.uncertainty:.4g} {self.unit} ({self.relative_uncertainty_percent:.1f}%)"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            f"{self.name}_value": self.value,
+            f"{self.name}_uncertainty": self.uncertainty,
+            f"{self.name}_rel_uncertainty_pct": self.relative_uncertainty_percent,
+        }
+
+
+def parse_uncertainty_config(config: Dict[str, Any]) -> Dict[str, SensorUncertainty]:
+    """
+    Parse uncertainty specifications from configuration.
+    
+    Expected config format:
+    {
+        "uncertainties": {
+            "PT-01": {"type": "rel", "value": 0.005},
+            "FM-01": {"type": "pct_fs", "value": 0.01, "full_scale": 100},
+            "LC-01": {"type": "abs", "value": 5.0}
+        }
+    }
+    
+    Args:
+        config: Configuration dictionary
+        
+    Returns:
+        Dictionary mapping sensor IDs to SensorUncertainty objects
+    """
+    uncertainties = {}
+    u_config = config.get('uncertainties', {})
+    
+    for sensor_id, spec in u_config.items():
+        u_type_str = spec.get('type', 'rel')
+        
+        # Map string to enum
+        type_map = {
+            'abs': UncertaintyType.ABSOLUTE,
+            'rel': UncertaintyType.RELATIVE,
+            'pct_fs': UncertaintyType.PERCENT_FS,
+            'pct_rd': UncertaintyType.PERCENT_READING,
+            'percent_fs': UncertaintyType.PERCENT_FS,
+            'percent_reading': UncertaintyType.PERCENT_READING,
+        }
+        
+        u_type = type_map.get(u_type_str, UncertaintyType.RELATIVE)
+        
+        uncertainties[sensor_id] = SensorUncertainty(
+            sensor_id=sensor_id,
+            u_type=u_type,
+            value=spec.get('value', 0.01),
+            full_scale=spec.get('full_scale'),
+            unit=spec.get('unit')
+        )
+    
+    return uncertainties
+
+
+def parse_geometry_uncertainties(config: Dict[str, Any]) -> Dict[str, GeometryUncertainty]:
+    """
+    Parse geometry uncertainty specifications from configuration.
+    
+    Expected config format:
+    {
+        "geometry": {
+            "orifice_area_mm2": 0.785,
+            "orifice_area_uncertainty_mm2": 0.005,
+            "throat_area_mm2": 78.5,
+            "throat_area_uncertainty_mm2": 0.5
+        }
+    }
+    
+    Args:
+        config: Configuration dictionary
+        
+    Returns:
+        Dictionary mapping parameter names to GeometryUncertainty objects
+    """
+    uncertainties = {}
+    geom = config.get('geometry', {})
+    
+    # Find pairs of value and uncertainty
+    for key, value in geom.items():
+        if '_uncertainty_' in key:
+            continue  # Skip uncertainty entries, process with value
+        
+        # Look for corresponding uncertainty
+        u_key = key.replace('_mm2', '_uncertainty_mm2').replace('_mm', '_uncertainty_mm')
+        if u_key not in geom:
+            # Try alternative pattern
+            parts = key.rsplit('_', 1)
+            if len(parts) == 2:
+                u_key = f"{parts[0]}_uncertainty_{parts[1]}"
+        
+        uncertainty = geom.get(u_key, 0.0)
+        
+        # Determine unit from key
+        if 'mm2' in key:
+            unit = 'mm²'
+        elif 'mm' in key:
+            unit = 'mm'
+        else:
+            unit = ''
+        
+        uncertainties[key] = GeometryUncertainty(
+            parameter=key,
+            nominal_value=value,
+            uncertainty=uncertainty,
+            unit=unit
+        )
+    
+    return uncertainties
+
+
+# =============================================================================
+# COLD FLOW UNCERTAINTY PROPAGATION
+# =============================================================================
+
+def calculate_cd_uncertainty(
+    mass_flow_gs: float,
+    u_mass_flow_gs: float,
+    area_mm2: float,
+    u_area_mm2: float,
+    delta_p_bar: float,
+    u_delta_p_bar: float,
+    density_kg_m3: float,
+    u_density_kg_m3: float = 0.0
+) -> MeasurementWithUncertainty:
+    """
+    Calculate discharge coefficient with uncertainty propagation.
+    
+    Cd = ṁ / (A × √(2ρΔP))
+    
+    Relative uncertainty (RSS):
+    (u_Cd/Cd)² = (u_ṁ/ṁ)² + (u_A/A)² + 0.25×(u_ρ/ρ)² + 0.25×(u_ΔP/ΔP)²
+    
+    Args:
+        mass_flow_gs: Mass flow rate in g/s
+        u_mass_flow_gs: Uncertainty in mass flow (g/s)
+        area_mm2: Orifice area in mm²
+        u_area_mm2: Uncertainty in area (mm²)
+        delta_p_bar: Pressure drop in bar
+        u_delta_p_bar: Uncertainty in pressure drop (bar)
+        density_kg_m3: Fluid density in kg/m³
+        u_density_kg_m3: Uncertainty in density (kg/m³)
+        
+    Returns:
+        MeasurementWithUncertainty for Cd
+    """
+    # Convert units
+    m_dot_kg_s = mass_flow_gs * 1e-3
+    u_m_dot_kg_s = u_mass_flow_gs * 1e-3
+    area_m2 = area_mm2 * 1e-6
+    u_area_m2 = u_area_mm2 * 1e-6
+    delta_p_pa = delta_p_bar * 1e5
+    u_delta_p_pa = u_delta_p_bar * 1e5
+    
+    # Calculate Cd
+    if delta_p_pa <= 0 or area_m2 <= 0 or density_kg_m3 <= 0:
+        return MeasurementWithUncertainty(
+            value=0.0, uncertainty=float('inf'), unit='-', name='Cd'
+        )
+    
+    cd = m_dot_kg_s / (area_m2 * np.sqrt(2 * density_kg_m3 * delta_p_pa))
+    
+    # Calculate relative uncertainties
+    rel_u_m = u_m_dot_kg_s / m_dot_kg_s if m_dot_kg_s > 0 else 0
+    rel_u_a = u_area_m2 / area_m2 if area_m2 > 0 else 0
+    rel_u_p = u_delta_p_pa / delta_p_pa if delta_p_pa > 0 else 0
+    rel_u_rho = u_density_kg_m3 / density_kg_m3 if density_kg_m3 > 0 else 0
+    
+    # RSS propagation
+    # Note: ΔP and ρ have 0.5 exponent in formula, so factor of 0.25 on variance
+    rel_u_cd_squared = (
+        rel_u_m**2 + 
+        rel_u_a**2 + 
+        0.25 * rel_u_rho**2 + 
+        0.25 * rel_u_p**2
+    )
+    
+    rel_u_cd = np.sqrt(rel_u_cd_squared)
+    u_cd = cd * rel_u_cd
+    
+    return MeasurementWithUncertainty(
+        value=cd,
+        uncertainty=u_cd,
+        unit='-',
+        name='Cd'
+    )
+
+
+def calculate_cold_flow_uncertainties(
+    avg_values: Dict[str, float],
+    config: Dict[str, Any],
+    sensor_uncertainties: Optional[Dict[str, SensorUncertainty]] = None
+) -> Dict[str, MeasurementWithUncertainty]:
+    """
+    Calculate all cold flow metrics with uncertainties.
+    
+    Args:
+        avg_values: Dictionary of averaged sensor values
+        config: Test configuration
+        sensor_uncertainties: Pre-parsed sensor uncertainties (optional)
+        
+    Returns:
+        Dictionary of measurements with uncertainties
+    """
+    results = {}
+    
+    # Parse uncertainties if not provided
+    if sensor_uncertainties is None:
+        sensor_uncertainties = parse_uncertainty_config(config)
+    
+    geom_uncertainties = parse_geometry_uncertainties(config)
+    
+    # Get column mappings
+    cols = config.get('columns', {})
+    geom = config.get('geometry', {})
+    fluid = config.get('fluid', {})
+    
+    # Extract values and uncertainties
+    p_up_col = cols.get('upstream_pressure') or cols.get('inlet_pressure')
+    p_down_col = cols.get('downstream_pressure')
+    mf_col = cols.get('mass_flow') or cols.get('mf')
+    
+    p_up = avg_values.get(p_up_col, 0)
+    p_down = avg_values.get(p_down_col, 0) if p_down_col else 0
+    mass_flow = avg_values.get(mf_col, 0)
+    
+    # Get sensor uncertainties
+    u_p_up = 0.0
+    u_p_down = 0.0
+    u_mf = 0.0
+    
+    if p_up_col and p_up_col in sensor_uncertainties:
+        u_p_up = sensor_uncertainties[p_up_col].get_absolute_uncertainty(p_up)
+    
+    if p_down_col and p_down_col in sensor_uncertainties:
+        u_p_down = sensor_uncertainties[p_down_col].get_absolute_uncertainty(p_down)
+    
+    if mf_col and mf_col in sensor_uncertainties:
+        u_mf = sensor_uncertainties[mf_col].get_absolute_uncertainty(mass_flow)
+    
+    # Delta P and uncertainty
+    delta_p = p_up - p_down
+    u_delta_p = np.sqrt(u_p_up**2 + u_p_down**2)
+    
+    # Store pressure measurements
+    results['pressure_upstream'] = MeasurementWithUncertainty(
+        value=p_up, uncertainty=u_p_up, unit='bar', name='pressure_upstream'
+    )
+    
+    results['mass_flow'] = MeasurementWithUncertainty(
+        value=mass_flow, uncertainty=u_mf, unit='g/s', name='mass_flow'
+    )
+    
+    results['delta_p'] = MeasurementWithUncertainty(
+        value=delta_p, uncertainty=u_delta_p, unit='bar', name='delta_p'
+    )
+    
+    # Get geometry
+    area_key = 'orifice_area_mm2'
+    area = geom.get(area_key, 0)
+    u_area = geom.get('orifice_area_uncertainty_mm2', 0)
+    
+    if area_key in geom_uncertainties:
+        u_area = geom_uncertainties[area_key].uncertainty
+    
+    # Get density
+    density = (
+        fluid.get('density_kg_m3') or 
+        fluid.get('ox_density_kg_m3') or 
+        fluid.get('water_density_kg_m3') or 
+        1000  # Default to water
+    )
+    u_density = fluid.get('density_uncertainty_kg_m3', density * 0.005)  # Default 0.5%
+    
+    # Calculate Cd with uncertainty
+    if area > 0 and delta_p > 0 and mass_flow > 0:
+        results['Cd'] = calculate_cd_uncertainty(
+            mass_flow_gs=mass_flow,
+            u_mass_flow_gs=u_mf,
+            area_mm2=area,
+            u_area_mm2=u_area,
+            delta_p_bar=delta_p,
+            u_delta_p_bar=u_delta_p,
+            density_kg_m3=density,
+            u_density_kg_m3=u_density
+        )
+    
+    return results
+
+
+# =============================================================================
+# HOT FIRE UNCERTAINTY PROPAGATION
+# =============================================================================
+
+def calculate_isp_uncertainty(
+    thrust_n: float,
+    u_thrust_n: float,
+    mass_flow_kg_s: float,
+    u_mass_flow_kg_s: float,
+    g0: float = 9.80665
+) -> MeasurementWithUncertainty:
+    """
+    Calculate specific impulse with uncertainty.
+    
+    Isp = F / (ṁ × g₀)
+    
+    Relative uncertainty:
+    (u_Isp/Isp)² = (u_F/F)² + (u_ṁ/ṁ)²
+    
+    Args:
+        thrust_n: Thrust in Newtons
+        u_thrust_n: Uncertainty in thrust (N)
+        mass_flow_kg_s: Total mass flow in kg/s
+        u_mass_flow_kg_s: Uncertainty in mass flow (kg/s)
+        g0: Standard gravity (m/s²)
+        
+    Returns:
+        MeasurementWithUncertainty for Isp
+    """
+    if mass_flow_kg_s <= 0 or thrust_n <= 0:
+        return MeasurementWithUncertainty(
+            value=0.0, uncertainty=float('inf'), unit='s', name='Isp'
+        )
+    
+    isp = thrust_n / (mass_flow_kg_s * g0)
+    
+    rel_u_f = u_thrust_n / thrust_n
+    rel_u_m = u_mass_flow_kg_s / mass_flow_kg_s
+    
+    rel_u_isp = np.sqrt(rel_u_f**2 + rel_u_m**2)
+    u_isp = isp * rel_u_isp
+    
+    return MeasurementWithUncertainty(
+        value=isp, uncertainty=u_isp, unit='s', name='Isp'
+    )
+
+
+def calculate_c_star_uncertainty(
+    chamber_pressure_pa: float,
+    u_chamber_pressure_pa: float,
+    throat_area_m2: float,
+    u_throat_area_m2: float,
+    mass_flow_kg_s: float,
+    u_mass_flow_kg_s: float
+) -> MeasurementWithUncertainty:
+    """
+    Calculate characteristic velocity with uncertainty.
+    
+    C* = Pc × At / ṁ
+    
+    Relative uncertainty:
+    (u_C*/C*)² = (u_Pc/Pc)² + (u_At/At)² + (u_ṁ/ṁ)²
+    
+    Args:
+        chamber_pressure_pa: Chamber pressure in Pa
+        u_chamber_pressure_pa: Uncertainty in pressure (Pa)
+        throat_area_m2: Throat area in m²
+        u_throat_area_m2: Uncertainty in throat area (m²)
+        mass_flow_kg_s: Total mass flow in kg/s
+        u_mass_flow_kg_s: Uncertainty in mass flow (kg/s)
+        
+    Returns:
+        MeasurementWithUncertainty for C*
+    """
+    if mass_flow_kg_s <= 0 or chamber_pressure_pa <= 0 or throat_area_m2 <= 0:
+        return MeasurementWithUncertainty(
+            value=0.0, uncertainty=float('inf'), unit='m/s', name='c_star'
+        )
+    
+    c_star = (chamber_pressure_pa * throat_area_m2) / mass_flow_kg_s
+    
+    rel_u_p = u_chamber_pressure_pa / chamber_pressure_pa
+    rel_u_a = u_throat_area_m2 / throat_area_m2
+    rel_u_m = u_mass_flow_kg_s / mass_flow_kg_s
+    
+    rel_u_c_star = np.sqrt(rel_u_p**2 + rel_u_a**2 + rel_u_m**2)
+    u_c_star = c_star * rel_u_c_star
+    
+    return MeasurementWithUncertainty(
+        value=c_star, uncertainty=u_c_star, unit='m/s', name='c_star'
+    )
+
+
+def calculate_of_ratio_uncertainty(
+    m_ox_kg_s: float,
+    u_m_ox_kg_s: float,
+    m_fuel_kg_s: float,
+    u_m_fuel_kg_s: float
+) -> MeasurementWithUncertainty:
+    """
+    Calculate O/F ratio with uncertainty.
+    
+    O/F = ṁ_ox / ṁ_fuel
+    
+    Relative uncertainty:
+    (u_OF/OF)² = (u_ṁox/ṁox)² + (u_ṁfuel/ṁfuel)²
+    """
+    if m_fuel_kg_s <= 0 or m_ox_kg_s <= 0:
+        return MeasurementWithUncertainty(
+            value=0.0, uncertainty=float('inf'), unit='-', name='of_ratio'
+        )
+    
+    of_ratio = m_ox_kg_s / m_fuel_kg_s
+    
+    rel_u_ox = u_m_ox_kg_s / m_ox_kg_s
+    rel_u_fuel = u_m_fuel_kg_s / m_fuel_kg_s
+    
+    rel_u_of = np.sqrt(rel_u_ox**2 + rel_u_fuel**2)
+    u_of = of_ratio * rel_u_of
+    
+    return MeasurementWithUncertainty(
+        value=of_ratio, uncertainty=u_of, unit='-', name='of_ratio'
+    )
+
+
+def calculate_hot_fire_uncertainties(
+    avg_values: Dict[str, float],
+    config: Dict[str, Any],
+    sensor_uncertainties: Optional[Dict[str, SensorUncertainty]] = None
+) -> Dict[str, MeasurementWithUncertainty]:
+    """
+    Calculate all hot fire metrics with uncertainties.
+    
+    Args:
+        avg_values: Dictionary of averaged sensor values
+        config: Test configuration
+        sensor_uncertainties: Pre-parsed sensor uncertainties (optional)
+        
+    Returns:
+        Dictionary of measurements with uncertainties
+    """
+    results = {}
+    g0 = 9.80665
+    
+    # Parse uncertainties if not provided
+    if sensor_uncertainties is None:
+        sensor_uncertainties = parse_uncertainty_config(config)
+    
+    geom_uncertainties = parse_geometry_uncertainties(config)
+    
+    # Get column mappings
+    cols = config.get('columns', {})
+    geom = config.get('geometry', {})
+    
+    # Extract values
+    pc_col = cols.get('chamber_pressure')
+    thrust_col = cols.get('thrust')
+    mf_ox_col = cols.get('mass_flow_ox')
+    mf_fuel_col = cols.get('mass_flow_fuel')
+    
+    pc = avg_values.get(pc_col, 0) if pc_col else 0
+    thrust = avg_values.get(thrust_col, 0) if thrust_col else 0
+    mf_ox = avg_values.get(mf_ox_col, 0) if mf_ox_col else 0
+    mf_fuel = avg_values.get(mf_fuel_col, 0) if mf_fuel_col else 0
+    mf_total = mf_ox + mf_fuel
+    
+    # Get sensor uncertainties
+    u_pc = 0.0
+    u_thrust = 0.0
+    u_mf_ox = 0.0
+    u_mf_fuel = 0.0
+    
+    if pc_col and pc_col in sensor_uncertainties:
+        u_pc = sensor_uncertainties[pc_col].get_absolute_uncertainty(pc)
+    
+    if thrust_col and thrust_col in sensor_uncertainties:
+        u_thrust = sensor_uncertainties[thrust_col].get_absolute_uncertainty(thrust)
+    
+    if mf_ox_col and mf_ox_col in sensor_uncertainties:
+        u_mf_ox = sensor_uncertainties[mf_ox_col].get_absolute_uncertainty(mf_ox)
+    
+    if mf_fuel_col and mf_fuel_col in sensor_uncertainties:
+        u_mf_fuel = sensor_uncertainties[mf_fuel_col].get_absolute_uncertainty(mf_fuel)
+    
+    # Total mass flow uncertainty
+    u_mf_total = np.sqrt(u_mf_ox**2 + u_mf_fuel**2)
+    
+    # Store base measurements
+    results['chamber_pressure'] = MeasurementWithUncertainty(
+        value=pc, uncertainty=u_pc, unit='bar', name='chamber_pressure'
+    )
+    
+    results['thrust'] = MeasurementWithUncertainty(
+        value=thrust, uncertainty=u_thrust, unit='N', name='thrust'
+    )
+    
+    results['mass_flow_total'] = MeasurementWithUncertainty(
+        value=mf_total, uncertainty=u_mf_total, unit='g/s', name='mass_flow_total'
+    )
+    
+    # O/F Ratio
+    if mf_ox > 0 and mf_fuel > 0:
+        results['of_ratio'] = calculate_of_ratio_uncertainty(
+            m_ox_kg_s=mf_ox * 1e-3,
+            u_m_ox_kg_s=u_mf_ox * 1e-3,
+            m_fuel_kg_s=mf_fuel * 1e-3,
+            u_m_fuel_kg_s=u_mf_fuel * 1e-3
+        )
+    
+    # Isp
+    if thrust > 0 and mf_total > 0:
+        results['Isp'] = calculate_isp_uncertainty(
+            thrust_n=thrust,
+            u_thrust_n=u_thrust,
+            mass_flow_kg_s=mf_total * 1e-3,
+            u_mass_flow_kg_s=u_mf_total * 1e-3
+        )
+    
+    # C*
+    throat_area_mm2 = geom.get('throat_area_mm2', 0)
+    u_throat_area_mm2 = geom.get('throat_area_uncertainty_mm2', 0)
+    
+    if pc > 0 and mf_total > 0 and throat_area_mm2 > 0:
+        results['c_star'] = calculate_c_star_uncertainty(
+            chamber_pressure_pa=pc * 1e5,
+            u_chamber_pressure_pa=u_pc * 1e5,
+            throat_area_m2=throat_area_mm2 * 1e-6,
+            u_throat_area_m2=u_throat_area_mm2 * 1e-6,
+            mass_flow_kg_s=mf_total * 1e-3,
+            u_mass_flow_kg_s=u_mf_total * 1e-3
+        )
+    
+    return results
+
+
+# =============================================================================
+# STATISTICAL UNCERTAINTY FROM DATA
+# =============================================================================
+
+def calculate_statistical_uncertainty(
+    df: pd.DataFrame,
+    column: str,
+    confidence: float = 0.95
+) -> Tuple[float, float, float]:
+    """
+    Calculate statistical uncertainty from measurement variation.
+    
+    Uses standard error of the mean with t-distribution correction.
+    
+    Args:
+        df: DataFrame containing data
+        column: Column name to analyze
+        confidence: Confidence level (default 95%)
+        
+    Returns:
+        Tuple of (mean, std, uncertainty_of_mean)
+    """
+    from scipy import stats
+    
+    data = df[column].dropna()
+    n = len(data)
+    
+    if n < 2:
+        return data.mean() if n > 0 else 0.0, 0.0, float('inf')
+    
+    mean = data.mean()
+    std = data.std(ddof=1)
+    sem = std / np.sqrt(n)
+    
+    # t-distribution critical value
+    t_crit = stats.t.ppf((1 + confidence) / 2, df=n-1)
+    
+    uncertainty = t_crit * sem
+    
+    return mean, std, uncertainty
+
+
+def combine_uncertainties(
+    systematic_uncertainty: float,
+    statistical_uncertainty: float
+) -> float:
+    """
+    Combine systematic and statistical uncertainties.
+    
+    Uses root-sum-square (RSS) combination.
+    
+    Args:
+        systematic_uncertainty: From sensor specs, geometry tolerances, etc.
+        statistical_uncertainty: From data variation
+        
+    Returns:
+        Combined uncertainty
+    """
+    return np.sqrt(systematic_uncertainty**2 + statistical_uncertainty**2)
+
+
+def format_with_uncertainty(
+    value: float,
+    uncertainty: float,
+    significant_figures: int = 2
+) -> str:
+    """
+    Format a value with uncertainty using proper significant figures.
+    
+    The uncertainty determines the precision of the value.
+    
+    Args:
+        value: Central value
+        uncertainty: Absolute uncertainty
+        significant_figures: Significant figures for uncertainty
+        
+    Returns:
+        Formatted string like "0.654 ± 0.018"
+    """
+    if uncertainty == 0 or np.isinf(uncertainty) or np.isnan(uncertainty):
+        return f"{value:.4g} ± ?"
+    
+    # Determine decimal places from uncertainty
+    if uncertainty >= 1:
+        u_decimals = max(0, significant_figures - int(np.floor(np.log10(uncertainty))) - 1)
+    else:
+        u_decimals = -int(np.floor(np.log10(uncertainty))) + significant_figures - 1
+    
+    u_decimals = max(0, min(6, u_decimals))
+    
+    return f"{value:.{u_decimals}f} ± {uncertainty:.{u_decimals}f}"

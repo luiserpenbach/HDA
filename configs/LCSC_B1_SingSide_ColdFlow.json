@@ -1,10 +1,7 @@
 {
   "config_name": "LCSC B1 Injectors - Cold Flow Standard",
   "description": "Standard configuration for swirl injector testing",
-  "fluid": {
-    "name": "N2",
-    "density_kg_m3": 1000
-  },
+
   "geometry": {
     "orifice_area_mm2": 0.785,
     "orifice_area_uncertainty_mm2": 0.001
@@ -34,9 +31,6 @@
     "steady_window_ms": 1000,
     "cv_threshold": 1.5,
 
-    "target_c_star": 1450,
-    "target_cf": 1.45,
-    "target_isp": 215
   },
   "reference_values": {
     "target_c_star": 1450,
