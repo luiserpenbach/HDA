@@ -292,14 +292,14 @@ class UncertaintySpec(BaseModel):
             raise ValueError(f"Uncertainty type must be one of {allowed}, got '{v}'")
         return v
     
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def check_full_scale_required(cls, values):
         u_type = values.get('type')
         full_scale = values.get('full_scale')
-        
+
         if u_type in ('pct_fs', 'percent_fs') and full_scale is None:
             raise ValueError(f"full_scale is required for uncertainty type '{u_type}'")
-        
+
         return values
 
 
@@ -310,7 +310,7 @@ class SensorLimit(BaseModel):
     unit: Optional[str] = Field(None, description="Physical unit")
     allow_negative: bool = Field(True, description="Whether negative values are valid")
     
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def check_min_max(cls, values):
         min_val = values.get('min')
         max_val = values.get('max')
@@ -381,7 +381,7 @@ class ColdFlowColumns(BaseModel):
     class Config:
         extra = 'allow'
     
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def check_required_columns(cls, values):
         # Must have at least one pressure column
         has_pressure = any([
@@ -482,7 +482,7 @@ class ColdFlowConfig(BaseModel):
     class Config:
         extra = 'allow'
     
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def check_geometry_for_cd(cls, values):
         """Verify we have geometry needed for Cd calculation."""
         geom = values.get('geometry')
@@ -490,7 +490,7 @@ class ColdFlowConfig(BaseModel):
             raise ValueError("orifice_area_mm2 is required in geometry for Cd calculation")
         return values
     
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def check_fluid_for_cd(cls, values):
         """Verify we have fluid properties needed for Cd calculation."""
         fluid = values.get('fluid')
@@ -546,7 +546,7 @@ class HotFireConfig(BaseModel):
     class Config:
         extra = 'allow'
     
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def check_geometry_for_performance(cls, values):
         """Verify we have geometry needed for C* calculation."""
         geom = values.get('geometry')
@@ -839,7 +839,7 @@ class ActiveConfiguration(BaseModel):
             raise ValueError(f"test_type must be 'cold_flow' or 'hot_fire', got '{v}'")
         return v
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def check_no_geometry_or_fluid(cls, values):
         """Ensure geometry and fluid are NOT in active configuration."""
         if 'geometry' in values:

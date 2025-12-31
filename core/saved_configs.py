@@ -119,7 +119,7 @@ class SavedConfig:
             qc=data.get('qc', {}),
             created_date=data.get('created_date', datetime.now().isoformat()),
             author=data.get('author', ''),
-            parent_template=data.get('parent_template'),
+            parent_config=data.get('parent_config') or data.get('parent_template'),  # Backward compatibility
             tags=data.get('tags', []),
         )
     
@@ -149,7 +149,7 @@ class SavedConfig:
 # BUILT-IN TEMPLATES
 # =============================================================================
 
-COLD_FLOW_N2_TEMPLATE = ConfigTemplate(
+COLD_FLOW_N2_TEMPLATE = SavedConfig(
     name="Cold Flow - Nitrogen (Standard)",
     version="2.0.0",
     test_type="cold_flow",
@@ -192,7 +192,7 @@ COLD_FLOW_N2_TEMPLATE = ConfigTemplate(
     tags=['cold_flow', 'nitrogen', 'standard'],
 )
 
-COLD_FLOW_WATER_TEMPLATE = ConfigTemplate(
+COLD_FLOW_WATER_TEMPLATE = SavedConfig(
     name="Cold Flow - Water (Incompressible)",
     version="2.0.0",
     test_type="cold_flow",
@@ -233,7 +233,7 @@ COLD_FLOW_WATER_TEMPLATE = ConfigTemplate(
     tags=['cold_flow', 'water', 'incompressible'],
 )
 
-HOT_FIRE_LOX_RP1_TEMPLATE = ConfigTemplate(
+HOT_FIRE_LOX_RP1_TEMPLATE = SavedConfig(
     name="Hot Fire - LOX/RP-1 (Standard)",
     version="2.0.0",
     test_type="hot_fire",
@@ -280,7 +280,7 @@ HOT_FIRE_LOX_RP1_TEMPLATE = ConfigTemplate(
     tags=['hot_fire', 'LOX', 'RP-1', 'bipropellant'],
 )
 
-HOT_FIRE_N2O_HTPB_TEMPLATE = ConfigTemplate(
+HOT_FIRE_N2O_HTPB_TEMPLATE = SavedConfig(
     name="Hot Fire - N2O/HTPB Hybrid",
     version="2.0.0",
     test_type="hot_fire",
@@ -317,7 +317,7 @@ HOT_FIRE_N2O_HTPB_TEMPLATE = ConfigTemplate(
 )
 
 # Registry of built-in templates
-BUILTIN_SAVED_CONFIGS: Dict[str, ConfigTemplate] = {
+BUILTIN_SAVED_CONFIGS: Dict[str, SavedConfig] = {
     'cold_flow_n2': COLD_FLOW_N2_TEMPLATE,
     'cold_flow_water': COLD_FLOW_WATER_TEMPLATE,
     'hot_fire_lox_rp1': HOT_FIRE_LOX_RP1_TEMPLATE,
@@ -331,9 +331,13 @@ BUILTIN_SAVED_CONFIGS: Dict[str, ConfigTemplate] = {
 
 class SavedConfigManager:
     """Manage configuration templates."""
-    
-    def __init__(self, saved_configs_dir: str = "saved_configs"):
-        self.saved_configs_dir = saved_configs_dir
+
+    def __init__(self, saved_configs_dir: str = "saved_configs", templates_dir: str = None):
+        # Backward compatibility: accept both saved_configs_dir and templates_dir
+        if templates_dir is not None:
+            self.saved_configs_dir = templates_dir
+        else:
+            self.saved_configs_dir = saved_configs_dir
         self._ensure_dir()
     
     def _ensure_dir(self):
@@ -380,7 +384,7 @@ class SavedConfigManager:
         
         return templates
     
-    def get_template(self, saved_config_id: str) -> Optional[ConfigTemplate]:
+    def get_template(self, saved_config_id: str) -> Optional[SavedConfig]:
         """Get a template by ID."""
         # Check built-in
         if saved_config_id in BUILTIN_SAVED_CONFIGS:
@@ -391,11 +395,11 @@ class SavedConfigManager:
         if os.path.exists(filepath):
             with open(filepath, 'r') as f:
                 data = json.load(f)
-            return ConfigTemplate.from_dict(data)
+            return SavedConfig.from_dict(data)
         
         return None
     
-    def save_template(self, template: ConfigTemplate, saved_config_id: Optional[str] = None) -> str:
+    def save_template(self, template: SavedConfig, saved_config_id: Optional[str] = None) -> str:
         """Save a template to disk."""
         if saved_config_id is None:
             # Generate ID from name
@@ -425,7 +429,7 @@ class SavedConfigManager:
         parent_id: str,
         new_name: str,
         overrides: Dict[str, Any],
-    ) -> ConfigTemplate:
+    ) -> SavedConfig:
         """Create a new template inheriting from a parent."""
         parent = self.get_template(parent_id)
         if parent is None:
@@ -462,7 +466,7 @@ class SavedConfigManager:
         with open(input_path, 'r') as f:
             data = json.load(f)
         
-        template = ConfigTemplate.from_dict(data)
+        template = SavedConfig.from_dict(data)
         return self.save_template(template, saved_config_id)
 
 
@@ -470,14 +474,14 @@ class SavedConfigManager:
 # UTILITY FUNCTIONS
 # =============================================================================
 
-def get_template_for_test_type(test_type: str) -> List[ConfigTemplate]:
+def get_template_for_test_type(test_type: str) -> List[SavedConfig]:
     """Get all templates matching a test type."""
     return [t for t in BUILTIN_SAVED_CONFIGS.values() if t.test_type == test_type]
 
 
 def validate_config_against_template(
     config: Dict[str, Any],
-    template: ConfigTemplate,
+    template: SavedConfig,
 ) -> List[str]:
     """
     Validate a config dict against a template.
@@ -559,6 +563,9 @@ def load_saved_config(
 # Class aliases
 ConfigTemplate = SavedConfig  # Old name → New name
 TemplateManager = SavedConfigManager  # Old name → New name
+
+# Dictionary aliases
+BUILTIN_TEMPLATES = BUILTIN_SAVED_CONFIGS  # Old name → New name
 
 # Function aliases
 create_config_from_template = load_saved_config  # Old name → New name
