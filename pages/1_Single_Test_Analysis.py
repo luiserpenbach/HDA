@@ -384,32 +384,97 @@ with st.sidebar:
         format_func=lambda x: "Cold Flow" if x == "cold_flow" else "Hot Fire"
     )
 
-    # Quick Config: Recent Configs dropdown
+    # Quick Config: Recent Configs & Templates
     st.subheader("⚡ Quick Config")
-    recent_configs = ConfigManager.get_recent_configs(limit=5)
+
+    # Tab for Recent vs Templates
+    quick_config_mode = st.radio(
+        "Quick Config Mode",
+        ["Recent Configs", "Templates"],
+        horizontal=True,
+        label_visibility="collapsed"
+    )
 
     config = None  # Will be set based on user selection
 
-    if recent_configs:
-        # Create options for recent configs
-        recent_options = ["-- Select Recent Config --"] + [
-            f"{r['info']['config_name']} ({r['info']['source']}, {r['info']['timestamp'][:10]})"
-            for r in recent_configs
-        ]
+    if quick_config_mode == "Recent Configs":
+        recent_configs = ConfigManager.get_recent_configs(limit=5)
 
-        selected_recent = st.selectbox(
-            "Recent Configurations",
-            recent_options,
-            help="Select from your 5 most recently used configurations"
-        )
+        if recent_configs:
+            # Create options for recent configs
+            recent_options = ["-- Select Recent Config --"] + [
+                f"{r['info']['config_name']} ({r['info']['source']}, {r['info']['timestamp'][:10]})"
+                for r in recent_configs
+            ]
 
-        if selected_recent != "-- Select Recent Config --":
-            # Find the selected config
-            idx = recent_options.index(selected_recent) - 1  # -1 for placeholder
-            config = recent_configs[idx]['config']
-            st.success(f"✓ Loaded: {recent_configs[idx]['info']['config_name']}")
-    else:
-        st.info("No recent configs yet. Use a config source below.")
+            selected_recent = st.selectbox(
+                "Recent Configurations",
+                recent_options,
+                help="Select from your 5 most recently used configurations"
+            )
+
+            if selected_recent != "-- Select Recent Config --":
+                # Find the selected config
+                idx = recent_options.index(selected_recent) - 1  # -1 for placeholder
+                config = recent_configs[idx]['config']
+                st.success(f"✓ Loaded: {recent_configs[idx]['info']['config_name']}")
+        else:
+            st.info("No recent configs yet. Try templates or other sources below.")
+
+    else:  # Templates mode
+        try:
+            from core.templates import TemplateManager, create_config_from_template
+
+            manager = TemplateManager()
+            templates = manager.list_templates()
+
+            if templates:
+                # Filter by test type
+                filtered_templates = [t for t in templates if t.get('test_type') == test_type]
+
+                if filtered_templates:
+                    # Create template options
+                    template_options = ["-- Select Template --"] + [
+                        f"{t['id']} - {t.get('config_name', 'Unnamed')}"
+                        for t in filtered_templates
+                    ]
+
+                    selected_template = st.selectbox(
+                        f"Available {test_type.replace('_', ' ').title()} Templates",
+                        template_options,
+                        help="Select a pre-configured template for quick setup"
+                    )
+
+                    if selected_template != "-- Select Template --":
+                        # Extract template ID
+                        template_id = selected_template.split(" - ")[0]
+
+                        # Show template info
+                        template_info = next(t for t in filtered_templates if t['id'] == template_id)
+
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            if template_info.get('description'):
+                                st.caption(f"📝 {template_info['description']}")
+                            if template_info.get('tags'):
+                                st.caption(f"🏷️ Tags: {', '.join(template_info['tags'])}")
+
+                        with col2:
+                            if st.button("Load", key="load_template_btn", use_container_width=True):
+                                try:
+                                    config = create_config_from_template(template_id)
+                                    ConfigManager.save_to_recent(config, 'template', config.get('config_name', template_id))
+                                    st.success(f"✓ Loaded template: {template_id}")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error loading template: {e}")
+                else:
+                    st.info(f"No {test_type} templates available. Create one in Config Templates page.")
+            else:
+                st.info("No templates available. Create templates in Config Templates page (Page 8).")
+
+        except ImportError:
+            st.warning("Template system not available. Use other config sources below.")
 
     st.divider()
 
@@ -1210,6 +1275,196 @@ if df_raw is not None:
                 st.text(f"Analyst: {trace_data.get('analyst_username', 'N/A')}")
                 st.text(f"Timestamp: {trace_data.get('analysis_timestamp_utc', 'N/A')}")
                 st.text(f"Steady Window: {trace_data.get('steady_window_start_ms', 'N/A')} - {trace_data.get('steady_window_end_ms', 'N/A')} ms")
+
+        st.divider()
+
+        # =============================================================================
+        # QUICK ITERATION MODE
+        # =============================================================================
+
+        st.header("Quick Iteration Mode")
+        st.markdown("Rapidly test different steady-state windows and see instant results without re-running full analysis.")
+
+        enable_quick_iteration = st.checkbox(
+            "Enable Quick Iteration Mode",
+            value=False,
+            help="Adjust steady-state window with sliders and see results update in real-time"
+        )
+
+        if enable_quick_iteration:
+            # Initialize comparison results storage
+            if 'iteration_results' not in st.session_state:
+                st.session_state.iteration_results = []
+
+            st.info("Adjust the steady-state window below. Results will update automatically.")
+
+            # Get time bounds from data
+            time_col = 'time_s' if 'time_s' in df.columns else config.get('columns', {}).get('timestamp', 'timestamp')
+            if time_col in df.columns:
+                t_min = float(df[time_col].min())
+                t_max = float(df[time_col].max())
+
+                # Current window from previous analysis
+                current_start, current_end = st.session_state.steady_window
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    new_start = st.slider(
+                        "Window Start (s)",
+                        min_value=t_min,
+                        max_value=t_max,
+                        value=float(current_start),
+                        step=0.1,
+                        format="%.2f",
+                        help="Adjust the start time of the steady-state window"
+                    )
+
+                with col2:
+                    new_end = st.slider(
+                        "Window End (s)",
+                        min_value=t_min,
+                        max_value=t_max,
+                        value=float(current_end),
+                        step=0.1,
+                        format="%.2f",
+                        help="Adjust the end time of the steady-state window"
+                    )
+
+                # Validate window
+                if new_start >= new_end:
+                    st.warning("Start time must be less than end time")
+                else:
+                    # Check if window changed
+                    window_changed = (new_start != current_start) or (new_end != current_end)
+
+                    if window_changed:
+                        # Use cached analysis function
+                        @st.cache_data(show_spinner=False)
+                        def run_quick_analysis(_df, _config, window, _test_id, _test_type, _metadata):
+                            """Cached analysis function for quick iteration."""
+                            if _test_type == "cold_flow":
+                                return analyze_cold_flow_test(
+                                    df=_df,
+                                    config=_config,
+                                    steady_window=window,
+                                    test_id=_test_id,
+                                    file_path=None,
+                                    metadata=_metadata,
+                                    skip_qc=True,  # Skip QC for speed
+                                )
+                            else:
+                                return analyze_hot_fire_test(
+                                    df=_df,
+                                    config=_config,
+                                    steady_window=window,
+                                    test_id=_test_id,
+                                    file_path=None,
+                                    metadata=_metadata,
+                                    skip_qc=True,
+                                )
+
+                        # Run analysis with new window
+                        try:
+                            with st.spinner("Updating results..."):
+                                # Prepare metadata (simplified for iteration)
+                                iter_metadata = {
+                                    'part_number': metadata.get('part_number', ''),
+                                    'serial_number': metadata.get('serial_number', ''),
+                                }
+
+                                new_result = run_quick_analysis(
+                                    df,
+                                    config,
+                                    (new_start, new_end),
+                                    test_id + "_iter",
+                                    test_type,
+                                    iter_metadata
+                                )
+
+                                # Display updated metrics
+                                st.success(f"Results updated for window: {new_start:.2f}s - {new_end:.2f}s")
+
+                                # Key metrics comparison
+                                st.subheader("Updated Metrics")
+                                col1, col2, col3, col4 = st.columns(4)
+
+                                metrics = list(new_result.measurements.items())
+                                for i, (name, meas) in enumerate(metrics[:4]):
+                                    with [col1, col2, col3, col4][i]:
+                                        if hasattr(meas, 'value'):
+                                            # Calculate delta from original
+                                            original_meas = result.measurements.get(name)
+                                            if original_meas and hasattr(original_meas, 'value'):
+                                                delta = ((meas.value - original_meas.value) / original_meas.value * 100)
+                                                delta_str = f"{delta:+.2f}% vs original"
+                                            else:
+                                                delta_str = None
+
+                                            st.metric(
+                                                name,
+                                                f"{meas.value:.4g}",
+                                                delta=delta_str
+                                            )
+                                        else:
+                                            st.metric(name, f"{meas:.4g}")
+
+                                # Save to comparison
+                                if st.button("Save to Comparison", key="save_iter"):
+                                    st.session_state.iteration_results.append({
+                                        'window': (new_start, new_end),
+                                        'duration': new_end - new_start,
+                                        'measurements': {k: getattr(v, 'value', v) for k, v in new_result.measurements.items()}
+                                    })
+                                    st.success("Added to comparison table")
+                                    st.rerun()
+
+                        except Exception as e:
+                            st.error(f"Quick analysis error: {e}")
+
+                # Comparison table
+                if st.session_state.iteration_results:
+                    st.divider()
+                    st.subheader("Parameter Sweep Comparison")
+
+                    # Build comparison DataFrame
+                    comparison_data = []
+                    for idx, iter_result in enumerate(st.session_state.iteration_results):
+                        row = {
+                            '#': idx + 1,
+                            'Window Start (s)': f"{iter_result['window'][0]:.2f}",
+                            'Window End (s)': f"{iter_result['window'][1]:.2f}",
+                            'Duration (s)': f"{iter_result['duration']:.2f}",
+                        }
+                        # Add first 6 measurements
+                        for i, (name, value) in enumerate(list(iter_result['measurements'].items())[:6]):
+                            if isinstance(value, (int, float)):
+                                row[name] = f"{value:.4g}"
+                            else:
+                                row[name] = str(value)
+                        comparison_data.append(row)
+
+                    comparison_df = pd.DataFrame(comparison_data)
+                    st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+
+                    col1, col2 = st.columns([1, 4])
+                    with col1:
+                        if st.button("Clear Comparison", key="clear_comparison"):
+                            st.session_state.iteration_results = []
+                            st.rerun()
+
+                    with col2:
+                        # Export comparison
+                        csv_data = comparison_df.to_csv(index=False)
+                        st.download_button(
+                            "Download Comparison (CSV)",
+                            csv_data,
+                            file_name=f"{test_id}_parameter_sweep.csv",
+                            mime="text/csv"
+                        )
+
+            else:
+                st.warning("Time column not found in data")
 
         st.divider()
 
