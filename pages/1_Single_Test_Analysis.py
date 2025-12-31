@@ -50,6 +50,8 @@ if 'steady_window' not in st.session_state:
     st.session_state.steady_window = None
 if 'file_hash' not in st.session_state:
     st.session_state.file_hash = None
+if 'detection_sensor' not in st.session_state:
+    st.session_state.detection_sensor = None  # Track which sensor was used for detection
 
 # Initialize detection preferences (persistent across tests)
 if 'detection_preferences' not in st.session_state:
@@ -59,6 +61,7 @@ if 'detection_preferences' not in st.session_state:
         'cv_window_size': 50,
         'ml_contamination': 0.3,
         'deriv_threshold': 0.1,
+        'window_adjust_step': 0.1,  # Step size for manual adjustment (seconds)
     }
 
 
@@ -306,8 +309,16 @@ def apply_channel_mapping(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame,
 # (replaced create_default_cold_flow_config and create_default_hot_fire_config)
 
 
-def plot_data_with_window(df, config, steady_window):
-    """Create interactive plot with steady-state window."""
+def plot_data_with_window(df, config, steady_window, detection_sensor=None):
+    """
+    Create interactive plot with steady-state window.
+
+    Args:
+        df: DataFrame with test data
+        config: Configuration dict
+        steady_window: (start, end) tuple for steady-state window
+        detection_sensor: Sensor used for detection (shown first, highlighted)
+    """
     # Prefer time_s, fall back to timestamp column
     if 'time_s' in df.columns:
         time_col = 'time_s'
@@ -322,30 +333,48 @@ def plot_data_with_window(df, config, steady_window):
 
     # Identify data columns (exclude time columns)
     exclude_cols = {time_col, 'time_s', 'time_ms', 'timestamp'}
-    data_cols = [c for c in df.columns
-                 if c not in exclude_cols and df[c].dtype in ['float64', 'int64']]
+    all_data_cols = [c for c in df.columns
+                     if c not in exclude_cols and df[c].dtype in ['float64', 'float32', 'int64', 'int32']]
 
-    if not data_cols:
+    if not all_data_cols:
         st.warning("No numeric data columns found")
         return None
 
+    # Determine which sensors to plot
+    plot_cols = []
+
+    # Add detection sensor first if specified
+    if detection_sensor and detection_sensor in all_data_cols:
+        plot_cols.append(detection_sensor)
+
+    # Add other sensors (up to 4 total)
+    for col in all_data_cols:
+        if col not in plot_cols:
+            plot_cols.append(col)
+            if len(plot_cols) >= 4:
+                break
+
     # Create subplots
-    n_cols = min(len(data_cols), 4)
+    n_cols = len(plot_cols)
     fig = make_subplots(
         rows=n_cols, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.05,
-        subplot_titles=data_cols[:n_cols]
+        subplot_titles=[f"{c}{' (detection)' if c == detection_sensor else ''}" for c in plot_cols]
     )
 
-    for i, col in enumerate(data_cols[:n_cols]):
+    for i, col in enumerate(plot_cols):
+        # Highlight detection sensor
+        line_color = 'blue' if col == detection_sensor else None
+        line_width = 2 if col == detection_sensor else 1
+
         fig.add_trace(
             go.Scatter(
                 x=df[time_col],
                 y=df[col],
                 mode='lines',
                 name=col,
-                line=dict(width=1),
+                line=dict(width=line_width, color=line_color),
             ),
             row=i+1, col=1
         )
@@ -356,15 +385,16 @@ def plot_data_with_window(df, config, steady_window):
                 x0=steady_window[0],
                 x1=steady_window[1],
                 fillcolor="green",
-                opacity=0.1,
+                opacity=0.15,
                 line_width=0,
                 row=i+1, col=1
             )
 
     fig.update_layout(
-        height=200 * n_cols,
+        height=150 * n_cols,
         showlegend=False,
         title="Test Data with Steady-State Window (green)",
+        margin=dict(t=50, b=40)
     )
     fig.update_xaxes(title_text=time_label, row=n_cols, col=1)
 
@@ -1022,10 +1052,11 @@ if df_raw is not None:
 
                     if start is not None:
                         st.session_state.steady_window = (start, end)
+                        st.session_state.detection_sensor = selected_sensor  # Save which sensor was used
                         duration = end - start
-                        st.success(f"Detected: {start:.3f}s - {end:.3f}s ({duration:.3f}s)")
+                        st.success(f"✓ Detected: {start:.3f}s - {end:.3f}s ({duration:.3f}s) using {selected_sensor}")
                     else:
-                        st.warning("Could not detect steady state - try adjusting parameters")
+                        st.warning("Could not detect steady state - try adjusting parameters or use Manual Selection")
             else:
                 st.warning("No numeric columns found in data")
 
@@ -1055,10 +1086,11 @@ if df_raw is not None:
 
                         if start is not None:
                             st.session_state.steady_window = (start, end)
+                            st.session_state.detection_sensor = selected_sensors[0] if selected_sensors else None
                             duration = end - start
-                            st.success(f"Detected: {start:.3f}s - {end:.3f}s ({duration:.3f}s)")
+                            st.success(f"✓ Detected: {start:.3f}s - {end:.3f}s ({duration:.3f}s)")
                         else:
-                            st.warning("ML detection failed - try CV-based method")
+                            st.warning("ML detection failed - try CV-based method or Manual Selection")
                 else:
                     st.info("Select at least one sensor for ML detection")
             else:
@@ -1087,10 +1119,11 @@ if df_raw is not None:
 
                     if start is not None:
                         st.session_state.steady_window = (start, end)
+                        st.session_state.detection_sensor = selected_sensor
                         duration = end - start
-                        st.success(f"Detected: {start:.3f}s - {end:.3f}s ({duration:.3f}s)")
+                        st.success(f"✓ Detected: {start:.3f}s - {end:.3f}s ({duration:.3f}s) using {selected_sensor}")
                     else:
-                        st.warning("Could not detect steady state")
+                        st.warning("Could not detect steady state - use Manual Selection")
             else:
                 st.warning("No numeric columns found")
 
@@ -1111,9 +1144,73 @@ if df_raw is not None:
                 )
                 st.session_state.steady_window = window
 
+    # Manual window adjustment controls (shown if window detected/selected)
+    if st.session_state.steady_window:
+        with col2:
+            st.markdown("**Manual Adjustment**")
+
+            # Step size control
+            step_size = st.number_input(
+                "Step size (s)",
+                min_value=0.001,
+                max_value=1.0,
+                value=st.session_state.detection_preferences['window_adjust_step'],
+                step=0.01,
+                format="%.3f",
+                help="Step size for +/- buttons"
+            )
+            st.session_state.detection_preferences['window_adjust_step'] = step_size
+
+            # Current window display and adjustment
+            start, end = st.session_state.steady_window
+            time_label = "s" if time_col == 'time_s' else "ms"
+
+            col_start1, col_start2, col_start3 = st.columns([2, 1, 1])
+            with col_start1:
+                new_start = st.number_input(f"Start ({time_label})", value=float(start), format="%.3f", key="manual_start")
+            with col_start2:
+                if st.button("-", key="start_minus"):
+                    new_start = max(float(df[time_col].min()), start - step_size)
+                    st.session_state.steady_window = (new_start, end)
+                    st.rerun()
+            with col_start3:
+                if st.button("+", key="start_plus"):
+                    new_start = min(end - 0.01, start + step_size)
+                    st.session_state.steady_window = (new_start, end)
+                    st.rerun()
+
+            col_end1, col_end2, col_end3 = st.columns([2, 1, 1])
+            with col_end1:
+                new_end = st.number_input(f"End ({time_label})", value=float(end), format="%.3f", key="manual_end")
+            with col_end2:
+                if st.button("-", key="end_minus"):
+                    new_end = max(start + 0.01, end - step_size)
+                    st.session_state.steady_window = (start, new_end)
+                    st.rerun()
+            with col_end3:
+                if st.button("+", key="end_plus"):
+                    new_end = min(float(df[time_col].max()), end + step_size)
+                    st.session_state.steady_window = (start, new_end)
+                    st.rerun()
+
+            # Apply manual changes
+            if new_start != start or new_end != end:
+                if new_start < new_end:
+                    st.session_state.steady_window = (new_start, new_end)
+                    st.rerun()
+
+            duration = new_end - new_start
+            st.caption(f"Duration: {duration:.3f}{time_label}")
+
     with col1:
         if st.session_state.steady_window:
-            fig = plot_data_with_window(df, config, st.session_state.steady_window)
+            # Pass detection sensor to plot function
+            fig = plot_data_with_window(
+                df,
+                config,
+                st.session_state.steady_window,
+                detection_sensor=st.session_state.get('detection_sensor')
+            )
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
 
