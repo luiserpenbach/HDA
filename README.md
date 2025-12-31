@@ -21,7 +21,54 @@ This package implements the engineering integrity systems for propulsion test da
 ### P2 Components (Advanced Features)
 1. **Advanced Anomaly Detection** - Multi-type anomaly detection with sensor health
 2. **Data Comparison** - Test-to-test, golden reference, regression analysis
-3. **Configuration Templates** - Reusable templates with inheritance
+3. **Saved Configurations** - Reusable testbench configurations with inheritance
+
+## Version 2.3.0 Architecture
+
+### Config/Metadata Separation
+
+v2.3.0 introduces a clear separation between testbench hardware and test article properties:
+
+#### Active Configuration (Testbench Hardware)
+- **What it contains**: Sensor mappings, channel mappings, calibration uncertainties, processing settings
+- **When it changes**: Only when testbench is modified or recalibrated
+- **Where it's stored**: `saved_configs/` folder (formerly `config_templates/`)
+
+#### Test Metadata (Test Article Properties)
+- **What it contains**: Geometry, fluid properties, part numbers, serial numbers
+- **When it changes**: Every test (different injector, fluid, conditions, etc.)
+- **Where it's provided**: `metadata.json` file in test folder, or UI entry
+
+**Key Benefits**:
+- Load testbench configuration once, reuse for all tests
+- Provide only test-specific metadata per test
+- No more creating configs for every injector element or fluid type
+- Clearer separation of concerns
+
+**Example Workflow**:
+```python
+from core.config_validation import validate_active_configuration, validate_test_metadata
+from core.metadata_manager import load_metadata_from_folder
+from core.integrated_analysis import analyze_cold_flow_test
+
+# Load Active Configuration (once for test series)
+with open('saved_configs/lcsc_testbench.json') as f:
+    active_config = validate_active_configuration(json.load(f))
+
+# Load Test Metadata (per test, auto-loads from metadata.json)
+metadata, source = load_metadata_from_folder('test_data/TEST-001/')
+
+# Merge for analysis
+from core.config_validation import merge_config_and_metadata
+full_config = merge_config_and_metadata(active_config, metadata)
+
+# Analyze as usual
+result = analyze_cold_flow_test(df, full_config, steady_window, test_id, file_path, metadata.to_dict())
+```
+
+**Backward Compatibility**: Old configs (v2.0-v2.2) automatically migrate transparently. Use `scripts/migrate_configs_v2.3.py` for permanent migration.
+
+See `METADATA_GUIDE.md` for detailed metadata usage instructions.
 
 ## Installation
 
@@ -407,7 +454,8 @@ manager.save_template(child, "my_template")
 ## Documentation
 
 ### For Users
-- **[WHATS_NEW.md](WHATS_NEW.md)** - What's new in v2.1.0 and v2.2.0 (start here for new features!)
+- **[WHATS_NEW.md](WHATS_NEW.md)** - What's new in v2.1.0, v2.2.0, and v2.3.0 (start here for new features!)
+- **[METADATA_GUIDE.md](METADATA_GUIDE.md)** - Complete guide to using test metadata (v2.3.0+)
 - **[QUICK_ITERATION_MODE.md](QUICK_ITERATION_MODE.md)** - Comprehensive guide to Quick Iteration Mode for parameter sweeps
 - **[TEMPLATE_INTEGRATION.md](TEMPLATE_INTEGRATION.md)** - Template Integration feature documentation
 
@@ -420,8 +468,8 @@ manager.save_template(child, "my_template")
 
 ## Version
 
-- **Application Version**: 2.2.0 (Advanced Workflow Release)
-- **Core Version**: 2.0.0 (Engineering Integrity)
+- **Application Version**: 2.3.0 (Configuration Architecture Release)
+- **Core Version**: 2.3.0 (Config/Metadata Separation)
 - **Schema Version**: 3 (campaign database)
 - **Processing Version**: 2.0.0+integrity
 

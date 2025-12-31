@@ -164,7 +164,7 @@ def config_source_selector(
     return config_source, config
 
 
-def template_selector_widget(
+def saved_config_selector_widget(
     test_type: Optional[str] = None,
     key_suffix: str = ""
 ) -> Optional[Dict[str, Any]]:
@@ -178,7 +178,7 @@ def template_selector_widget(
     Returns:
         Configuration dict from selected template, or None
     """
-    from core.templates import TemplateManager, create_config_from_template
+    from core.saved_configs import TemplateManager, create_config_from_template
 
     try:
         manager = TemplateManager()

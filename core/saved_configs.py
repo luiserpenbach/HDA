@@ -1,11 +1,16 @@
 """
-Configuration Templates (P2)
-============================
-Template management for test configurations:
-- Pre-built templates for common test types
-- Template validation and versioning
+Saved Configurations Module (v2.3.0)
+=====================================
+Manage reusable test configurations (formerly "templates"):
+- Pre-built configurations for common test types
+- Configuration validation and versioning
 - Configuration inheritance
 - Import/export functionality
+
+Terminology (v2.3.0):
+- "Saved Config" = Reusable configuration stored in saved_configs/ folder
+- "Active Configuration" = Currently selected config for analysis
+- Previously called "templates" in v2.0-v2.2
 """
 
 import json
@@ -18,7 +23,7 @@ import copy
 
 
 # =============================================================================
-# TEMPLATE DEFINITIONS
+# SAVED CONFIGURATION DEFINITIONS (v2.3.0)
 # =============================================================================
 
 @dataclass
@@ -27,7 +32,7 @@ class UncertaintySpec:
     type: str  # 'absolute' or 'relative'
     value: float
     unit: Optional[str] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         d = {'type': self.type, 'value': self.value}
         if self.unit:
@@ -36,39 +41,45 @@ class UncertaintySpec:
 
 
 @dataclass
-class ConfigTemplate:
-    """Configuration template for test analysis."""
+class SavedConfig:
+    """
+    Saved Configuration for reuse across tests.
+
+    Note (v2.3.0): In the new architecture, saved configs should only contain
+    testbench hardware info. Geometry and fluid will be migrated to metadata.
+    This class maintains backward compatibility with v2.0-v2.2 format.
+    """
     name: str
     version: str
     test_type: str  # 'cold_flow' or 'hot_fire'
     description: str = ""
-    
+
     # Column mappings
     columns: Dict[str, str] = field(default_factory=dict)
-    
-    # Fluid/propellant properties
+
+    # Fluid/propellant properties (will be migrated to metadata in v2.3.0+)
     fluid: Dict[str, Any] = field(default_factory=dict)
     propellants: Dict[str, Any] = field(default_factory=dict)
-    
-    # Geometry
+
+    # Geometry (will be migrated to metadata in v2.3.0+)
     geometry: Dict[str, float] = field(default_factory=dict)
-    
+
     # Uncertainties
     uncertainties: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     geometry_uncertainties: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    
+
     # Settings
     settings: Dict[str, Any] = field(default_factory=dict)
-    
+
     # QC settings
     qc: Dict[str, Any] = field(default_factory=dict)
-    
+
     # Metadata
     created_date: str = field(default_factory=lambda: datetime.now().isoformat())
     author: str = ""
-    parent_template: Optional[str] = None
+    parent_config: Optional[str] = None  # Renamed from parent_template
     tags: List[str] = field(default_factory=list)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -86,12 +97,12 @@ class ConfigTemplate:
             'qc': self.qc,
             'created_date': self.created_date,
             'author': self.author,
-            'parent_template': self.parent_template,
+            'parent_config': self.parent_config,  # Renamed from parent_template
             'tags': self.tags,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ConfigTemplate':
+    def from_dict(cls, data: Dict[str, Any]) -> 'SavedConfig':
         """Create from dictionary."""
         return cls(
             name=data.get('config_name', data.get('name', 'Unknown')),
@@ -108,7 +119,7 @@ class ConfigTemplate:
             qc=data.get('qc', {}),
             created_date=data.get('created_date', datetime.now().isoformat()),
             author=data.get('author', ''),
-            parent_template=data.get('parent_template'),
+            parent_config=data.get('parent_config') or data.get('parent_template'),  # Backward compatibility
             tags=data.get('tags', []),
         )
     
@@ -138,7 +149,7 @@ class ConfigTemplate:
 # BUILT-IN TEMPLATES
 # =============================================================================
 
-COLD_FLOW_N2_TEMPLATE = ConfigTemplate(
+COLD_FLOW_N2_TEMPLATE = SavedConfig(
     name="Cold Flow - Nitrogen (Standard)",
     version="2.0.0",
     test_type="cold_flow",
@@ -181,7 +192,7 @@ COLD_FLOW_N2_TEMPLATE = ConfigTemplate(
     tags=['cold_flow', 'nitrogen', 'standard'],
 )
 
-COLD_FLOW_WATER_TEMPLATE = ConfigTemplate(
+COLD_FLOW_WATER_TEMPLATE = SavedConfig(
     name="Cold Flow - Water (Incompressible)",
     version="2.0.0",
     test_type="cold_flow",
@@ -222,7 +233,7 @@ COLD_FLOW_WATER_TEMPLATE = ConfigTemplate(
     tags=['cold_flow', 'water', 'incompressible'],
 )
 
-HOT_FIRE_LOX_RP1_TEMPLATE = ConfigTemplate(
+HOT_FIRE_LOX_RP1_TEMPLATE = SavedConfig(
     name="Hot Fire - LOX/RP-1 (Standard)",
     version="2.0.0",
     test_type="hot_fire",
@@ -269,7 +280,7 @@ HOT_FIRE_LOX_RP1_TEMPLATE = ConfigTemplate(
     tags=['hot_fire', 'LOX', 'RP-1', 'bipropellant'],
 )
 
-HOT_FIRE_N2O_HTPB_TEMPLATE = ConfigTemplate(
+HOT_FIRE_N2O_HTPB_TEMPLATE = SavedConfig(
     name="Hot Fire - N2O/HTPB Hybrid",
     version="2.0.0",
     test_type="hot_fire",
@@ -306,7 +317,7 @@ HOT_FIRE_N2O_HTPB_TEMPLATE = ConfigTemplate(
 )
 
 # Registry of built-in templates
-BUILTIN_TEMPLATES: Dict[str, ConfigTemplate] = {
+BUILTIN_SAVED_CONFIGS: Dict[str, SavedConfig] = {
     'cold_flow_n2': COLD_FLOW_N2_TEMPLATE,
     'cold_flow_water': COLD_FLOW_WATER_TEMPLATE,
     'hot_fire_lox_rp1': HOT_FIRE_LOX_RP1_TEMPLATE,
@@ -318,17 +329,21 @@ BUILTIN_TEMPLATES: Dict[str, ConfigTemplate] = {
 # TEMPLATE MANAGER
 # =============================================================================
 
-class TemplateManager:
+class SavedConfigManager:
     """Manage configuration templates."""
-    
-    def __init__(self, templates_dir: str = "config_templates"):
-        self.templates_dir = templates_dir
+
+    def __init__(self, saved_configs_dir: str = "saved_configs", templates_dir: str = None):
+        # Backward compatibility: accept both saved_configs_dir and templates_dir
+        if templates_dir is not None:
+            self.saved_configs_dir = templates_dir
+        else:
+            self.saved_configs_dir = saved_configs_dir
         self._ensure_dir()
     
     def _ensure_dir(self):
         """Ensure templates directory exists."""
-        if not os.path.exists(self.templates_dir):
-            os.makedirs(self.templates_dir)
+        if not os.path.exists(self.saved_configs_dir):
+            os.makedirs(self.saved_configs_dir)
     
     def list_templates(self, include_builtin: bool = True) -> List[Dict[str, Any]]:
         """List all available templates."""
@@ -336,7 +351,7 @@ class TemplateManager:
         
         # Add built-in templates
         if include_builtin:
-            for key, template in BUILTIN_TEMPLATES.items():
+            for key, template in BUILTIN_SAVED_CONFIGS.items():
                 templates.append({
                     'id': key,
                     'name': template.name,
@@ -348,9 +363,9 @@ class TemplateManager:
                 })
         
         # Add custom templates
-        for filename in os.listdir(self.templates_dir):
+        for filename in os.listdir(self.saved_configs_dir):
             if filename.endswith('.json'):
-                filepath = os.path.join(self.templates_dir, filename)
+                filepath = os.path.join(self.saved_configs_dir, filename)
                 try:
                     with open(filepath, 'r') as f:
                         data = json.load(f)
@@ -369,41 +384,41 @@ class TemplateManager:
         
         return templates
     
-    def get_template(self, template_id: str) -> Optional[ConfigTemplate]:
+    def get_template(self, saved_config_id: str) -> Optional[SavedConfig]:
         """Get a template by ID."""
         # Check built-in
-        if template_id in BUILTIN_TEMPLATES:
-            return copy.deepcopy(BUILTIN_TEMPLATES[template_id])
+        if saved_config_id in BUILTIN_SAVED_CONFIGS:
+            return copy.deepcopy(BUILTIN_SAVED_CONFIGS[saved_config_id])
         
         # Check custom
-        filepath = os.path.join(self.templates_dir, f"{template_id}.json")
+        filepath = os.path.join(self.saved_configs_dir, f"{saved_config_id}.json")
         if os.path.exists(filepath):
             with open(filepath, 'r') as f:
                 data = json.load(f)
-            return ConfigTemplate.from_dict(data)
+            return SavedConfig.from_dict(data)
         
         return None
     
-    def save_template(self, template: ConfigTemplate, template_id: Optional[str] = None) -> str:
+    def save_template(self, template: SavedConfig, saved_config_id: Optional[str] = None) -> str:
         """Save a template to disk."""
-        if template_id is None:
+        if saved_config_id is None:
             # Generate ID from name
-            template_id = template.name.lower().replace(' ', '_').replace('-', '_')
-            template_id = ''.join(c for c in template_id if c.isalnum() or c == '_')
+            saved_config_id = template.name.lower().replace(' ', '_').replace('-', '_')
+            saved_config_id = ''.join(c for c in saved_config_id if c.isalnum() or c == '_')
         
-        filepath = os.path.join(self.templates_dir, f"{template_id}.json")
+        filepath = os.path.join(self.saved_configs_dir, f"{saved_config_id}.json")
         
         with open(filepath, 'w') as f:
             json.dump(template.to_dict(), f, indent=2)
         
-        return template_id
+        return saved_config_id
     
-    def delete_template(self, template_id: str) -> bool:
+    def delete_template(self, saved_config_id: str) -> bool:
         """Delete a custom template."""
-        if template_id in BUILTIN_TEMPLATES:
+        if saved_config_id in BUILTIN_SAVED_CONFIGS:
             raise ValueError("Cannot delete built-in templates")
         
-        filepath = os.path.join(self.templates_dir, f"{template_id}.json")
+        filepath = os.path.join(self.saved_configs_dir, f"{saved_config_id}.json")
         if os.path.exists(filepath):
             os.remove(filepath)
             return True
@@ -414,7 +429,7 @@ class TemplateManager:
         parent_id: str,
         new_name: str,
         overrides: Dict[str, Any],
-    ) -> ConfigTemplate:
+    ) -> SavedConfig:
         """Create a new template inheriting from a parent."""
         parent = self.get_template(parent_id)
         if parent is None:
@@ -437,36 +452,36 @@ class TemplateManager:
         
         return new_template
     
-    def export_template(self, template_id: str, output_path: str):
+    def export_template(self, saved_config_id: str, output_path: str):
         """Export template to a file."""
-        template = self.get_template(template_id)
+        template = self.get_template(saved_config_id)
         if template is None:
-            raise ValueError(f"Template '{template_id}' not found")
+            raise ValueError(f"Template '{saved_config_id}' not found")
         
         with open(output_path, 'w') as f:
             json.dump(template.to_dict(), f, indent=2)
     
-    def import_template(self, input_path: str, template_id: Optional[str] = None) -> str:
+    def import_template(self, input_path: str, saved_config_id: Optional[str] = None) -> str:
         """Import template from a file."""
         with open(input_path, 'r') as f:
             data = json.load(f)
         
-        template = ConfigTemplate.from_dict(data)
-        return self.save_template(template, template_id)
+        template = SavedConfig.from_dict(data)
+        return self.save_template(template, saved_config_id)
 
 
 # =============================================================================
 # UTILITY FUNCTIONS
 # =============================================================================
 
-def get_template_for_test_type(test_type: str) -> List[ConfigTemplate]:
+def get_template_for_test_type(test_type: str) -> List[SavedConfig]:
     """Get all templates matching a test type."""
-    return [t for t in BUILTIN_TEMPLATES.values() if t.test_type == test_type]
+    return [t for t in BUILTIN_SAVED_CONFIGS.values() if t.test_type == test_type]
 
 
 def validate_config_against_template(
     config: Dict[str, Any],
-    template: ConfigTemplate,
+    template: SavedConfig,
 ) -> List[str]:
     """
     Validate a config dict against a template.
@@ -512,25 +527,25 @@ def merge_configs(
     return result
 
 
-def create_config_from_template(
-    template_id: str,
+def load_saved_config(
+    saved_config_id: str,
     overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create an analysis-ready config from a template.
     
     Args:
-        template_id: ID of template to use
+        saved_config_id: ID of template to use
         overrides: Dict of values to override
         
     Returns:
         Config dict ready for analysis
     """
     manager = TemplateManager()
-    template = manager.get_template(template_id)
+    template = manager.get_template(saved_config_id)
     
     if template is None:
-        raise ValueError(f"Template '{template_id}' not found")
+        raise ValueError(f"Template '{saved_config_id}' not found")
     
     config = template.to_config()
     
@@ -538,3 +553,20 @@ def create_config_from_template(
         config = merge_configs(config, overrides)
     
     return config
+
+
+# =============================================================================
+# BACKWARD COMPATIBILITY ALIASES (v2.3.0)
+# =============================================================================
+# These allow old code using "template" terminology to continue working
+
+# Class aliases
+ConfigTemplate = SavedConfig  # Old name → New name
+TemplateManager = SavedConfigManager  # Old name → New name
+
+# Dictionary aliases
+BUILTIN_TEMPLATES = BUILTIN_SAVED_CONFIGS  # Old name → New name
+
+# Function aliases
+create_config_from_template = load_saved_config  # Old name → New name
+
