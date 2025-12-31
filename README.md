@@ -404,11 +404,26 @@ manager.save_template(child, "my_template")
 # - hot_fire_n2o_htpb: N2O/HTPB hybrid
 ```
 
+## Documentation
+
+### For Users
+- **[WHATS_NEW.md](WHATS_NEW.md)** - What's new in v2.1.0 and v2.2.0 (start here for new features!)
+- **[QUICK_ITERATION_MODE.md](QUICK_ITERATION_MODE.md)** - Comprehensive guide to Quick Iteration Mode for parameter sweeps
+- **[TEMPLATE_INTEGRATION.md](TEMPLATE_INTEGRATION.md)** - Template Integration feature documentation
+
+### For Developers
+- **[CLAUDE.md](CLAUDE.md)** - Developer guide, conventions, and AI assistant instructions
+- **[docs/development/](docs/development/)** - Development history and design rationale
+
+### For Reference
+- **[docs/archive/](docs/archive/)** - Archived documentation (PR descriptions, etc.)
+
 ## Version
 
-- Core Version: 2.0.0
-- Schema Version: 3 (campaign database)
-- Processing Version: 2.0.0+integrity
+- **Application Version**: 2.2.0 (Advanced Workflow Release)
+- **Core Version**: 2.0.0 (Engineering Integrity)
+- **Schema Version**: 3 (campaign database)
+- **Processing Version**: 2.0.0+integrity
 
 ## License
 
