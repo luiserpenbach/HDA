@@ -2,7 +2,127 @@
 
 ---
 
-## Version 2.2.0 (Current Release)
+## Version 2.3.0 (Current Release)
+**Release Date**: 2025-12-31
+**Focus**: Configuration Architecture Improvements
+
+### 🏗️ Major Architecture Change: Config/Metadata Separation
+
+v2.3.0 introduces a clearer separation between **testbench hardware** (Active Configuration) and **test article properties** (Test Metadata).
+
+**Why This Matters:**
+- **Before**: Had to create a new "config" for every injector element or fluid type
+- **After**: Load testbench config once, provide metadata per test
+- **Result**: Less repetition, clearer organization
+
+#### Active Configuration (Testbench Hardware)
+**What it contains**: Sensor mappings, calibration uncertainties, channel IDs
+**When it changes**: Only when testbench is modified/recalibrated
+**Where it's stored**: `saved_configs/` folder (formerly `config_templates/`)
+
+Example:
+```json
+{
+  "config_name": "LCSC Testbench Standard",
+  "config_version": "2.3.0",
+  "test_type": "cold_flow",
+  "channel_mapping": {
+    "10001": "FU-PT-01",  // DAQ ID → P&ID name
+    "10002": "FU-PT-02"
+  },
+  "sensor_mapping": {
+    "pressure_upstream": "FU-PT-01",  // Role → Sensor
+    "pressure_downstream": "FU-PT-02",
+    "temperature": "FU-TT-01"
+  },
+  "sensor_uncertainties": {...}
+}
+```
+
+#### Test Metadata (Test Article Properties)
+**What it contains**: Geometry, fluid, part numbers, serial numbers
+**When it changes**: Every test (different injector, fluid, etc.)
+**Where it's stored**: `metadata.json` in test folder, or UI entry
+
+Example:
+```json
+{
+  "part_number": "INJ-B1-03",
+  "serial_number": "SN-2024-045",
+  "geometry": {
+    "orifice_area_mm2": 3.14159
+  },
+  "fluid": {
+    "name": "nitrogen",
+    "gamma": 1.4
+  }
+}
+```
+
+### Terminology Updates
+| Old (v2.0-v2.2) | New (v2.3.0) | Meaning |
+|-----------------|--------------|---------|
+| Template | Saved Config | Reusable testbench configuration |
+| Config Templates | Saved Configurations | Library of saved configs |
+| config_templates/ | saved_configs/ | Folder name |
+
+**Backward Compatibility**: All old configs auto-migrate. No action required.
+
+### New Features
+
+#### 📁 Automatic Metadata Loading
+Test metadata now auto-loads from `metadata.json` in your test data folder.
+
+**How to Use**:
+1. Create `metadata.json` alongside your test CSV file
+2. Include geometry, fluid, part numbers
+3. Upload CSV → metadata loads automatically
+4. If no file, enter metadata via UI (optional for analysis, required for campaign)
+
+#### 🔧 Migration Tool
+Automatic migration of v2.0-v2.2 configs to v2.3.0 format.
+
+```bash
+python scripts/migrate_configs_v2.3.py --dry-run  # Preview
+python scripts/migrate_configs_v2.3.py            # Execute
+```
+
+Splits old configs into:
+- Active Configuration (testbench hardware) → `saved_configs/`
+- Metadata Example (test article properties) → `example_metadata/`
+
+#### 🗺️ Channel Mapping
+New layer in Active Configuration maps DAQ channel IDs to P&ID sensor names.
+
+**Workflow**:
+```
+DAQ Output: Channel 10001 →
+Channel Mapping: "10001": "FU-PT-01" →
+Sensor Mapping: "pressure_upstream": "FU-PT-01" →
+Analysis: Uses upstream pressure
+```
+
+### Migration Guide
+
+**Existing Users (v2.0-v2.2)**:
+1. Run migration script (optional - auto-migration happens transparently)
+2. Old configs continue to work via automatic migration
+3. Gradually adopt new format for clarity
+
+**New Workflow**:
+```
+Old: Upload config with geometry+fluid for each test
+New: Select Active Configuration once → provide metadata per test
+```
+
+**Example**:
+- Testing 10 injector elements with nitrogen
+- **Before**: Upload config 10 times (with different geometry each time)
+- **After**: Select "LCSC Nitrogen Testbench" config once → provide geometry in metadata per test
+
+---
+
+## Version 2.2.0
 **Release Date**: 2025-12-31
 **Focus**: Advanced Workflow Features
 
