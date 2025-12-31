@@ -140,16 +140,144 @@ if selected_campaign:
         
         with tab2:
             st.header("Individual Test Reports")
-            
+
             if 'test_id' in df.columns:
                 test_ids = df['test_id'].tolist()
-                
+
+                # Bulk Report Generation Option
+                generate_all = st.checkbox(
+                    f"📦 Generate Reports for All Tests ({len(test_ids)} tests)",
+                    value=False,
+                    help="Generate HTML reports for all tests in this campaign and download as ZIP"
+                )
+
+                if generate_all:
+                    st.info(f"Bulk mode: Will generate {len(test_ids)} reports")
+                    include_config_bulk = st.checkbox("Include config snapshots in all reports", value=False)
+
+                    if st.button("🚀 Generate All Reports", type="primary"):
+                        import zipfile
+                        import tempfile
+
+                        with st.spinner(f"Generating {len(test_ids)} reports..."):
+                            # Create progress bar
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+
+                            # Create a temporary directory for reports
+                            with tempfile.TemporaryDirectory() as tmpdir:
+                                tmpdir_path = Path(tmpdir)
+                                reports_generated = 0
+                                errors = []
+
+                                for idx, test_id in enumerate(test_ids):
+                                    try:
+                                        status_text.text(f"Generating report {idx+1}/{len(test_ids)}: {test_id}")
+
+                                        test_row = df[df['test_id'] == test_id].iloc[0]
+
+                                        # Extract measurements
+                                        measurements = {}
+                                        for col in df.columns:
+                                            if col.startswith('avg_'):
+                                                val = test_row[col]
+                                                if pd.notna(val):
+                                                    u_col = col.replace('avg_', 'u_')
+                                                    if u_col in df.columns and pd.notna(test_row[u_col]):
+                                                        measurements[col] = MeasurementWithUncertainty(
+                                                            float(val), float(test_row[u_col]), '', col
+                                                        )
+                                                    else:
+                                                        measurements[col] = float(val)
+
+                                        # Extract traceability
+                                        traceability = {}
+                                        trace_cols = ['raw_data_hash', 'config_hash', 'analyst_username',
+                                                     'analysis_timestamp_utc', 'processing_version']
+                                        for col in trace_cols:
+                                            if col in df.columns:
+                                                traceability[col] = test_row[col]
+
+                                        # QC report
+                                        qc_report = {
+                                            'passed': bool(test_row.get('qc_passed', True)),
+                                            'summary': {},
+                                            'checks': []
+                                        }
+
+                                        # Generate report
+                                        html = generate_test_report(
+                                            test_id=test_id,
+                                            test_type=campaign_type,
+                                            measurements=measurements,
+                                            traceability=traceability,
+                                            qc_report=qc_report,
+                                            include_config_snapshot=include_config_bulk,
+                                        )
+
+                                        # Save to temp directory
+                                        report_path = tmpdir_path / f"{test_id}_report.html"
+                                        with open(report_path, 'w') as f:
+                                            f.write(html)
+
+                                        reports_generated += 1
+
+                                    except Exception as e:
+                                        errors.append(f"{test_id}: {str(e)}")
+
+                                    # Update progress
+                                    progress_bar.progress((idx + 1) / len(test_ids))
+
+                                progress_bar.empty()
+                                status_text.empty()
+
+                                # Create ZIP file
+                                if reports_generated > 0:
+                                    zip_buffer = io.BytesIO()
+                                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                                        for report_file in tmpdir_path.glob("*.html"):
+                                            zf.write(report_file, arcname=report_file.name)
+
+                                        # Add summary file
+                                        summary = f"""Bulk Report Generation Summary
+Campaign: {selected_campaign}
+Date: {datetime.now().isoformat()}
+Total Tests: {len(test_ids)}
+Reports Generated: {reports_generated}
+Errors: {len(errors)}
+"""
+                                        if errors:
+                                            summary += "\n\nErrors:\n" + "\n".join(errors)
+
+                                        zf.writestr("SUMMARY.txt", summary)
+
+                                    zip_buffer.seek(0)
+
+                                    st.success(f"✅ Generated {reports_generated} reports!")
+
+                                    if errors:
+                                        with st.expander(f"⚠️ {len(errors)} Errors"):
+                                            for error in errors:
+                                                st.warning(error)
+
+                                    st.download_button(
+                                        "📥 Download All Reports (ZIP)",
+                                        zip_buffer,
+                                        file_name=f"{selected_campaign}_reports_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                                        mime="application/zip"
+                                    )
+                                else:
+                                    st.error("No reports were generated successfully")
+
+                    st.divider()
+                    st.caption("Or generate individual reports below:")
+
                 col1, col2 = st.columns([1, 2])
-                
+
                 with col1:
-                    selected_test = st.selectbox("Select Test", test_ids)
-                    include_config = st.checkbox("Include config snapshot", value=False)
-                    generate_test_btn = st.button("Generate Test Report")
+                    selected_test = st.selectbox("Select Test", test_ids, disabled=generate_all)
+                    include_config = st.checkbox("Include config snapshot", value=False, disabled=generate_all)
+                    generate_test_btn = st.button("Generate Test Report", disabled=generate_all)
                 
                 with col2:
                     if generate_test_btn and selected_test:

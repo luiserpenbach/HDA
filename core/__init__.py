@@ -17,6 +17,10 @@ P1 Components (High Priority):
 - batch_analysis: Multi-file processing
 - export: Enhanced data export with metadata
 
+Shared Utilities:
+- config_manager: Unified configuration management (eliminates duplication)
+- steady_state_detection: Consolidated steady-state detection methods
+
 Usage:
     from core.traceability import create_full_traceability_record
     from core.uncertainty import calculate_cold_flow_uncertainties
@@ -27,6 +31,8 @@ Usage:
     from core.reporting import generate_test_report
     from core.batch_analysis import run_batch_analysis
     from core.export import export_campaign_excel
+    from core.config_manager import ConfigManager
+    from core.steady_state_detection import detect_steady_state_auto
 """
 
 from .traceability import (
@@ -162,6 +168,22 @@ from .export import (
     export_test_data_with_context,
     create_traceability_report,
     export_for_qualification,
+)
+
+# Configuration Management
+from .config_manager import (
+    ConfigManager,
+    ConfigInfo,
+)
+
+# Steady-State Detection
+from .steady_state_detection import (
+    detect_steady_state_cv,
+    detect_steady_state_ml,
+    detect_steady_state_derivative,
+    detect_steady_state_simple,
+    detect_steady_state_auto,
+    validate_steady_window,
 )
 
 __version__ = "2.0.0"

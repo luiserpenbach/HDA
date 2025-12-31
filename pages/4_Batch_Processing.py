@@ -24,6 +24,8 @@ from core.batch_analysis import (
 )
 from core.campaign_manager_v2 import get_available_campaigns, save_to_campaign
 from core.integrated_analysis import analyze_cold_flow_test, analyze_hot_fire_test
+from core.config_manager import ConfigManager
+from core.steady_state_detection import detect_steady_state_simple, detect_steady_state_auto
 
 st.set_page_config(page_title="Batch Processing", page_icon="BP", layout="wide")
 
@@ -37,89 +39,17 @@ if 'uploaded_files_data' not in st.session_state:
     st.session_state.uploaded_files_data = {}
 
 
-def create_default_config(test_type):
-    """Create default configuration."""
-    if test_type == "cold_flow":
-        return {
-            'config_name': 'Batch Cold Flow',
-            'test_type': 'cold_flow',
-            'columns': {
-                'timestamp': 'timestamp',
-                'upstream_pressure': 'P_upstream',
-                'downstream_pressure': 'P_downstream',
-                'temperature': 'T_fluid',
-                'mass_flow': 'mass_flow',
-            },
-            'fluid': {'name': 'nitrogen', 'gamma': 1.4, 'R': 296.8},
-            'geometry': {'orifice_area_mm2': 1.0},
-            'uncertainties': {
-                'pressure': {'type': 'relative', 'value': 0.005},
-                'temperature': {'type': 'absolute', 'value': 1.0},
-                'mass_flow': {'type': 'relative', 'value': 0.01},
-            },
-            'geometry_uncertainties': {'area': {'type': 'relative', 'value': 0.02}},
-            'settings': {'sample_rate_hz': 100},
-        }
-    else:
-        return {
-            'config_name': 'Batch Hot Fire',
-            'test_type': 'hot_fire',
-            'columns': {
-                'timestamp': 'timestamp',
-                'chamber_pressure': 'P_chamber',
-                'ox_mass_flow': 'mf_ox',
-                'fuel_mass_flow': 'mf_fuel',
-                'thrust': 'thrust',
-            },
-            'geometry': {'throat_area_mm2': 100.0},
-            'uncertainties': {
-                'chamber_pressure': {'type': 'relative', 'value': 0.005},
-                'mass_flow': {'type': 'relative', 'value': 0.01},
-            },
-            'settings': {'sample_rate_hz': 1000},
-        }
+# Configuration management now uses ConfigManager.get_default_config()
+# (replaced create_default_config function)
 
-
-def detect_steady_simple(df, config):
-    """Simple steady-state detection."""
-    pressure_col = config.get('columns', {}).get('upstream_pressure') or \
-                   config.get('columns', {}).get('chamber_pressure')
-    
-    timestamp_col = config.get('columns', {}).get('timestamp', 'timestamp')
-    
-    if pressure_col not in df.columns or timestamp_col not in df.columns:
-        # Default to middle 50%
-        n = len(df)
-        if timestamp_col in df.columns:
-            timestamps = df[timestamp_col].values
-            return timestamps[n//4], timestamps[3*n//4]
-        return n//4, 3*n//4
-    
-    pressure = df[pressure_col].values
-    timestamps = df[timestamp_col].values
-    
-    # Rolling CV
-    window = 50
-    rolling_std = pd.Series(pressure).rolling(window=window, center=True).std()
-    rolling_mean = pd.Series(pressure).rolling(window=window, center=True).mean()
-    cv = (rolling_std / rolling_mean).fillna(1.0)
-    
-    # Find stable region
-    threshold = 0.02
-    stable_mask = cv < threshold
-    
-    if stable_mask.sum() < window:
-        n = len(df)
-        return timestamps[n//4], timestamps[3*n//4]
-    
-    stable_indices = np.where(stable_mask)[0]
-    return timestamps[stable_indices[0]], timestamps[stable_indices[-1]]
+# Steady-state detection now uses core.steady_state_detection functions
+# (replaced detect_steady_simple function - use detect_steady_state_auto or detect_steady_state_simple instead)
 
 
 def analyze_file_wrapper(df, config, test_id, file_path):
     """Wrapper for analysis function."""
-    # Detect steady state
-    steady_window = detect_steady_simple(df, config)
+    # Detect steady state using core module
+    steady_window = detect_steady_state_simple(df, config, time_col='time_s' if 'time_s' in df.columns else 'timestamp')
     
     test_type = config.get('test_type', 'cold_flow')
     
@@ -155,9 +85,10 @@ with st.sidebar:
         ["cold_flow", "hot_fire"],
         format_func=lambda x: "Cold Flow" if x == "cold_flow" else "Hot Fire"
     )
-    
-    config = create_default_config(test_type)
-    
+
+    # Get default config using ConfigManager
+    config = ConfigManager.get_default_config(test_type)
+
     # Config editor
     with st.expander("Edit Configuration"):
         config_str = st.text_area(
@@ -169,6 +100,8 @@ with st.sidebar:
             try:
                 config = json.loads(config_str)
                 st.success("Updated")
+                # Save to recent configs
+                ConfigManager.save_to_recent(config, 'custom', config.get('config_name', 'Batch Config'))
             except:
                 st.error("Invalid JSON")
     
