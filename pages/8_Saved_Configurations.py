@@ -1,7 +1,7 @@
 """
 Configuration Templates Page (P2)
 =================================
-Manage configuration templates for test analysis.
+Manage configuration saved configurations for test analysis.
 """
 
 import streamlit as st
@@ -9,7 +9,7 @@ import pandas as pd
 import json
 from datetime import datetime
 
-from core.templates import (
+from core.saved_configs import (
     TemplateManager,
     ConfigTemplate,
     BUILTIN_TEMPLATES,
@@ -17,10 +17,10 @@ from core.templates import (
     validate_config_against_template,
 )
 
-st.set_page_config(page_title="Config Templates", page_icon="", layout="wide")
+st.set_page_config(page_title="Saved Configurations", page_icon="", layout="wide")
 
 st.title(" Configuration Templates")
-st.markdown("Manage configuration templates for consistent test analysis.")
+st.markdown("Manage configuration saved configurations for consistent test analysis.")
 
 # Initialize template manager
 manager = TemplateManager()

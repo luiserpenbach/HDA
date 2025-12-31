@@ -237,7 +237,7 @@ else:
 
 test_section("TestTemplates")
 
-from core.templates import (
+from core.saved_configs import (
     ConfigTemplate,
     TemplateManager,
     BUILTIN_TEMPLATES,

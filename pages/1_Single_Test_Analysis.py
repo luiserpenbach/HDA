@@ -390,7 +390,7 @@ with st.sidebar:
     # Tab for Recent vs Templates
     quick_config_mode = st.radio(
         "Quick Config Mode",
-        ["Recent Configs", "Templates"],
+        ["Recent Configs", "Saved Configs"],
         horizontal=True,
         label_visibility="collapsed"
     )
@@ -423,7 +423,7 @@ with st.sidebar:
 
     else:  # Templates mode
         try:
-            from core.templates import TemplateManager, create_config_from_template
+            from core.saved_configs import TemplateManager, create_config_from_template
 
             manager = TemplateManager()
             templates = manager.list_templates()
