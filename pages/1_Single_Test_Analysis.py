@@ -26,6 +26,13 @@ from core.config_validation import validate_config_simple
 from core.traceability import compute_file_hash
 from core.reporting import generate_test_report, save_report
 from core.campaign_manager_v2 import get_available_campaigns, save_to_campaign
+from core.config_manager import ConfigManager
+from core.steady_state_detection import (
+    detect_steady_state_cv,
+    detect_steady_state_ml,
+    detect_steady_state_derivative,
+    validate_steady_window
+)
 
 st.set_page_config(page_title="Single Test Analysis", page_icon="STA", layout="wide")
 
@@ -222,230 +229,8 @@ def handle_nan_values(df: pd.DataFrame, method: str = 'interpolate',
 # STEADY-STATE DETECTION FUNCTIONS
 # =============================================================================
 
-def detect_steady_state_cv(df: pd.DataFrame, signal_col: str,
-                           window_size: int = 50, cv_threshold: float = 0.02,
-                           time_col: str = 'time_s') -> tuple:
-    """
-    CV-based steady-state detection.
-
-    Detects steady state by finding regions where the coefficient of variation
-    (CV = std/mean) falls below a threshold.
-
-    Args:
-        df: DataFrame with test data
-        signal_col: Column to analyze for stability
-        window_size: Rolling window size in samples
-        cv_threshold: Maximum CV for steady state
-        time_col: Time column name
-
-    Returns:
-        Tuple of (start_time, end_time) in the units of time_col, or (None, None)
-    """
-    if signal_col not in df.columns:
-        return None, None
-
-    signal = df[signal_col].values
-    times = df[time_col].values if time_col in df.columns else np.arange(len(signal))
-
-    if len(signal) < window_size:
-        return None, None
-
-    # Calculate rolling CV
-    rolling_mean = pd.Series(signal).rolling(window=window_size, center=True).mean()
-    rolling_std = pd.Series(signal).rolling(window=window_size, center=True).std()
-
-    cv = rolling_std / rolling_mean.abs()
-    cv = cv.fillna(1.0)  # Fill NaN with high CV
-
-    # Find stable regions
-    stable_mask = cv < cv_threshold
-
-    if not stable_mask.any():
-        return None, None
-
-    stable_indices = np.where(stable_mask)[0]
-
-    if len(stable_indices) == 0:
-        return None, None
-
-    # Find longest continuous stable region
-    breaks = np.where(np.diff(stable_indices) > 1)[0]
-
-    if len(breaks) == 0:
-        start_idx = stable_indices[0]
-        end_idx = stable_indices[-1]
-    else:
-        segments = []
-        prev = 0
-        for b in breaks:
-            segments.append((prev, b))
-            prev = b + 1
-        segments.append((prev, len(stable_indices) - 1))
-
-        longest = max(segments, key=lambda x: x[1] - x[0])
-        start_idx = stable_indices[longest[0]]
-        end_idx = stable_indices[longest[1]]
-
-    return float(times[start_idx]), float(times[end_idx])
-
-
-def detect_steady_state_ml(df: pd.DataFrame, signal_cols: list,
-                           time_col: str = 'time_s',
-                           contamination: float = 0.3) -> tuple:
-    """
-    ML-based steady-state detection using Isolation Forest.
-
-    Uses anomaly detection to find the "normal" operating region,
-    which typically corresponds to steady state.
-
-    Args:
-        df: DataFrame with test data
-        signal_cols: Columns to use for detection
-        time_col: Time column name
-        contamination: Expected fraction of non-steady-state data
-
-    Returns:
-        Tuple of (start_time, end_time) in the units of time_col, or (None, None)
-    """
-    try:
-        from sklearn.ensemble import IsolationForest
-    except ImportError:
-        st.warning("scikit-learn not available for ML detection. Using CV method.")
-        return None, None
-
-    # Prepare features
-    available_cols = [c for c in signal_cols if c in df.columns]
-    if not available_cols:
-        return None, None
-
-    times = df[time_col].values if time_col in df.columns else np.arange(len(df))
-
-    # Create feature matrix with rolling statistics
-    features = []
-    for col in available_cols:
-        signal = df[col].values
-        features.append(signal)
-
-        # Add rolling mean and std as features
-        rolling_mean = pd.Series(signal).rolling(window=20, center=True).mean().fillna(method='bfill').fillna(method='ffill')
-        rolling_std = pd.Series(signal).rolling(window=20, center=True).std().fillna(0)
-        features.append(rolling_mean.values)
-        features.append(rolling_std.values)
-
-    X = np.column_stack(features)
-
-    # Remove rows with NaN
-    valid_mask = ~np.isnan(X).any(axis=1)
-    X_valid = X[valid_mask]
-    valid_indices = np.where(valid_mask)[0]
-
-    if len(X_valid) < 50:
-        return None, None
-
-    # Fit Isolation Forest
-    clf = IsolationForest(contamination=contamination, random_state=42, n_estimators=100)
-    predictions = clf.fit_predict(X_valid)
-
-    # Find longest inlier region (predictions == 1)
-    inlier_mask = predictions == 1
-    inlier_indices = valid_indices[inlier_mask]
-
-    if len(inlier_indices) == 0:
-        return None, None
-
-    # Find longest continuous inlier region
-    breaks = np.where(np.diff(inlier_indices) > 5)[0]  # Allow small gaps
-
-    if len(breaks) == 0:
-        start_idx = inlier_indices[0]
-        end_idx = inlier_indices[-1]
-    else:
-        segments = []
-        prev = 0
-        for b in breaks:
-            segments.append((inlier_indices[prev], inlier_indices[b]))
-            prev = b + 1
-        segments.append((inlier_indices[prev], inlier_indices[-1]))
-
-        longest = max(segments, key=lambda x: x[1] - x[0])
-        start_idx, end_idx = longest
-
-    return float(times[start_idx]), float(times[end_idx])
-
-
-def detect_steady_state_derivative(df: pd.DataFrame, signal_col: str,
-                                    time_col: str = 'time_s',
-                                    derivative_threshold: float = 0.1) -> tuple:
-    """
-    Derivative-based steady-state detection.
-
-    Finds regions where the derivative is close to zero, indicating
-    no significant change in the signal.
-
-    Args:
-        df: DataFrame with test data
-        signal_col: Column to analyze
-        time_col: Time column name
-        derivative_threshold: Maximum normalized derivative for steady state
-
-    Returns:
-        Tuple of (start_time, end_time), or (None, None)
-    """
-    if signal_col not in df.columns:
-        return None, None
-
-    signal = df[signal_col].values
-    times = df[time_col].values if time_col in df.columns else np.arange(len(signal))
-
-    # Calculate derivative
-    dt = np.diff(times)
-    ds = np.diff(signal)
-
-    # Avoid division by zero
-    dt[dt == 0] = 1e-10
-    derivative = ds / dt
-
-    # Normalize by signal range
-    signal_range = np.ptp(signal)
-    if signal_range > 0:
-        normalized_deriv = np.abs(derivative) / signal_range
-    else:
-        normalized_deriv = np.abs(derivative)
-
-    # Smooth the derivative
-    smoothed = pd.Series(normalized_deriv).rolling(window=20, center=True).mean().fillna(1.0)
-
-    # Find stable regions
-    stable_mask = smoothed.values < derivative_threshold
-
-    if not stable_mask.any():
-        return None, None
-
-    stable_indices = np.where(stable_mask)[0]
-
-    if len(stable_indices) < 10:
-        return None, None
-
-    # Find longest continuous stable region
-    breaks = np.where(np.diff(stable_indices) > 1)[0]
-
-    if len(breaks) == 0:
-        start_idx = stable_indices[0]
-        end_idx = stable_indices[-1]
-    else:
-        segments = []
-        prev = 0
-        for b in breaks:
-            segments.append((prev, b))
-            prev = b + 1
-        segments.append((prev, len(stable_indices) - 1))
-
-        longest = max(segments, key=lambda x: x[1] - x[0])
-        start_idx = stable_indices[longest[0]]
-        end_idx = stable_indices[longest[1]]
-
-    # Adjust indices since derivative is shorter
-    return float(times[start_idx]), float(times[min(end_idx + 1, len(times) - 1)])
+# Steady-state detection functions now imported from core.steady_state_detection
+# (detect_steady_state_cv, detect_steady_state_ml, detect_steady_state_derivative)
 
 
 def apply_channel_mapping(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, dict]:
@@ -507,89 +292,8 @@ def apply_channel_mapping(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame,
     return df_mapped, stats
 
 
-def create_default_cold_flow_config():
-    """Create default cold flow configuration."""
-    return {
-        'config_name': 'Default Cold Flow',
-        'test_type': 'cold_flow',
-        'channel_config': {
-            # Example mapping - user should customize
-            # "10001": "PT-UP-01",
-            # "10002": "PT-DN-01",
-            # "10003": "TC-01",
-            # "10004": "FM-01",
-        },
-        'columns': {
-            'timestamp': 'timestamp',
-            'upstream_pressure': 'P_upstream',
-            'downstream_pressure': 'P_downstream',
-            'temperature': 'T_fluid',
-            'mass_flow': 'mass_flow',
-        },
-        'fluid': {
-            'name': 'nitrogen',
-            'gamma': 1.4,
-            'R': 296.8,
-        },
-        'geometry': {
-            'orifice_area_mm2': 1.0,
-            'orifice_diameter_mm': 1.128,
-        },
-        'uncertainties': {
-            'pressure': {'type': 'relative', 'value': 0.005},
-            'temperature': {'type': 'absolute', 'value': 1.0},
-            'mass_flow': {'type': 'relative', 'value': 0.01},
-        },
-        'geometry_uncertainties': {
-            'area': {'type': 'relative', 'value': 0.02},
-        },
-        'settings': {
-            'sample_rate_hz': 100,
-        },
-        'qc': {
-            'max_nan_ratio': 0.05,
-            'min_correlation': 0.3,
-        }
-    }
-
-
-def create_default_hot_fire_config():
-    """Create default hot fire configuration."""
-    return {
-        'config_name': 'Default Hot Fire',
-        'test_type': 'hot_fire',
-        'channel_config': {
-            # Example mapping - user should customize
-            # "10001": "IG-PT-01",
-            # "10002": "FU-PT-01",
-            # "10003": "FU-FM-01",
-            # "10004": "OX-FM-01",
-            # "10009": "LC-01",
-        },
-        'columns': {
-            'timestamp': 'timestamp',
-            'chamber_pressure': 'P_chamber',
-            'ox_mass_flow': 'mf_ox',
-            'fuel_mass_flow': 'mf_fuel',
-            'thrust': 'thrust',
-        },
-        'propellants': {
-            'oxidizer': 'LOX',
-            'fuel': 'RP-1',
-        },
-        'geometry': {
-            'throat_area_mm2': 100.0,
-            'nozzle_expansion_ratio': 10.0,
-        },
-        'uncertainties': {
-            'chamber_pressure': {'type': 'relative', 'value': 0.005},
-            'mass_flow': {'type': 'relative', 'value': 0.01},
-            'thrust': {'type': 'relative', 'value': 0.02},
-        },
-        'settings': {
-            'sample_rate_hz': 1000,
-        },
-    }
+# Default configuration functions now provided by ConfigManager.get_default_config()
+# (replaced create_default_cold_flow_config and create_default_hot_fire_config)
 
 
 def plot_data_with_window(df, config, steady_window):
@@ -670,14 +374,11 @@ with st.sidebar:
         format_func=lambda x: "Cold Flow" if x == "cold_flow" else "Hot Fire"
     )
 
-    # Load or create config
+    # Load or create config using ConfigManager
     config_source = st.radio("Configuration Source", ["Default", "Upload JSON", "Manual"])
 
     if config_source == "Default":
-        if test_type == "cold_flow":
-            config = create_default_cold_flow_config()
-        else:
-            config = create_default_hot_fire_config()
+        config = ConfigManager.get_default_config(test_type)
         st.success("Using default configuration")
 
     elif config_source == "Upload JSON":
@@ -686,15 +387,17 @@ with st.sidebar:
             try:
                 config = json.load(config_file)
                 st.success("Configuration loaded")
+                # Save to recent configs
+                ConfigManager.save_to_recent(config, 'uploaded', config.get('config_name', 'Uploaded Config'))
             except Exception as e:
                 st.error(f"Error loading config: {e}")
-                config = create_default_cold_flow_config()
+                config = ConfigManager.get_default_config(test_type)
         else:
-            config = create_default_cold_flow_config()
+            config = ConfigManager.get_default_config(test_type)
 
     else:  # Manual
         st.info("Manual configuration - use expander below")
-        config = create_default_cold_flow_config() if test_type == "cold_flow" else create_default_hot_fire_config()
+        config = ConfigManager.get_default_config(test_type)
 
     # Show config expander
     with st.expander("View/Edit Configuration"):
@@ -707,6 +410,8 @@ with st.sidebar:
             try:
                 config = json.loads(config_str)
                 st.success("Configuration updated")
+                # Save to recent configs
+                ConfigManager.save_to_recent(config, 'custom', config.get('config_name', 'Custom Config'))
             except Exception as e:
                 st.error(f"Invalid JSON: {e}")
 
