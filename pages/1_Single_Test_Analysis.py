@@ -1266,7 +1266,7 @@ if df_raw is not None:
 
     with col1:
         # Pre-populate from loaded metadata if available
-        loaded_meta = st.session_state.get('loaded_metadata', {})
+        loaded_meta = st.session_state.get('loaded_metadata') or {}
 
         default_test_id = loaded_meta.get('test_id', f"TEST-{datetime.now().strftime('%Y%m%d-%H%M')}")
         test_id = st.text_input("Test ID", value=default_test_id)
