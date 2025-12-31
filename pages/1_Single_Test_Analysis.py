@@ -384,32 +384,97 @@ with st.sidebar:
         format_func=lambda x: "Cold Flow" if x == "cold_flow" else "Hot Fire"
     )
 
-    # Quick Config: Recent Configs dropdown
+    # Quick Config: Recent Configs & Templates
     st.subheader("⚡ Quick Config")
-    recent_configs = ConfigManager.get_recent_configs(limit=5)
+
+    # Tab for Recent vs Templates
+    quick_config_mode = st.radio(
+        "Quick Config Mode",
+        ["Recent Configs", "Templates"],
+        horizontal=True,
+        label_visibility="collapsed"
+    )
 
     config = None  # Will be set based on user selection
 
-    if recent_configs:
-        # Create options for recent configs
-        recent_options = ["-- Select Recent Config --"] + [
-            f"{r['info']['config_name']} ({r['info']['source']}, {r['info']['timestamp'][:10]})"
-            for r in recent_configs
-        ]
+    if quick_config_mode == "Recent Configs":
+        recent_configs = ConfigManager.get_recent_configs(limit=5)
 
-        selected_recent = st.selectbox(
-            "Recent Configurations",
-            recent_options,
-            help="Select from your 5 most recently used configurations"
-        )
+        if recent_configs:
+            # Create options for recent configs
+            recent_options = ["-- Select Recent Config --"] + [
+                f"{r['info']['config_name']} ({r['info']['source']}, {r['info']['timestamp'][:10]})"
+                for r in recent_configs
+            ]
 
-        if selected_recent != "-- Select Recent Config --":
-            # Find the selected config
-            idx = recent_options.index(selected_recent) - 1  # -1 for placeholder
-            config = recent_configs[idx]['config']
-            st.success(f"✓ Loaded: {recent_configs[idx]['info']['config_name']}")
-    else:
-        st.info("No recent configs yet. Use a config source below.")
+            selected_recent = st.selectbox(
+                "Recent Configurations",
+                recent_options,
+                help="Select from your 5 most recently used configurations"
+            )
+
+            if selected_recent != "-- Select Recent Config --":
+                # Find the selected config
+                idx = recent_options.index(selected_recent) - 1  # -1 for placeholder
+                config = recent_configs[idx]['config']
+                st.success(f"✓ Loaded: {recent_configs[idx]['info']['config_name']}")
+        else:
+            st.info("No recent configs yet. Try templates or other sources below.")
+
+    else:  # Templates mode
+        try:
+            from core.templates import TemplateManager, create_config_from_template
+
+            manager = TemplateManager()
+            templates = manager.list_templates()
+
+            if templates:
+                # Filter by test type
+                filtered_templates = [t for t in templates if t.get('test_type') == test_type]
+
+                if filtered_templates:
+                    # Create template options
+                    template_options = ["-- Select Template --"] + [
+                        f"{t['id']} - {t.get('config_name', 'Unnamed')}"
+                        for t in filtered_templates
+                    ]
+
+                    selected_template = st.selectbox(
+                        f"Available {test_type.replace('_', ' ').title()} Templates",
+                        template_options,
+                        help="Select a pre-configured template for quick setup"
+                    )
+
+                    if selected_template != "-- Select Template --":
+                        # Extract template ID
+                        template_id = selected_template.split(" - ")[0]
+
+                        # Show template info
+                        template_info = next(t for t in filtered_templates if t['id'] == template_id)
+
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            if template_info.get('description'):
+                                st.caption(f"📝 {template_info['description']}")
+                            if template_info.get('tags'):
+                                st.caption(f"🏷️ Tags: {', '.join(template_info['tags'])}")
+
+                        with col2:
+                            if st.button("Load", key="load_template_btn", use_container_width=True):
+                                try:
+                                    config = create_config_from_template(template_id)
+                                    ConfigManager.save_to_recent(config, 'template', config.get('config_name', template_id))
+                                    st.success(f"✓ Loaded template: {template_id}")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error loading template: {e}")
+                else:
+                    st.info(f"No {test_type} templates available. Create one in Config Templates page.")
+            else:
+                st.info("No templates available. Create templates in Config Templates page (Page 8).")
+
+        except ImportError:
+            st.warning("Template system not available. Use other config sources below.")
 
     st.divider()
 
