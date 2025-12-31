@@ -206,4 +206,15 @@ from .metadata_manager import (
     save_metadata_template,
 )
 
+# Saved Configurations (v2.3.0+, formerly "templates")
+from .saved_configs import (
+    SavedConfig,
+    SavedConfigManager,
+    load_saved_config,
+    # Backward compatibility aliases
+    ConfigTemplate,  # Alias for SavedConfig
+    TemplateManager,  # Alias for SavedConfigManager
+    create_config_from_template,  # Alias for load_saved_config
+)
+
 __version__ = "2.3.0"
