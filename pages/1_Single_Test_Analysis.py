@@ -51,6 +51,16 @@ if 'steady_window' not in st.session_state:
 if 'file_hash' not in st.session_state:
     st.session_state.file_hash = None
 
+# Initialize detection preferences (persistent across tests)
+if 'detection_preferences' not in st.session_state:
+    st.session_state.detection_preferences = {
+        'method': 'CV-based (Simple)',
+        'cv_threshold': 0.02,
+        'cv_window_size': 50,
+        'ml_contamination': 0.3,
+        'deriv_threshold': 0.1,
+    }
+
 
 # =============================================================================
 # DATA PREPROCESSING FUNCTIONS
@@ -374,37 +384,75 @@ with st.sidebar:
         format_func=lambda x: "Cold Flow" if x == "cold_flow" else "Hot Fire"
     )
 
-    # Load or create config using ConfigManager
-    config_source = st.radio("Configuration Source", ["Default", "Upload JSON", "Manual"])
+    # Quick Config: Recent Configs dropdown
+    st.subheader("⚡ Quick Config")
+    recent_configs = ConfigManager.get_recent_configs(limit=5)
 
-    if config_source == "Default":
-        config = ConfigManager.get_default_config(test_type)
-        st.success("Using default configuration")
+    config = None  # Will be set based on user selection
 
-    elif config_source == "Upload JSON":
-        config_file = st.file_uploader("Upload config JSON", type=['json'])
-        if config_file:
-            try:
-                config = json.load(config_file)
-                st.success("Configuration loaded")
-                # Save to recent configs
-                ConfigManager.save_to_recent(config, 'uploaded', config.get('config_name', 'Uploaded Config'))
-            except Exception as e:
-                st.error(f"Error loading config: {e}")
+    if recent_configs:
+        # Create options for recent configs
+        recent_options = ["-- Select Recent Config --"] + [
+            f"{r['info']['config_name']} ({r['info']['source']}, {r['info']['timestamp'][:10]})"
+            for r in recent_configs
+        ]
+
+        selected_recent = st.selectbox(
+            "Recent Configurations",
+            recent_options,
+            help="Select from your 5 most recently used configurations"
+        )
+
+        if selected_recent != "-- Select Recent Config --":
+            # Find the selected config
+            idx = recent_options.index(selected_recent) - 1  # -1 for placeholder
+            config = recent_configs[idx]['config']
+            st.success(f"✓ Loaded: {recent_configs[idx]['info']['config_name']}")
+    else:
+        st.info("No recent configs yet. Use a config source below.")
+
+    st.divider()
+
+    # Standard configuration sources (only if no recent config selected)
+    if config is None:
+        st.subheader("Configuration Source")
+        config_source = st.radio(
+            "Select source",
+            ["Default", "Upload JSON", "Manual"],
+            label_visibility="collapsed"
+        )
+
+        if config_source == "Default":
+            config = ConfigManager.get_default_config(test_type)
+            st.success("Using default configuration")
+            # Save to recent
+            ConfigManager.save_to_recent(config, 'default', config.get('config_name', 'Default'))
+
+        elif config_source == "Upload JSON":
+            config_file = st.file_uploader("Upload config JSON", type=['json'])
+            if config_file:
+                try:
+                    config = json.load(config_file)
+                    st.success("Configuration loaded")
+                    # Save to recent configs
+                    ConfigManager.save_to_recent(config, 'uploaded', config.get('config_name', 'Uploaded Config'))
+                except Exception as e:
+                    st.error(f"Error loading config: {e}")
+                    config = ConfigManager.get_default_config(test_type)
+            else:
                 config = ConfigManager.get_default_config(test_type)
-        else:
+
+        else:  # Manual
+            st.info("Manual configuration - use expander below")
             config = ConfigManager.get_default_config(test_type)
 
-    else:  # Manual
-        st.info("Manual configuration - use expander below")
-        config = ConfigManager.get_default_config(test_type)
-
-    # Show config expander
-    with st.expander("View/Edit Configuration"):
+    # Show config expander for all cases
+    with st.expander("📝 View/Edit Configuration"):
         config_str = st.text_area(
             "Config JSON",
             value=json.dumps(config, indent=2),
-            height=300
+            height=300,
+            key="config_editor"
         )
         if st.button("Apply Changes"):
             try:
@@ -412,6 +460,7 @@ with st.sidebar:
                 st.success("Configuration updated")
                 # Save to recent configs
                 ConfigManager.save_to_recent(config, 'custom', config.get('config_name', 'Custom Config'))
+                st.rerun()  # Refresh to update recent configs list
             except Exception as e:
                 st.error(f"Invalid JSON: {e}")
 
@@ -721,14 +770,24 @@ if df_raw is not None:
     col1, col2 = st.columns([2, 1])
 
     with col2:
+        # Pre-select last-used detection method
+        methods = ["CV-based (Simple)", "ML-based (Isolation Forest)", "Derivative-based", "Manual Selection"]
+        default_method_idx = methods.index(st.session_state.detection_preferences['method']) \
+            if st.session_state.detection_preferences['method'] in methods else 0
+
         detection_method = st.selectbox(
             "Detection Method",
-            ["CV-based (Simple)", "ML-based (Isolation Forest)", "Derivative-based", "Manual Selection"],
+            methods,
+            index=default_method_idx,
             help="CV-based: Uses coefficient of variation threshold\n"
                  "ML-based: Uses Isolation Forest anomaly detection\n"
                  "Derivative-based: Finds regions with near-zero slope\n"
                  "Manual: Select window manually"
         )
+
+        # Save selected method
+        if detection_method != st.session_state.detection_preferences['method']:
+            st.session_state.detection_preferences['method'] = detection_method
 
         # Determine time column
         time_col = 'time_s' if 'time_s' in df.columns else config.get('columns', {}).get('timestamp', 'timestamp')
@@ -761,9 +820,16 @@ if df_raw is not None:
                     help="Select which sensor/channel to use for steady-state detection"
                 )
 
-                cv_threshold = st.slider("CV Threshold", 0.005, 0.10, 0.02, 0.005,
+                # Use saved preferences for default values
+                cv_threshold = st.slider("CV Threshold", 0.005, 0.10,
+                                        st.session_state.detection_preferences['cv_threshold'], 0.005,
                                         help="Maximum coefficient of variation for steady state")
-                window_size = st.slider("Window Size (samples)", 10, 200, 50)
+                window_size = st.slider("Window Size (samples)", 10, 200,
+                                       st.session_state.detection_preferences['cv_window_size'])
+
+                # Save preferences when changed
+                st.session_state.detection_preferences['cv_threshold'] = cv_threshold
+                st.session_state.detection_preferences['cv_window_size'] = window_size
 
                 if st.button("Detect Steady State"):
                     start, end = detect_steady_state_cv(df, selected_sensor, window_size, cv_threshold, time_col)
@@ -789,8 +855,13 @@ if df_raw is not None:
                 )
 
                 if selected_sensors:
-                    contamination = st.slider("Contamination", 0.1, 0.5, 0.3, 0.05,
+                    # Use saved preference for contamination
+                    contamination = st.slider("Contamination", 0.1, 0.5,
+                                             st.session_state.detection_preferences['ml_contamination'], 0.05,
                                              help="Expected fraction of non-steady-state data")
+
+                    # Save preference
+                    st.session_state.detection_preferences['ml_contamination'] = contamination
 
                     if st.button("Detect Steady State (ML)"):
                         with st.spinner("Running ML detection..."):
@@ -817,8 +888,13 @@ if df_raw is not None:
                     help="Select which sensor/channel to use for steady-state detection"
                 )
 
-                deriv_threshold = st.slider("Derivative Threshold", 0.01, 0.5, 0.1, 0.01,
+                # Use saved preference for derivative threshold
+                deriv_threshold = st.slider("Derivative Threshold", 0.01, 0.5,
+                                           st.session_state.detection_preferences['deriv_threshold'], 0.01,
                                            help="Maximum normalized derivative for steady state")
+
+                # Save preference
+                st.session_state.detection_preferences['deriv_threshold'] = deriv_threshold
 
                 if st.button("Detect Steady State"):
                     start, end = detect_steady_state_derivative(df, selected_sensor, time_col, deriv_threshold)
