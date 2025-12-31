@@ -711,15 +711,443 @@ def load_and_validate_config(
 ) -> Dict[str, Any]:
     """
     Load config by name with validation, returning dict for backward compatibility.
-    
+
     Args:
         config_name: Name of config (without .json extension)
         config_dir: Directory containing config files
-        
+
     Returns:
         Validated configuration as dictionary
     """
     path = Path(config_dir) / f"{config_name}.json"
-    
+
     validated = validate_config_file(path)
     return validated.to_dict()
+
+
+# =============================================================================
+# V2.3.0: ACTIVE CONFIGURATION AND TEST METADATA SEPARATION
+# =============================================================================
+
+class ChannelMapping(BaseModel):
+    """
+    Maps DAQ channel IDs to P&ID sensor names.
+
+    Example:
+        {
+            "10001": "FU-PT-01",  # Channel 10001 → Pressure Transducer 01
+            "10002": "FU-PT-02",  # Channel 10002 → Pressure Transducer 02
+            "10003": "FU-TT-01"   # Channel 10003 → Temperature Transducer 01
+        }
+    """
+    class Config:
+        extra = 'allow'
+
+
+class SensorMapping(BaseModel):
+    """
+    Maps sensor roles to column names (from CSV or P&ID names).
+
+    This is the analysis-level mapping that tells the system which columns
+    to use for each type of measurement.
+    """
+    timestamp: str = Field("timestamp", min_length=1, description="Timestamp column")
+    pressure_upstream: Optional[str] = Field(None, description="Upstream pressure sensor")
+    pressure_downstream: Optional[str] = Field(None, description="Downstream pressure sensor")
+    temperature: Optional[str] = Field(None, description="Temperature sensor")
+    mass_flow: Optional[str] = Field(None, description="Mass flow sensor")
+    chamber_pressure: Optional[str] = Field(None, description="Chamber pressure (hot fire)")
+    thrust: Optional[str] = Field(None, description="Thrust sensor (hot fire)")
+
+    class Config:
+        extra = 'allow'
+
+
+class SensorUncertainty(BaseModel):
+    """Individual sensor uncertainty specification."""
+    value: float = Field(..., ge=0, description="Uncertainty magnitude")
+    unit: str = Field(..., description="Physical unit (psi, K, g/s, etc.)")
+    type: str = Field("absolute", description="Type: absolute, relative, percent_fs")
+    full_scale: Optional[float] = Field(None, ge=0, description="Full scale for percent_fs type")
+
+    @validator('type')
+    def validate_type(cls, v):
+        allowed = ['absolute', 'relative', 'percent_fs', 'percent_reading']
+        if v not in allowed:
+            raise ValueError(f"Uncertainty type must be one of {allowed}, got '{v}'")
+        return v
+
+
+class ProcessingSettings(BaseModel):
+    """Processing and analysis settings."""
+    steady_state_method: Optional[str] = Field("cv", description="Detection method: cv, ml, derivative, manual")
+    cv_threshold: Optional[float] = Field(0.02, gt=0, description="CV threshold for steady state")
+    window_size: Optional[int] = Field(50, gt=0, description="Window size for detection")
+    resample_freq_ms: Optional[float] = Field(10, gt=0, description="Resampling frequency in ms")
+
+    class Config:
+        extra = 'allow'
+
+
+class ActiveConfiguration(BaseModel):
+    """
+    Active Configuration (Testbench Hardware)
+    ==========================================
+    Describes the test hardware setup: sensors, uncertainties, channel mappings.
+
+    This configuration changes only when testbench is modified or recalibrated.
+    It does NOT include test article properties (geometry, fluid) - those go in metadata.
+
+    Version: 2.3.0
+    """
+    config_name: str = Field(..., min_length=1, description="Configuration name")
+    config_version: str = Field("2.3.0", description="Config schema version")
+    test_type: str = Field(..., description="Test type: cold_flow or hot_fire")
+    description: Optional[str] = Field(None, description="Configuration description")
+
+    channel_mapping: Optional[Dict[str, str]] = Field(
+        None,
+        description="Maps DAQ channel IDs (e.g. '10001') to P&ID sensor names (e.g. 'FU-PT-01')"
+    )
+
+    sensor_mapping: Dict[str, str] = Field(
+        ...,
+        description="Maps sensor roles to column names for analysis"
+    )
+
+    sensor_uncertainties: Dict[str, Dict[str, Any]] = Field(
+        ...,
+        description="Uncertainty specifications for each sensor"
+    )
+
+    processing: Optional[ProcessingSettings] = Field(
+        default_factory=ProcessingSettings,
+        description="Processing and analysis settings"
+    )
+
+    sensor_limits: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Physical limits for each sensor (optional)"
+    )
+
+    class Config:
+        extra = 'allow'
+
+    @validator('test_type')
+    def validate_test_type(cls, v):
+        if v not in ['cold_flow', 'hot_fire']:
+            raise ValueError(f"test_type must be 'cold_flow' or 'hot_fire', got '{v}'")
+        return v
+
+    @root_validator
+    def check_no_geometry_or_fluid(cls, values):
+        """Ensure geometry and fluid are NOT in active configuration."""
+        if 'geometry' in values:
+            raise ValueError(
+                "geometry belongs in Test Metadata, not Active Configuration. "
+                "Use metadata.json or UI entry for test article properties."
+            )
+        if 'fluid' in values:
+            raise ValueError(
+                "fluid belongs in Test Metadata, not Active Configuration. "
+                "Use metadata.json or UI entry for test article properties."
+            )
+        return values
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return self.dict(exclude_none=True)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ActiveConfiguration':
+        """Create from dictionary."""
+        return cls(**data)
+
+    @classmethod
+    def from_file(cls, path: Union[str, Path]) -> 'ActiveConfiguration':
+        """Load from JSON file."""
+        with open(path, 'r') as f:
+            data = json.load(f)
+        return cls(**data)
+
+
+class TestMetadata(BaseModel):
+    """
+    Test Metadata (Per Test Article)
+    =================================
+    Describes the test article properties and conditions.
+
+    This metadata changes for every test - different injector element, fluid, etc.
+    It does NOT include testbench hardware info - that goes in Active Configuration.
+
+    Source: metadata.json in test folder, or UI entry.
+    Required for campaign save, optional for analysis/reporting.
+
+    Version: 2.3.0
+    """
+    part_number: Optional[str] = Field(None, description="Part number of test article")
+    serial_number: Optional[str] = Field(None, description="Serial number of test article")
+    test_datetime: Optional[str] = Field(None, description="Test date and time (ISO format)")
+    analyst: Optional[str] = Field(None, description="Engineer performing the test")
+    test_type: Optional[str] = Field(None, description="Test type: cold_flow or hot_fire")
+    test_id: Optional[str] = Field(None, description="Unique test identifier")
+
+    geometry: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Test article geometry (orifice_area_mm2, throat_area_mm2, etc.)"
+    )
+
+    fluid: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Working fluid properties (name, gamma, density, etc.)"
+    )
+
+    test_conditions: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Test conditions (ambient_pressure, target_pressure, notes, etc.)"
+    )
+
+    class Config:
+        extra = 'allow'  # Allow additional metadata fields
+
+    @validator('test_type')
+    def validate_test_type(cls, v):
+        if v and v not in ['cold_flow', 'hot_fire']:
+            raise ValueError(f"test_type must be 'cold_flow' or 'hot_fire', got '{v}'")
+        return v
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return self.dict(exclude_none=True)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TestMetadata':
+        """Create from dictionary."""
+        return cls(**data)
+
+    @classmethod
+    def from_file(cls, path: Union[str, Path]) -> 'TestMetadata':
+        """Load from JSON file (typically metadata.json in test folder)."""
+        with open(path, 'r') as f:
+            data = json.load(f)
+        return cls(**data)
+
+    @classmethod
+    def from_folder(cls, folder_path: Union[str, Path]) -> Optional['TestMetadata']:
+        """
+        Load metadata.json from test folder if it exists.
+
+        Args:
+            folder_path: Path to test data folder
+
+        Returns:
+            TestMetadata object if metadata.json exists, None otherwise
+        """
+        folder = Path(folder_path)
+        metadata_file = folder / "metadata.json"
+
+        if metadata_file.exists():
+            return cls.from_file(metadata_file)
+        return None
+
+    def is_complete_for_campaign(self) -> bool:
+        """Check if metadata has minimum required fields for campaign save."""
+        required = [
+            self.part_number or self.test_id,  # Need at least one identifier
+            self.geometry,
+            self.fluid
+        ]
+        return all(required)
+
+    def get_missing_for_campaign(self) -> List[str]:
+        """Get list of fields missing for campaign save."""
+        missing = []
+
+        if not (self.part_number or self.test_id):
+            missing.append("part_number or test_id")
+        if not self.geometry:
+            missing.append("geometry")
+        if not self.fluid:
+            missing.append("fluid")
+
+        return missing
+
+
+def detect_config_format(config: Dict[str, Any]) -> str:
+    """
+    Detect if config is old format (v2.0-v2.2) or new format (v2.3+).
+
+    Args:
+        config: Configuration dictionary
+
+    Returns:
+        'old' (has geometry/fluid), 'new' (no geometry/fluid), or 'active_config'
+    """
+    has_geometry = 'geometry' in config
+    has_fluid = 'fluid' in config
+    has_version = 'config_version' in config
+
+    # New format explicitly declares version and has no geometry/fluid
+    if has_version and not has_geometry and not has_fluid:
+        return 'active_config'
+
+    # Old format has geometry and/or fluid
+    if has_geometry or has_fluid:
+        return 'old'
+
+    # Ambiguous - treat as new format
+    return 'active_config'
+
+
+def split_old_config(old_config: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Split old-format config into Active Configuration + Test Metadata.
+
+    Args:
+        old_config: Old format config (v2.0-v2.2) with geometry/fluid mixed in
+
+    Returns:
+        Tuple of (active_config_dict, metadata_dict)
+    """
+    # Active Configuration: everything EXCEPT geometry, fluid, reference_values
+    active_config = {
+        'config_name': old_config.get('config_name', 'Migrated Config'),
+        'config_version': '2.3.0',
+        'test_type': old_config.get('test_type', 'cold_flow'),  # May need auto-detection
+        'description': old_config.get('description'),
+        'channel_mapping': old_config.get('channel_config'),  # Rename channel_config → channel_mapping
+        'sensor_mapping': old_config.get('columns', {}),  # Old 'columns' becomes 'sensor_mapping'
+        'sensor_uncertainties': old_config.get('sensor_uncertainties', {}),
+        'processing': old_config.get('settings'),
+        'sensor_limits': old_config.get('sensor_limits'),
+    }
+
+    # Remove None values
+    active_config = {k: v for k, v in active_config.items() if v is not None}
+
+    # Test Metadata: geometry, fluid, and any metadata fields
+    metadata = {
+        'test_type': old_config.get('test_type', 'cold_flow'),
+        'geometry': old_config.get('geometry'),
+        'fluid': old_config.get('fluid'),
+        'test_conditions': {},
+    }
+
+    # Add reference values to test_conditions if present
+    if 'reference_values' in old_config:
+        metadata['test_conditions']['reference_values'] = old_config['reference_values']
+
+    # Remove None values
+    metadata = {k: v for k, v in metadata.items() if v is not None}
+
+    return active_config, metadata
+
+
+def validate_active_configuration(
+    config: Dict[str, Any],
+    auto_migrate: bool = True
+) -> ActiveConfiguration:
+    """
+    Validate Active Configuration with automatic migration from old format.
+
+    Args:
+        config: Configuration dictionary
+        auto_migrate: If True, automatically migrate old-format configs
+
+    Returns:
+        Validated ActiveConfiguration object
+
+    Raises:
+        ValueError: If validation fails
+    """
+    format_type = detect_config_format(config)
+
+    if format_type == 'old':
+        if not auto_migrate:
+            raise ValueError(
+                "Old config format detected (has geometry/fluid). "
+                "Set auto_migrate=True to automatically split into config + metadata."
+            )
+
+        # Auto-migrate
+        active_config, _ = split_old_config(config)
+        config = active_config
+
+    try:
+        return ActiveConfiguration(**config)
+    except Exception as e:
+        raise ValueError(f"Active Configuration validation failed:\n{str(e)}")
+
+
+def validate_test_metadata(
+    metadata: Dict[str, Any],
+    require_complete: bool = False
+) -> TestMetadata:
+    """
+    Validate Test Metadata.
+
+    Args:
+        metadata: Metadata dictionary
+        require_complete: If True, require all fields needed for campaign save
+
+    Returns:
+        Validated TestMetadata object
+
+    Raises:
+        ValueError: If validation fails or required fields missing
+    """
+    try:
+        validated = TestMetadata(**metadata)
+
+        if require_complete and not validated.is_complete_for_campaign():
+            missing = validated.get_missing_for_campaign()
+            raise ValueError(
+                f"Metadata incomplete for campaign save. Missing: {', '.join(missing)}"
+            )
+
+        return validated
+
+    except Exception as e:
+        raise ValueError(f"Test Metadata validation failed:\n{str(e)}")
+
+
+def merge_config_and_metadata(
+    config: Union[ActiveConfiguration, Dict[str, Any]],
+    metadata: Union[TestMetadata, Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Merge Active Configuration and Test Metadata for analysis.
+
+    This creates a combined dictionary compatible with existing analysis functions.
+
+    Args:
+        config: Active Configuration object or dict
+        metadata: Test Metadata object or dict
+
+    Returns:
+        Merged configuration dictionary
+    """
+    if isinstance(config, ActiveConfiguration):
+        config_dict = config.to_dict()
+    else:
+        config_dict = config
+
+    if isinstance(metadata, TestMetadata):
+        metadata_dict = metadata.to_dict()
+    else:
+        metadata_dict = metadata
+
+    # Start with config
+    merged = config_dict.copy()
+
+    # Add geometry and fluid from metadata
+    if 'geometry' in metadata_dict:
+        merged['geometry'] = metadata_dict['geometry']
+    if 'fluid' in metadata_dict:
+        merged['fluid'] = metadata_dict['fluid']
+
+    # Add test conditions if present
+    if 'test_conditions' in metadata_dict:
+        merged.setdefault('test_conditions', {}).update(metadata_dict['test_conditions'])
+
+    return merged

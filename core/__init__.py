@@ -20,12 +20,14 @@ P1 Components (High Priority):
 Shared Utilities:
 - config_manager: Unified configuration management (eliminates duplication)
 - steady_state_detection: Consolidated steady-state detection methods
+- metadata_manager: Test metadata loading and validation (v2.3.0+)
 
 Usage:
     from core.traceability import create_full_traceability_record
     from core.uncertainty import calculate_cold_flow_uncertainties
     from core.qc_checks import run_qc_checks, assert_qc_passed
-    from core.config_validation import validate_config
+    from core.config_validation import validate_config, ActiveConfiguration, TestMetadata
+    from core.metadata_manager import load_metadata_from_folder
     from core.campaign_manager_v2 import save_cold_flow_result
     from core.spc import create_imr_chart, analyze_campaign_spc
     from core.reporting import generate_test_report
@@ -85,6 +87,7 @@ from .qc_checks import (
 )
 
 from .config_validation import (
+    # Legacy validation (v2.0-v2.2)
     validate_config,
     validate_config_simple,
     validate_config_file,
@@ -92,6 +95,14 @@ from .config_validation import (
     get_config_hash,
     load_and_validate_config,
     TestConfigDC,
+    # V2.3.0: Active Configuration and Test Metadata
+    ActiveConfiguration,
+    TestMetadata,
+    validate_active_configuration,
+    validate_test_metadata,
+    merge_config_and_metadata,
+    detect_config_format,
+    split_old_config,
 )
 
 from .campaign_manager_v2 import (
@@ -186,4 +197,13 @@ from .steady_state_detection import (
     validate_steady_window,
 )
 
-__version__ = "2.0.0"
+# Metadata Management (v2.3.0+)
+from .metadata_manager import (
+    MetadataManager,
+    MetadataSource,
+    load_metadata_from_folder,
+    create_metadata_template,
+    save_metadata_template,
+)
+
+__version__ = "2.3.0"
