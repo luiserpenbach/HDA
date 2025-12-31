@@ -738,8 +738,18 @@ When contributing to this repository:
 
 ## Resources
 
-- **Main README**: `/home/user/HDA/README.md` - User-facing documentation
+### User Documentation
+- **Main README**: `/home/user/HDA/README.md` - User-facing documentation and API reference
+- **What's New**: `/home/user/HDA/WHATS_NEW.md` - v2.1.0 and v2.2.0 feature changelog
+- **Quick Iteration Mode**: `/home/user/HDA/QUICK_ITERATION_MODE.md` - Parameter sweep guide
+- **Template Integration**: `/home/user/HDA/TEMPLATE_INTEGRATION.md` - Template feature docs
+
+### Developer Documentation
+- **This File**: `/home/user/HDA/CLAUDE.md` - Developer guide and conventions
 - **Core README**: `/home/user/HDA/core/README.md` - Core module API reference
+- **Development History**: `/home/user/HDA/docs/development/` - UX assessment and refactoring docs
+
+### Examples & Templates
 - **Config Examples**: `/home/user/HDA/configs/` - Sample configuration files
 - **Templates**: `/home/user/HDA/config_templates/` - Reusable templates
 
@@ -749,13 +759,16 @@ When contributing to this repository:
 
 For questions about this codebase:
 1. Review this CLAUDE.md file
-2. Check the README files in root and core/
-3. Examine test files for usage examples
-4. Review existing code for patterns
+2. Check WHATS_NEW.md for recent features and changes
+3. Check the README files in root and core/
+4. Examine test files for usage examples
+5. Review existing code for patterns
+6. Reference development history in docs/development/ for design rationale
 
 ---
 
-**Last Updated**: 2025-12-30
-**Core Version**: 2.0.0
+**Last Updated**: 2025-12-31
+**Application Version**: 2.2.0 (Advanced Workflow Release)
+**Core Version**: 2.0.0 (Engineering Integrity)
 **Schema Version**: 3
 **Processing Version**: 2.0.0+integrity
