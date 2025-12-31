@@ -47,6 +47,7 @@ class ConfigManager:
     # Session state keys
     RECENT_CONFIGS_KEY = 'recent_configs'
     ACTIVE_CONFIG_KEY = 'active_config'
+    RECENT_FOLDERS_KEY = 'recent_folders'
 
     @staticmethod
     def get_default_config(test_type: str) -> Dict[str, Any]:
@@ -375,3 +376,47 @@ class ConfigManager:
             'uncertainty_count': len(config.get('uncertainties', {})),
             'has_qc': 'qc' in config and bool(config['qc']),
         }
+
+    @staticmethod
+    def save_recent_folder(folder_path: str) -> None:
+        """
+        Save folder path to recent folders list.
+
+        Args:
+            folder_path: Folder path to save
+        """
+        import streamlit as st
+
+        if ConfigManager.RECENT_FOLDERS_KEY not in st.session_state:
+            st.session_state[ConfigManager.RECENT_FOLDERS_KEY] = []
+
+        recent = st.session_state[ConfigManager.RECENT_FOLDERS_KEY]
+
+        # Remove if already exists (to move to front)
+        if folder_path in recent:
+            recent.remove(folder_path)
+
+        # Add to front
+        recent.insert(0, folder_path)
+
+        # Keep only last 10
+        st.session_state[ConfigManager.RECENT_FOLDERS_KEY] = recent[:10]
+
+    @staticmethod
+    def get_recent_folders(limit: int = 5) -> List[str]:
+        """
+        Get list of recently used folder paths.
+
+        Args:
+            limit: Maximum number of recent folders to return
+
+        Returns:
+            List of recent folder paths
+        """
+        import streamlit as st
+
+        if ConfigManager.RECENT_FOLDERS_KEY not in st.session_state:
+            return []
+
+        recent = st.session_state[ConfigManager.RECENT_FOLDERS_KEY]
+        return recent[:limit]

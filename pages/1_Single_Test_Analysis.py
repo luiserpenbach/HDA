@@ -586,15 +586,18 @@ if data_source == "Upload CSV":
             file_hash = f"sha256:{__import__('hashlib').sha256(file_content).hexdigest()[:16]}"
             st.session_state.file_hash = file_hash
 
-            st.success(f"Loaded {len(df_raw)} rows, {len(df_raw.columns)} columns")
+            # Compact success message
+            st.success(f"✓ Loaded: {len(df_raw)} rows × {len(df_raw.columns)} columns")
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Rows", len(df_raw))
-            with col2:
-                st.metric("Columns", len(df_raw.columns))
-            with col3:
-                st.metric("Data Hash", file_hash[:16] + "...")
+            # Details in expander
+            with st.expander("Data Info"):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Rows", len(df_raw))
+                with col2:
+                    st.metric("Columns", len(df_raw.columns))
+                with col3:
+                    st.metric("File Hash", file_hash[:12] + "...")
 
         except Exception as e:
             st.error(f"Error loading file: {e}")
@@ -607,13 +610,43 @@ else:  # Load from Test Folder
         st.warning("Test folder support not available. Please use CSV upload.")
         df_raw = st.session_state.df
     else:
-        test_folder_path = st.text_input(
-            "Test Folder Path",
-            value=st.session_state.get('test_folder_path', ''),
-            help="Path to test folder (e.g., /data/tests/RCS/RCS-CF/RCS-CF-C01/RCS-CF-C01-RUN01)"
-        )
+        # Recent folders selection
+        recent_folders = ConfigManager.get_recent_folders(limit=5)
 
-        if st.button("Load Test Folder"):
+        if recent_folders:
+            folder_source = st.radio(
+                "Folder Selection",
+                ["Recent Locations", "Enter Path"],
+                horizontal=True,
+                label_visibility="collapsed"
+            )
+
+            if folder_source == "Recent Locations":
+                folder_options = ["-- Select Recent Folder --"] + recent_folders
+                selected_folder = st.selectbox(
+                    "Recent Folder Locations",
+                    folder_options,
+                    help="Select from recently used folder paths"
+                )
+
+                if selected_folder != "-- Select Recent Folder --":
+                    test_folder_path = selected_folder
+                else:
+                    test_folder_path = st.session_state.get('test_folder_path', '')
+            else:
+                test_folder_path = st.text_input(
+                    "Test Folder Path",
+                    value=st.session_state.get('test_folder_path', ''),
+                    help="Path to test folder or S3 path (future support)"
+                )
+        else:
+            test_folder_path = st.text_input(
+                "Test Folder Path",
+                value=st.session_state.get('test_folder_path', ''),
+                help="Path to test folder or S3 path (future support)"
+            )
+
+        if st.button("Load Test Folder", type="primary"):
             if test_folder_path and Path(test_folder_path).exists():
                 try:
                     test_data = load_test_from_folder(test_folder_path)
@@ -624,12 +657,15 @@ else:  # Load from Test Folder
                         st.session_state.df = df_raw
                         st.session_state.test_folder_path = test_folder_path
 
+                        # Save to recent folders
+                        ConfigManager.save_recent_folder(test_folder_path)
+
                         # Compute file hash
                         with open(test_data['raw_data_file'], 'rb') as f:
                             file_hash = f"sha256:{__import__('hashlib').sha256(f.read()).hexdigest()[:16]}"
                         st.session_state.file_hash = file_hash
 
-                        st.success(f"Loaded {len(df_raw)} rows from {Path(test_data['raw_data_file']).name}")
+                        st.success(f"✓ Loaded {len(df_raw)} rows from {Path(test_data['raw_data_file']).name}")
                     else:
                         st.error("No raw data file found in test folder")
                         df_raw = None
@@ -687,126 +723,147 @@ TEST_ID/
             """)
 
 if df_raw is not None:
-    # Preprocessing section
+    # Preprocessing section - compact layout
     st.subheader("Data Preprocessing")
 
-    # Channel mapping option (first, since it affects column names)
-    channel_config = config.get('channel_config', {})
-    if channel_config:
-        apply_mapping = st.checkbox(
-            f"Apply channel mapping ({len(channel_config)} channels defined)",
-            value=True,
-            help="Rename raw DAQ channel IDs to sensor names using channel_config"
-        )
-        with st.expander("Channel Mapping"):
-            st.json(channel_config)
-    else:
-        apply_mapping = False
-        st.info("No channel_config defined in config. Raw column names will be used.")
+    # Quick preprocess with defaults button
+    col_btn1, col_btn2 = st.columns([1, 3])
+    with col_btn1:
+        if st.button("⚡ Quick Preprocess", type="primary", help="Preprocess with default settings"):
+            with st.spinner("Preprocessing..."):
+                df_proc = df_raw.copy()
 
-    col1, col2, col3, col4 = st.columns(4)
+                # Apply channel mapping if available
+                channel_config = config.get('channel_config', {})
+                if channel_config:
+                    df_proc, _ = apply_channel_mapping(df_proc, config)
 
-    with col1:
-        time_unit = st.selectbox(
-            "Original time unit",
-            ["ms", "s", "us"],
-            index=0,
-            help="Unit of the timestamp column in raw data"
-        )
+                # Convert time and add time_s column
+                df_proc = preprocess_data(df_proc, config, time_unit='ms', shift_to_zero=True)
 
-    with col2:
-        shift_to_zero = st.checkbox(
-            "Shift time to 0",
-            value=True,
-            help="Shift timestamps so data starts at t=0"
-        )
+                # Handle NaN values
+                df_proc, _ = handle_nan_values(df_proc, method='interpolate', max_gap=5)
 
-    with col3:
-        nan_method = st.selectbox(
-            "NaN handling",
-            ["interpolate", "drop", "ffill", "none"],
-            index=0,
-            help="How to handle missing values"
-        )
+                st.session_state.df_processed = df_proc
+                st.success(f"✓ Preprocessed: {len(df_proc)} rows, {df_proc['time_s'].min():.2f}s - {df_proc['time_s'].max():.2f}s")
+                st.rerun()
 
-    with col4:
-        max_interp_gap = st.number_input(
-            "Max interp. gap",
-            min_value=1,
-            max_value=50,
-            value=5,
-            help="Maximum consecutive NaNs to interpolate"
-        )
+    with col_btn2:
+        st.caption("Use Quick Preprocess for standard settings, or expand below for custom options")
 
-    # Resampling options
-    col1, col2, col3 = st.columns(3)
+    # Advanced preprocessing options in expander
+    with st.expander("⚙️ Advanced Preprocessing Options"):
+        # Channel mapping option
+        channel_config = config.get('channel_config', {})
+        if channel_config:
+            apply_mapping = st.checkbox(
+                f"Apply channel mapping ({len(channel_config)} channels defined)",
+                value=True,
+                help="Rename raw DAQ channel IDs to sensor names using channel_config"
+            )
+            with st.expander("View Channel Mapping"):
+                st.json(channel_config)
+        else:
+            apply_mapping = False
+            st.info("No channel_config defined in config. Raw column names will be used.")
 
-    with col1:
-        do_resample = st.checkbox(
-            "Resample to uniform rate",
-            value=False,
-            help="Resample data to a fixed sample rate using interpolation"
-        )
+        col1, col2, col3, col4 = st.columns(4)
 
-    with col2:
-        # Get default from config
-        default_rate = config.get('settings', {}).get('sample_rate_hz', 100)
-        target_rate = st.number_input(
-            "Target sample rate (Hz)",
-            min_value=1,
-            max_value=100000,
-            value=default_rate,
-            disabled=not do_resample,
-            help="Target uniform sample rate"
-        )
+        with col1:
+            time_unit = st.selectbox(
+                "Original time unit",
+                ["ms", "s", "us"],
+                index=0,
+                help="Unit of the timestamp column in raw data"
+            )
 
-    with col3:
-        if do_resample and df_raw is not None:
-            # Show current rate estimate
-            timestamp_col = config.get('columns', {}).get('timestamp', 'timestamp')
-            if timestamp_col in df_raw.columns:
-                dt = np.diff(df_raw[timestamp_col].values)
-                if len(dt) > 0 and np.mean(dt) > 0:
-                    # Convert based on time unit
-                    if time_unit == 'ms':
-                        current_rate = 1000.0 / np.mean(dt)
-                    elif time_unit == 'us':
-                        current_rate = 1_000_000.0 / np.mean(dt)
-                    else:
-                        current_rate = 1.0 / np.mean(dt)
-                    st.metric("Current avg rate", f"{current_rate:.1f} Hz")
+        with col2:
+            shift_to_zero = st.checkbox(
+                "Shift time to 0",
+                value=True,
+                help="Shift timestamps so data starts at t=0"
+            )
 
-    # Process data
-    if st.button("Preprocess Data", type="primary"):
-        with st.spinner("Preprocessing..."):
-            df_proc = df_raw.copy()
+        with col3:
+            nan_method = st.selectbox(
+                "NaN handling",
+                ["interpolate", "drop", "ffill", "none"],
+                index=0,
+                help="How to handle missing values"
+            )
 
-            # Step 1: Apply channel mapping (before time processing)
-            if apply_mapping and channel_config:
-                df_proc, mapping_stats = apply_channel_mapping(df_proc, config)
-                if mapping_stats['mappings_found'] > 0:
-                    with st.expander("Channel Mapping Summary"):
-                        st.json(mapping_stats)
+        with col4:
+            max_interp_gap = st.number_input(
+                "Max interp. gap",
+                min_value=1,
+                max_value=50,
+                value=5,
+                help="Maximum consecutive NaNs to interpolate"
+            )
 
-            # Step 2: Convert time and add time_s column
-            df_proc = preprocess_data(df_proc, config, time_unit, shift_to_zero)
+        # Resampling options
+        col1, col2, col3 = st.columns(3)
 
-            # Step 3: Handle NaN values
-            if nan_method != "none":
-                df_proc, nan_stats = handle_nan_values(df_proc, nan_method, max_interp_gap)
+        with col1:
+            do_resample = st.checkbox(
+                "Resample to uniform rate",
+                value=False,
+                help="Resample data to a fixed sample rate using interpolation"
+            )
 
-                if nan_stats['nan_counts']:
-                    with st.expander("NaN Handling Summary"):
-                        st.json(nan_stats)
+        with col2:
+            # Get default from config
+            default_rate = config.get('settings', {}).get('sample_rate_hz', 100)
+            target_rate = st.number_input(
+                "Target sample rate (Hz)",
+                min_value=1,
+                max_value=100000,
+                value=default_rate,
+                disabled=not do_resample,
+                help="Target uniform sample rate"
+            )
 
-            # Step 4: Resample if requested
-            if do_resample:
-                df_proc, resample_stats = resample_data(df_proc, target_rate, 'time_s')
-                with st.expander("Resampling Summary"):
-                    st.json(resample_stats)
+        with col3:
+            if do_resample and df_raw is not None:
+                # Show current rate estimate
+                timestamp_col = config.get('columns', {}).get('timestamp', 'timestamp')
+                if timestamp_col in df_raw.columns:
+                    dt = np.diff(df_raw[timestamp_col].values)
+                    if len(dt) > 0 and np.mean(dt) > 0:
+                        # Convert based on time unit
+                        if time_unit == 'ms':
+                            current_rate = 1000.0 / np.mean(dt)
+                        elif time_unit == 'us':
+                            current_rate = 1_000_000.0 / np.mean(dt)
+                        else:
+                            current_rate = 1.0 / np.mean(dt)
+                        st.metric("Current avg rate", f"{current_rate:.1f} Hz")
 
-            st.session_state.df_processed = df_proc
-            st.success(f"Preprocessed: {len(df_proc)} rows, time range: {df_proc['time_s'].min():.3f}s - {df_proc['time_s'].max():.3f}s")
+        # Process data
+        if st.button("Preprocess Data (Custom)", type="secondary"):
+            with st.spinner("Preprocessing..."):
+                df_proc = df_raw.copy()
+
+                # Step 1: Apply channel mapping (before time processing)
+                channel_config = config.get('channel_config', {})
+                if apply_mapping and channel_config:
+                    df_proc, mapping_stats = apply_channel_mapping(df_proc, config)
+                    if mapping_stats['mappings_found'] > 0:
+                        st.caption(f"✓ Mapped {mapping_stats['mappings_found']} channels")
+
+                # Step 2: Convert time and add time_s column
+                df_proc = preprocess_data(df_proc, config, time_unit, shift_to_zero)
+
+                # Step 3: Handle NaN values
+                if nan_method != "none":
+                    df_proc, nan_stats = handle_nan_values(df_proc, nan_method, max_interp_gap)
+
+                # Step 4: Resample if requested
+                if do_resample:
+                    df_proc, resample_stats = resample_data(df_proc, target_rate, 'time_s')
+
+                st.session_state.df_processed = df_proc
+                st.success(f"✓ Preprocessed: {len(df_proc)} rows, {df_proc['time_s'].min():.2f}s - {df_proc['time_s'].max():.2f}s")
 
     # Use processed data if available, otherwise raw
     df = st.session_state.df_processed if st.session_state.df_processed is not None else df_raw
@@ -824,6 +881,69 @@ if df_raw is not None:
 
 if df_raw is not None:
     df = st.session_state.df_processed if st.session_state.df_processed is not None else df_raw
+
+    st.divider()
+
+    # =============================================================================
+    # DATA EXPLORATION
+    # =============================================================================
+
+    st.header("1.5 Data Exploration")
+    st.caption("Visualize your data before steady-state detection")
+
+    # Get all numeric columns
+    time_col = 'time_s' if 'time_s' in df.columns else config.get('columns', {}).get('timestamp', 'timestamp')
+    exclude_time_cols = {'time_s', 'time_ms', 'timestamp', config.get('columns', {}).get('timestamp', '')}
+    numeric_cols = [c for c in df.columns
+                   if c not in exclude_time_cols
+                   and df[c].dtype in ['float64', 'float32', 'int64', 'int32']]
+
+    if numeric_cols and time_col in df.columns:
+        # Sensor selection for plotting
+        default_sensors = numeric_cols[:min(4, len(numeric_cols))]  # Default to first 4
+        selected_sensors = st.multiselect(
+            "Select sensors to plot",
+            numeric_cols,
+            default=default_sensors,
+            help="Choose which sensors to visualize"
+        )
+
+        if selected_sensors:
+            # Create plot
+            n_sensors = len(selected_sensors)
+            fig = make_subplots(
+                rows=n_sensors, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.03,
+                subplot_titles=selected_sensors
+            )
+
+            for i, sensor in enumerate(selected_sensors):
+                fig.add_trace(
+                    go.Scatter(
+                        x=df[time_col],
+                        y=df[sensor],
+                        mode='lines',
+                        name=sensor,
+                        line=dict(width=1),
+                    ),
+                    row=i+1, col=1
+                )
+
+            time_label = "Time (s)" if time_col == 'time_s' else "Time (ms)"
+            fig.update_layout(
+                height=150 * n_sensors,
+                showlegend=False,
+                title="Data Overview",
+                margin=dict(t=40, b=40)
+            )
+            fig.update_xaxes(title_text=time_label, row=n_sensors, col=1)
+
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Select at least one sensor to plot")
+    else:
+        st.warning("No numeric columns found for plotting")
 
     st.divider()
 
