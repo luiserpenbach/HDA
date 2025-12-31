@@ -384,20 +384,20 @@ with st.sidebar:
         format_func=lambda x: "Cold Flow" if x == "cold_flow" else "Hot Fire"
     )
 
-    # Quick Config: Recent Configs & Templates
-    st.subheader("⚡ Quick Config")
+    # Configuration Source - Unified selector
+    st.subheader("Configuration Source")
 
-    # Tab for Recent vs Templates
-    quick_config_mode = st.radio(
-        "Quick Config Mode",
-        ["Recent Configs", "Saved Configs"],
-        horizontal=True,
-        label_visibility="collapsed"
+    config_source = st.radio(
+        "Select configuration source",
+        ["Recent Configs", "Saved Configs", "Upload JSON", "Manual"],
+        label_visibility="collapsed",
+        help="Choose where to load your configuration from"
     )
 
     config = None  # Will be set based on user selection
 
-    if quick_config_mode == "Recent Configs":
+    # ===== RECENT CONFIGS =====
+    if config_source == "Recent Configs":
         recent_configs = ConfigManager.get_recent_configs(limit=5)
 
         if recent_configs:
@@ -418,14 +418,19 @@ with st.sidebar:
                 idx = recent_options.index(selected_recent) - 1  # -1 for placeholder
                 config = recent_configs[idx]['config']
                 st.success(f"✓ Loaded: {recent_configs[idx]['info']['config_name']}")
+            else:
+                # Fallback to default if nothing selected
+                config = ConfigManager.get_default_config(test_type)
         else:
-            st.info("No recent configs yet. Try templates or other sources below.")
+            st.info("No recent configs yet. Use Saved Configs or upload a config file.")
+            config = ConfigManager.get_default_config(test_type)
 
-    else:  # Templates mode
+    # ===== SAVED CONFIGS =====
+    elif config_source == "Saved Configs":
         try:
-            from core.saved_configs import TemplateManager, create_config_from_template
+            from core.saved_configs import SavedConfigManager, load_saved_config
 
-            manager = TemplateManager()
+            manager = SavedConfigManager()
             templates = manager.list_templates()
 
             if templates:
@@ -434,18 +439,18 @@ with st.sidebar:
 
                 if filtered_templates:
                     # Create template options
-                    template_options = ["-- Select Template --"] + [
+                    template_options = ["-- Select Saved Config --"] + [
                         f"{t['id']} - {t.get('config_name', 'Unnamed')}"
                         for t in filtered_templates
                     ]
 
                     selected_template = st.selectbox(
-                        f"Available {test_type.replace('_', ' ').title()} Templates",
+                        f"Available {test_type.replace('_', ' ').title()} Saved Configs",
                         template_options,
-                        help="Select a pre-configured template for quick setup"
+                        help="Select a pre-configured testbench configuration"
                     )
 
-                    if selected_template != "-- Select Template --":
+                    if selected_template != "-- Select Saved Config --":
                         # Extract template ID
                         template_id = selected_template.split(" - ")[0]
 
@@ -460,56 +465,52 @@ with st.sidebar:
                                 st.caption(f"🏷️ Tags: {', '.join(template_info['tags'])}")
 
                         with col2:
-                            if st.button("Load", key="load_template_btn", use_container_width=True):
+                            if st.button("Load", key="load_saved_config_btn", use_container_width=True):
                                 try:
-                                    config = create_config_from_template(template_id)
-                                    ConfigManager.save_to_recent(config, 'template', config.get('config_name', template_id))
-                                    st.success(f"✓ Loaded template: {template_id}")
+                                    config = load_saved_config(template_id)
+                                    ConfigManager.save_to_recent(config, 'saved_config', config.get('config_name', template_id))
+                                    st.success(f"✓ Loaded: {template_id}")
                                     st.rerun()
                                 except Exception as e:
-                                    st.error(f"Error loading template: {e}")
+                                    st.error(f"Error loading saved config: {e}")
+
+                    # Fallback if nothing selected
+                    if config is None:
+                        config = ConfigManager.get_default_config(test_type)
                 else:
-                    st.info(f"No {test_type} templates available. Create one in Config Templates page.")
-            else:
-                st.info("No templates available. Create templates in Config Templates page (Page 8).")
-
-        except ImportError:
-            st.warning("Template system not available. Use other config sources below.")
-
-    st.divider()
-
-    # Standard configuration sources (only if no recent config selected)
-    if config is None:
-        st.subheader("Configuration Source")
-        config_source = st.radio(
-            "Select source",
-            ["Default", "Upload JSON", "Manual"],
-            label_visibility="collapsed"
-        )
-
-        if config_source == "Default":
-            config = ConfigManager.get_default_config(test_type)
-            st.success("Using default configuration")
-            # Save to recent
-            ConfigManager.save_to_recent(config, 'default', config.get('config_name', 'Default'))
-
-        elif config_source == "Upload JSON":
-            config_file = st.file_uploader("Upload config JSON", type=['json'])
-            if config_file:
-                try:
-                    config = json.load(config_file)
-                    st.success("Configuration loaded")
-                    # Save to recent configs
-                    ConfigManager.save_to_recent(config, 'uploaded', config.get('config_name', 'Uploaded Config'))
-                except Exception as e:
-                    st.error(f"Error loading config: {e}")
+                    st.info(f"No {test_type} saved configs available. Create one in Saved Configurations page (Page 8).")
                     config = ConfigManager.get_default_config(test_type)
             else:
+                st.info("No saved configs available. Create saved configs in Page 8 (Saved Configurations).")
                 config = ConfigManager.get_default_config(test_type)
 
-        else:  # Manual
-            st.info("Manual configuration - use expander below")
+        except ImportError:
+            st.warning("Saved config system not available. Use Upload JSON or Manual.")
             config = ConfigManager.get_default_config(test_type)
+
+    # ===== UPLOAD JSON =====
+    elif config_source == "Upload JSON":
+        config_file = st.file_uploader("Upload config JSON", type=['json'])
+        if config_file:
+            try:
+                config = json.load(config_file)
+                st.success("✓ Configuration loaded from file")
+                # Save to recent configs
+                ConfigManager.save_to_recent(config, 'uploaded', config.get('config_name', 'Uploaded Config'))
+            except Exception as e:
+                st.error(f"Error loading config: {e}")
+                config = ConfigManager.get_default_config(test_type)
+        else:
+            # No file uploaded yet - use default
+            config = ConfigManager.get_default_config(test_type)
+            st.info("Upload a JSON config file or use Manual to edit the default config below.")
+
+    # ===== MANUAL =====
+    else:  # Manual
+        st.info("Manual configuration - edit the JSON in the expander below")
+        config = ConfigManager.get_default_config(test_type)
+
+    st.divider()
 
     # Show config expander for all cases
     with st.expander("📝 View/Edit Configuration"):
