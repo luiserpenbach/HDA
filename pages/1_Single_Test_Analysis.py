@@ -968,7 +968,7 @@ if df_raw is not None:
 
     if numeric_cols and time_col in df.columns:
         # Sensor selection for plotting
-        default_sensors = numeric_cols[:min(4, len(numeric_cols))]  # Default to first 4
+        default_sensors = numeric_cols[:min(2, len(numeric_cols))]  # Default to first 4
         selected_sensors = st.multiselect(
             "Select sensors to plot",
             numeric_cols,

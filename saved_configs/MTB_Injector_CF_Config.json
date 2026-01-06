@@ -1,0 +1,32 @@
+{
+  "config_name": "Injectors - Cold Flow Standard",
+  "description": "Standard configuration for swirl injector testing (single side)",
+  "test_type": "cold_flow",
+  "version": "1.0.0",
+
+  "channel_config": {
+    "10001": "IG-PT-01",
+    "10002": "FU-PT-01",
+    "10003": "OX-PT-15",
+    "10004": "OX-PT-12",
+    "10009": "OX-FM-01",
+    "10011": "OX-TS-13"
+  },
+  "uncertainties": {
+    "IG-PT-01": { "type": "rel", "value": 0.005 },
+    "LC-01":    { "type": "abs", "value": 5.0 },
+    "OX-FM-01": { "type": "rel", "value": 0.01 },
+    "FU-FM-01": { "type": "rel", "value": 0.01 }
+  },
+  "settings": {
+    "resample_freq_ms": 10,
+    "steady_window_ms": 1000,
+    "cv_threshold": 1.5
+  },
+  "reference_values": {
+    "target_c_star": 1450,
+    "target_isp": 220,
+    "nominal_of": 2.5,
+    "nominal_mf": 0.08
+  }
+}
