@@ -261,7 +261,8 @@ def apply_channel_mapping(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame,
     Returns:
         Tuple of (DataFrame with renamed columns, mapping stats)
     """
-    channel_config = config.get('channel_config', {})
+    # Support both 'channel_config' (new) and 'columns' (legacy)
+    channel_config = config.get('channel_config') or config.get('columns', {})
 
     if not channel_config:
         return df, {'applied': False, 'reason': 'No channel_config in config'}
@@ -481,7 +482,7 @@ with st.sidebar:
                 if filtered_templates:
                     # Create template options
                     template_options = ["-- Select Saved Config --"] + [
-                        f"{t['id']} - {t.get('config_name', 'Unnamed')}"
+                        f"{t['id']} - {t.get('name', t.get('config_name', 'Unnamed'))}"
                         for t in filtered_templates
                     ]
 
@@ -820,8 +821,8 @@ with preprocess_col:
     if df_raw is not None:
         # Preprocessing options in expander
         with st.expander("⚙️ Preprocessing Options", expanded=True):
-            # Channel mapping option
-            channel_config = config.get('channel_config', {})
+            # Channel mapping option - support both 'channel_config' (new) and 'columns' (legacy)
+            channel_config = config.get('channel_config') or config.get('columns', {})
             if channel_config:
                 apply_mapping = st.checkbox(
                     f"Apply channel mapping ({len(channel_config)} channels defined)",
@@ -909,7 +910,7 @@ with preprocess_col:
                 df_proc = df_raw.copy()
 
                 # Step 1: Apply channel mapping (before time processing)
-                channel_config = config.get('channel_config', {})
+                channel_config = config.get('channel_config') or config.get('columns', {})
                 if apply_mapping and channel_config:
                     df_proc, mapping_stats = apply_channel_mapping(df_proc, config)
                     if mapping_stats['mappings_found'] > 0:
