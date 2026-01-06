@@ -43,285 +43,167 @@ class UncertaintySpec:
 @dataclass
 class SavedConfig:
     """
-    Saved Configuration for reuse across tests.
+    Saved Configuration for reuse across tests (v2.4.0).
 
-    Note (v2.3.0): In the new architecture, saved configs should only contain
-    testbench hardware info. Geometry and fluid will be migrated to metadata.
-    This class maintains backward compatibility with v2.0-v2.2 format.
+    A saved config contains ONLY testbench hardware configuration:
+    - Channel mappings (DAQ channel ID -> sensor name)
+    - Measurement uncertainties
+    - Sampling/processing settings
+    - Quality control thresholds
+
+    Fluid properties, geometry, and test-specific info belong in metadata files,
+    NOT in the hardware config.
     """
     name: str
     version: str
     test_type: str  # 'cold_flow' or 'hot_fire'
     description: str = ""
 
-    # Column mappings
-    columns: Dict[str, str] = field(default_factory=dict)
+    # Hardware channel mappings (DAQ channel ID -> sensor name)
+    channel_config: Dict[str, str] = field(default_factory=dict)
 
-    # Fluid/propellant properties (will be migrated to metadata in v2.3.0+)
-    fluid: Dict[str, Any] = field(default_factory=dict)
-    propellants: Dict[str, Any] = field(default_factory=dict)
-
-    # Geometry (will be migrated to metadata in v2.3.0+)
-    geometry: Dict[str, float] = field(default_factory=dict)
-
-    # Uncertainties
+    # Measurement uncertainties (sensor type -> uncertainty spec)
     uncertainties: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    geometry_uncertainties: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
-    # Settings
+    # Sampling and processing settings
     settings: Dict[str, Any] = field(default_factory=dict)
 
-    # QC settings
+    # Quality control thresholds
     qc: Dict[str, Any] = field(default_factory=dict)
 
-    # Metadata
+    # Config metadata (for management, not analysis)
     created_date: str = field(default_factory=lambda: datetime.now().isoformat())
     author: str = ""
-    parent_config: Optional[str] = None  # Renamed from parent_template
+    parent_config: Optional[str] = None
     tags: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
+        """Convert to dictionary for JSON serialization."""
         return {
             'config_name': self.name,
             'version': self.version,
             'test_type': self.test_type,
             'description': self.description,
-            'columns': self.columns,
-            'fluid': self.fluid,
-            'propellants': self.propellants,
-            'geometry': self.geometry,
+            'channel_config': self.channel_config,
             'uncertainties': self.uncertainties,
-            'geometry_uncertainties': self.geometry_uncertainties,
             'settings': self.settings,
             'qc': self.qc,
             'created_date': self.created_date,
             'author': self.author,
-            'parent_config': self.parent_config,  # Renamed from parent_template
+            'parent_config': self.parent_config,
             'tags': self.tags,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SavedConfig':
         """Create from dictionary."""
+        # Support both 'channel_config' (new) and 'columns' (legacy)
+        channel_config = data.get('channel_config', data.get('columns', {}))
+
         return cls(
             name=data.get('config_name', data.get('name', 'Unknown')),
             version=data.get('version', '1.0.0'),
             test_type=data.get('test_type', 'cold_flow'),
             description=data.get('description', ''),
-            columns=data.get('columns', {}),
-            fluid=data.get('fluid', {}),
-            propellants=data.get('propellants', {}),
-            geometry=data.get('geometry', {}),
+            channel_config=channel_config,
             uncertainties=data.get('uncertainties', {}),
-            geometry_uncertainties=data.get('geometry_uncertainties', {}),
             settings=data.get('settings', {}),
             qc=data.get('qc', {}),
             created_date=data.get('created_date', datetime.now().isoformat()),
             author=data.get('author', ''),
-            parent_config=data.get('parent_config') or data.get('parent_template'),  # Backward compatibility
+            parent_config=data.get('parent_config') or data.get('parent_template'),
             tags=data.get('tags', []),
         )
-    
+
     def to_config(self) -> Dict[str, Any]:
         """Convert to analysis-ready config dict."""
-        config = {
+        return {
             'config_name': self.name,
+            'version': self.version,
             'test_type': self.test_type,
-            'columns': self.columns,
-            'geometry': self.geometry,
+            'description': self.description,
+            'channel_config': self.channel_config,
             'uncertainties': self.uncertainties,
-            'geometry_uncertainties': self.geometry_uncertainties,
             'settings': self.settings,
+            'qc': self.qc,
         }
-        
-        if self.fluid:
-            config['fluid'] = self.fluid
-        if self.propellants:
-            config['propellants'] = self.propellants
-        if self.qc:
-            config['qc'] = self.qc
-        
-        return config
 
 
 # =============================================================================
 # BUILT-IN TEMPLATES
 # =============================================================================
 
-COLD_FLOW_N2_TEMPLATE = SavedConfig(
-    name="Cold Flow - Nitrogen (Standard)",
-    version="2.0.0",
+# Default Cold Flow Template - Hardware config only (no fluid/geometry)
+COLD_FLOW_DEFAULT_TEMPLATE = SavedConfig(
+    name="Default Cold Flow",
+    version="1.0.0",
     test_type="cold_flow",
-    description="Standard cold flow test with nitrogen gas",
-    columns={
-        'timestamp': 'timestamp',
-        'upstream_pressure': 'P_upstream',
-        'downstream_pressure': 'P_downstream',
-        'temperature': 'T_fluid',
-        'mass_flow': 'mass_flow',
-    },
-    fluid={
-        'name': 'nitrogen',
-        'gamma': 1.4,
-        'R': 296.8,  # J/(kg·K)
-        'molecular_weight': 28.0134,  # g/mol
-    },
-    geometry={
-        'orifice_area_mm2': 1.0,
-        'orifice_diameter_mm': 1.128,
+    description="Default configuration for cold flow testing",
+    channel_config={
+        # Example channel mappings - user should customize
+        "10001": "IG-PT-01",
+        "10002": "FU-PT-01",
+        "10003": "OX-PT-15",
+        "10004": "OX-PT-12",
+        "10009": "OX-FM-01",
+        "10011": "OX-TS-13",
     },
     uncertainties={
         'pressure': {'type': 'relative', 'value': 0.005},  # 0.5%
         'temperature': {'type': 'absolute', 'value': 1.0},  # 1 K
         'mass_flow': {'type': 'relative', 'value': 0.01},  # 1%
     },
-    geometry_uncertainties={
-        'area': {'type': 'relative', 'value': 0.02},  # 2%
-    },
     settings={
         'sample_rate_hz': 100,
-        'steady_state_cv_threshold': 0.02,
-        'min_steady_duration_ms': 500,
+        'resample_freq_ms': 10,
+        'steady_window_ms': 1000,
+        'cv_threshold': 1.5,
     },
     qc={
         'max_nan_ratio': 0.05,
         'min_correlation': 0.3,
-        'max_cv_percent': 5.0,
     },
-    tags=['cold_flow', 'nitrogen', 'standard'],
+    tags=['cold_flow', 'default'],
 )
 
-COLD_FLOW_WATER_TEMPLATE = SavedConfig(
-    name="Cold Flow - Water (Incompressible)",
-    version="2.0.0",
-    test_type="cold_flow",
-    description="Water flow test for hydraulic characterization",
-    columns={
-        'timestamp': 'timestamp',
-        'upstream_pressure': 'P_inlet',
-        'downstream_pressure': 'P_outlet',
-        'temperature': 'T_water',
-        'mass_flow': 'mass_flow',
-    },
-    fluid={
-        'name': 'water',
-        'gamma': 1.0,  # Incompressible
-        'density_kg_m3': 998.0,  # At 20°C
-        'viscosity_pa_s': 0.001,
-    },
-    geometry={
-        'orifice_area_mm2': 1.0,
-        'orifice_diameter_mm': 1.128,
-    },
-    uncertainties={
-        'pressure': {'type': 'relative', 'value': 0.005},
-        'temperature': {'type': 'absolute', 'value': 0.5},
-        'mass_flow': {'type': 'relative', 'value': 0.005},
-    },
-    geometry_uncertainties={
-        'area': {'type': 'relative', 'value': 0.02},
-    },
-    settings={
-        'sample_rate_hz': 100,
-        'use_incompressible_model': True,
-    },
-    qc={
-        'max_nan_ratio': 0.05,
-        'min_correlation': 0.5,
-    },
-    tags=['cold_flow', 'water', 'incompressible'],
-)
-
-HOT_FIRE_LOX_RP1_TEMPLATE = SavedConfig(
-    name="Hot Fire - LOX/RP-1 (Standard)",
-    version="2.0.0",
+# Default Hot Fire Template - Hardware config only (no propellants/geometry)
+HOT_FIRE_DEFAULT_TEMPLATE = SavedConfig(
+    name="Default Hot Fire",
+    version="1.0.0",
     test_type="hot_fire",
-    description="Standard hot fire test with LOX/RP-1 propellants",
-    columns={
-        'timestamp': 'timestamp',
-        'chamber_pressure': 'P_chamber',
-        'ox_mass_flow': 'mf_ox',
-        'fuel_mass_flow': 'mf_fuel',
-        'thrust': 'thrust',
-        'ox_inlet_pressure': 'P_ox_inlet',
-        'fuel_inlet_pressure': 'P_fuel_inlet',
-    },
-    propellants={
-        'oxidizer': 'LOX',
-        'fuel': 'RP-1',
-        'optimal_of_ratio': 2.56,
-        'theoretical_cstar_m_s': 1780,
-        'theoretical_isp_s': 311,
-    },
-    geometry={
-        'throat_area_mm2': 100.0,
-        'throat_diameter_mm': 11.28,
-        'nozzle_expansion_ratio': 10.0,
-        'chamber_volume_cc': 50.0,
+    description="Default configuration for hot fire testing",
+    channel_config={
+        # Example channel mappings - user should customize
+        "10001": "PC-PT-01",
+        "10002": "OX-PT-01",
+        "10003": "FU-PT-01",
+        "10004": "OX-FM-01",
+        "10005": "FU-FM-01",
+        "10006": "LC-01",
     },
     uncertainties={
-        'chamber_pressure': {'type': 'relative', 'value': 0.005},
-        'mass_flow': {'type': 'relative', 'value': 0.01},
-        'thrust': {'type': 'relative', 'value': 0.02},
-    },
-    geometry_uncertainties={
-        'throat_area': {'type': 'relative', 'value': 0.01},
+        'chamber_pressure': {'type': 'relative', 'value': 0.005},  # 0.5%
+        'mass_flow': {'type': 'relative', 'value': 0.01},  # 1%
+        'thrust': {'type': 'relative', 'value': 0.02},  # 2%
     },
     settings={
         'sample_rate_hz': 1000,
+        'resample_freq_ms': 1,
+        'steady_window_ms': 500,
+        'cv_threshold': 2.0,
         'g0': 9.80665,
     },
     qc={
         'max_nan_ratio': 0.02,
         'min_pc_bar': 5.0,
-        'max_of_deviation': 0.5,
     },
-    tags=['hot_fire', 'LOX', 'RP-1', 'bipropellant'],
-)
-
-HOT_FIRE_N2O_HTPB_TEMPLATE = SavedConfig(
-    name="Hot Fire - N2O/HTPB Hybrid",
-    version="2.0.0",
-    test_type="hot_fire",
-    description="Hybrid motor test with N2O oxidizer and HTPB fuel grain",
-    columns={
-        'timestamp': 'timestamp',
-        'chamber_pressure': 'P_c',
-        'ox_mass_flow': 'mf_n2o',
-        'thrust': 'thrust',
-        'ox_tank_pressure': 'P_tank',
-    },
-    propellants={
-        'oxidizer': 'N2O',
-        'fuel': 'HTPB',
-        'theoretical_of_ratio': 7.0,
-        'theoretical_cstar_m_s': 1550,
-    },
-    geometry={
-        'throat_area_mm2': 50.0,
-        'nozzle_expansion_ratio': 8.0,
-        'port_diameter_mm': 30.0,
-        'grain_length_mm': 200.0,
-    },
-    uncertainties={
-        'chamber_pressure': {'type': 'relative', 'value': 0.01},
-        'mass_flow': {'type': 'relative', 'value': 0.02},
-        'thrust': {'type': 'relative', 'value': 0.03},
-    },
-    settings={
-        'sample_rate_hz': 500,
-        'g0': 9.80665,
-    },
-    tags=['hot_fire', 'N2O', 'HTPB', 'hybrid'],
+    tags=['hot_fire', 'default'],
 )
 
 # Registry of built-in templates
 BUILTIN_SAVED_CONFIGS: Dict[str, SavedConfig] = {
-    'cold_flow_n2': COLD_FLOW_N2_TEMPLATE,
-    'cold_flow_water': COLD_FLOW_WATER_TEMPLATE,
-    'hot_fire_lox_rp1': HOT_FIRE_LOX_RP1_TEMPLATE,
-    'hot_fire_n2o_htpb': HOT_FIRE_N2O_HTPB_TEMPLATE,
+    'cold_flow_default': COLD_FLOW_DEFAULT_TEMPLATE,
+    'hot_fire_default': HOT_FIRE_DEFAULT_TEMPLATE,
 }
 
 
@@ -485,29 +367,27 @@ def validate_config_against_template(
 ) -> List[str]:
     """
     Validate a config dict against a template.
-    
+
     Returns list of validation errors (empty if valid).
     """
     errors = []
-    
-    # Check required columns
-    template_cols = template.columns
-    config_cols = config.get('columns', {})
-    
-    for key in template_cols:
-        if key not in config_cols:
-            errors.append(f"Missing column mapping: {key}")
-    
-    # Check geometry
-    for key in template.geometry:
-        if key not in config.get('geometry', {}):
-            errors.append(f"Missing geometry parameter: {key}")
-    
-    # Check uncertainties
+
+    # Check test type matches
+    if config.get('test_type') != template.test_type:
+        errors.append(f"Test type mismatch: expected '{template.test_type}', got '{config.get('test_type')}'")
+
+    # Check uncertainties are defined
+    config_uncertainties = config.get('uncertainties', {})
     for key in template.uncertainties:
-        if key not in config.get('uncertainties', {}):
+        if key not in config_uncertainties:
             errors.append(f"Missing uncertainty specification: {key}")
-    
+
+    # Check required settings
+    config_settings = config.get('settings', {})
+    for key in template.settings:
+        if key not in config_settings:
+            errors.append(f"Missing setting: {key}")
+
     return errors
 
 
