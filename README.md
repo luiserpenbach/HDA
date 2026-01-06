@@ -1,97 +1,86 @@
-# Hopper Data Studio - Engineering Integrity Components
+# Hopper Data Studio
+
+A Streamlit-based web application for analyzing rocket propulsion test data with built-in engineering integrity systems.
 
 ## Overview
 
-This package implements the engineering integrity systems for propulsion test data analysis, organized into three priority levels:
+Hopper Data Studio provides comprehensive analysis tools for cold flow and hot fire testing with emphasis on:
+- **Data Traceability** - SHA-256 hashing and audit trails
+- **Uncertainty Quantification** - Full error propagation for all metrics
+- **Quality Control** - Pre-analysis data validation
 
-### P0 Components (Non-negotiable)
-1. **Traceability** - Cryptographic verification and audit trails
-2. **Uncertainty** - Error propagation for all metrics
-3. **QC Checks** - Pre-analysis data quality validation
-4. **Config Validation** - Schema validation for configurations
-5. **Campaign Manager v2** - Enhanced database with traceability
-6. **Integrated Analysis** - High-level analysis API
+## Features
 
-### P1 Components (High Priority)
-1. **SPC** - Statistical Process Control, control charts, capability indices
-2. **Reporting** - HTML reports with full traceability
-3. **Batch Analysis** - Multi-file processing
-4. **Export** - Enhanced data export with metadata
+### Core Engineering Integrity (P0)
+- **Traceability** - Cryptographic verification and audit trails
+- **Uncertainty** - Error propagation for all metrics
+- **QC Checks** - Pre-analysis data quality validation
+- **Config Validation** - Schema validation for configurations
+- **Campaign Manager** - SQLite database with full traceability
 
-### P2 Components (Advanced Features)
-1. **Advanced Anomaly Detection** - Multi-type anomaly detection with sensor health
-2. **Data Comparison** - Test-to-test, golden reference, regression analysis
-3. **Saved Configurations** - Reusable testbench configurations with inheritance
+### Analysis & Reporting (P1)
+- **SPC** - Statistical Process Control, control charts, capability indices
+- **Reporting** - HTML reports with full traceability
+- **Batch Analysis** - Multi-file parallel processing
+- **Export** - CSV, Excel, JSON with metadata
 
-## Version 2.3.0 Architecture
-
-### Config/Metadata Separation
-
-v2.3.0 introduces a clear separation between testbench hardware and test article properties:
-
-#### Active Configuration (Testbench Hardware)
-- **What it contains**: Sensor mappings, channel mappings, calibration uncertainties, processing settings
-- **When it changes**: Only when testbench is modified or recalibrated
-- **Where it's stored**: `saved_configs/` folder (formerly `config_templates/`)
-
-#### Test Metadata (Test Article Properties)
-- **What it contains**: Geometry, fluid properties, part numbers, serial numbers
-- **When it changes**: Every test (different injector, fluid, conditions, etc.)
-- **Where it's provided**: `metadata.json` file in test folder, or UI entry
-
-**Key Benefits**:
-- Load testbench configuration once, reuse for all tests
-- Provide only test-specific metadata per test
-- No more creating configs for every injector element or fluid type
-- Clearer separation of concerns
-
-**Example Workflow**:
-```python
-from core.config_validation import validate_active_configuration, validate_test_metadata
-from core.metadata_manager import load_metadata_from_folder
-from core.integrated_analysis import analyze_cold_flow_test
-
-# Load Active Configuration (once for test series)
-with open('saved_configs/lcsc_testbench.json') as f:
-    active_config = validate_active_configuration(json.load(f))
-
-# Load Test Metadata (per test, auto-loads from metadata.json)
-metadata, source = load_metadata_from_folder('test_data/TEST-001/')
-
-# Merge for analysis
-from core.config_validation import merge_config_and_metadata
-full_config = merge_config_and_metadata(active_config, metadata)
-
-# Analyze as usual
-result = analyze_cold_flow_test(df, full_config, steady_window, test_id, file_path, metadata.to_dict())
-```
-
-**Backward Compatibility**: Old configs (v2.0-v2.2) automatically migrate transparently. Use `scripts/migrate_configs_v2.3.py` for permanent migration.
-
-See `METADATA_GUIDE.md` for detailed metadata usage instructions.
+### Advanced Features (P2)
+- **Anomaly Detection** - Multi-type detection with sensor health
+- **Data Comparison** - Test-to-test and golden reference comparison
+- **Saved Configurations** - Reusable testbench configurations
 
 ## Installation
 
-Copy the `core/` directory into your Hopper Data Studio project:
+```bash
+# Clone repository
+git clone <repo-url>
+cd HDA
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run application
+streamlit run app.py
+```
+
+### Optional: CoolProp for accurate fluid properties
+```bash
+pip install CoolProp>=6.4.1
+```
+
+## Project Structure
 
 ```
-hopper_studio/
-├── core/                    # Engineering integrity modules
-│   ├── __init__.py
-│   ├── traceability.py      # P0: Data hashing, audit trails
-│   ├── uncertainty.py       # P0: Error propagation
-│   ├── qc_checks.py         # P0: Pre-analysis validation
-│   ├── config_validation.py # P0: Config schema validation
-│   ├── campaign_manager_v2.py # P0: Enhanced database
-│   ├── integrated_analysis.py # P0: High-level API
-│   ├── spc.py               # P1: Statistical Process Control
-│   ├── reporting.py         # P1: HTML report generation
-│   ├── batch_analysis.py    # P1: Multi-file processing
-│   └── export.py            # P1: Enhanced data export
-├── tests/
-│   ├── test_p0_components.py
-│   └── test_p1_components.py
-└── pages/                   # Streamlit pages
+HDA/
+├── app.py                      # Main Streamlit entry point
+├── requirements.txt            # Python dependencies
+├── core/                       # Engineering integrity modules
+│   ├── traceability.py        # SHA-256 hashing, audit trails
+│   ├── uncertainty.py         # Error propagation
+│   ├── qc_checks.py           # Quality control validation
+│   ├── config_validation.py   # Config schema validation
+│   ├── campaign_manager_v2.py # SQLite database with traceability
+│   ├── integrated_analysis.py # High-level analysis API
+│   ├── spc.py                 # Statistical Process Control
+│   ├── reporting.py           # HTML report generation
+│   ├── batch_analysis.py      # Multi-file processing
+│   ├── export.py              # Data export
+│   ├── advanced_anomaly.py    # Anomaly detection
+│   ├── comparison.py          # Test comparison
+│   └── saved_configs.py       # Configuration management
+├── pages/                      # Streamlit pages
+│   ├── 1_Single_Test_Analysis.py
+│   ├── 2_Campaign_Management.py
+│   ├── 3_SPC_Analysis.py
+│   ├── 4_Batch_Processing.py
+│   ├── 5_Reports_Export.py
+│   ├── 6_Anomaly_Detection.py
+│   ├── 7_Data_Comparison.py
+│   └── 8_Saved_Configurations.py
+├── configs/                    # Example configuration files
+├── saved_configs/              # Saved testbench configurations
+├── campaigns/                  # SQLite campaign databases
+└── tests/                      # Test suite
 ```
 
 ## Quick Start
@@ -111,7 +100,7 @@ result = analyze_cold_flow_test(
     config=config,
     steady_window=(1500, 5000),
     test_id="INJ-CF-001",
-    file_path="demo_data/test_data.csv",
+    file_path="test_data.csv",
     metadata={'part': 'INJ-V1', 'serial_num': 'SN-001'}
 )
 
@@ -124,40 +113,30 @@ record = result.to_database_record('cold_flow')
 save_to_campaign("INJ_Acceptance_Q1", record)
 ```
 
-### Statistical Process Control (P1)
+### Statistical Process Control
 
 ```python
-from core.spc import create_imr_chart, format_spc_summary
+from core.spc import create_imr_chart
 from core.campaign_manager_v2 import get_campaign_data
 
-# Load campaign data
 df = get_campaign_data("INJ_Acceptance_Q1")
 
-# Create control chart
 analysis = create_imr_chart(
     df,
     parameter='avg_cd_CALC',
-    usl=0.70,  # Upper spec limit
-    lsl=0.60,  # Lower spec limit
+    usl=0.70,
+    lsl=0.60,
 )
 
-# Check results
 print(f"In Control: {analysis.n_violations == 0}")
 print(f"Cpk: {analysis.capability.cpk:.2f}")
-print(format_spc_summary(analysis))
-
-# Get out-of-control points
-for point in analysis.get_out_of_control_points():
-    print(f"  {point.test_id}: {[v.value for v in point.violations]}")
 ```
 
-### Generate Reports (P1)
+### Generate Reports
 
 ```python
-from core.reporting import generate_test_report, generate_campaign_report, save_report
-from core.spc import analyze_campaign_spc
+from core.reporting import generate_test_report, save_report
 
-# Single test report
 html = generate_test_report(
     test_id='CF-001',
     test_type='cold_flow',
@@ -166,310 +145,55 @@ html = generate_test_report(
     qc_report={'passed': True, 'summary': {'passed': 5}, 'checks': []},
 )
 save_report(html, 'reports/CF-001_report.html')
-
-# Campaign report with SPC
-spc_results = analyze_campaign_spc(df, ['avg_cd_CALC', 'avg_mf_g_s'])
-html = generate_campaign_report(
-    campaign_name='INJ_Acceptance_Q1',
-    df=df,
-    parameters=['avg_cd_CALC', 'avg_mf_g_s'],
-    spc_analyses=spc_results,
-)
-save_report(html, 'reports/campaign_summary.html')
 ```
 
-### Batch Analysis (P1)
+## Configuration
 
-```python
-from core.batch_analysis import (
-    discover_test_files,
-    run_batch_analysis,
-    save_batch_to_campaign,
-    export_batch_results,
-    load_csv_with_timestamp,
-)
-from pathlib import Path
+### Active Configuration (Testbench Hardware)
 
-# Discover test files
-files = discover_test_files('/path/to/tests', '*.csv')
-print(f"Found {len(files)} test files")
+Stored in `saved_configs/`, contains:
+- Sensor mappings and channel IDs
+- Calibration uncertainties
+- Processing settings
 
-# Run batch analysis
-def my_analyze_func(df, config, test_id, file_path):
-    # Your analysis logic here
-    return analyze_cold_flow_test(...)
+Changes only when testbench is modified or recalibrated.
 
-report = run_batch_analysis(
-    files=files,
-    config=config,
-    load_func=load_csv_with_timestamp,
-    analyze_func=my_analyze_func,
-    max_workers=4,  # Parallel processing
-    progress_callback=lambda i, n, f: print(f"Processing {i+1}/{n}")
-)
+### Test Metadata (Test Article Properties)
 
-print(report.summary())
+Provided per test via `metadata.json` or UI entry:
+- Geometry (orifice area, throat area)
+- Fluid properties
+- Part/serial numbers
 
-# Save to campaign
-saved, skipped = save_batch_to_campaign(report, "INJ_Acceptance_Q1")
-
-# Export results
-export_batch_results(report, 'batch_results.csv', format='csv')
-```
-
-### Export Data (P1)
-
-```python
-from core.export import (
-    export_campaign_excel,
-    export_campaign_json,
-    export_for_qualification,
-)
-
-# Excel with multiple sheets (Data, Metadata, QC, SPC)
-export_campaign_excel(
-    df=df,
-    output_path='campaign_data.xlsx',
-    campaign_info={'name': 'INJ_Acceptance_Q1', 'type': 'cold_flow'},
-    spc_summary=spc_results,
-)
-
-# Qualification-ready package
-outputs = export_for_qualification(
-    df=df,
-    campaign_info=campaign_info,
-    output_dir='qualification_docs/',
-)
-# Creates: summary CSV, full Excel, traceability report, JSON archive
-```
-
-## API Reference
-
-### P0: Traceability
-
-```python
-from core.traceability import (
-    compute_file_hash,           # SHA-256 hash of file
-    compute_dataframe_hash,      # Hash of DataFrame contents
-    create_full_traceability_record,  # Complete audit record
-)
-
-# Create traceability record
-record = create_full_traceability_record(
-    raw_data_path="test.csv",
-    df=df,
-    config=config,
-    steady_window=(1500, 5000),
-)
-# Returns dict with hashes, analyst info, timestamps, processing version
-```
-
-### P0: Uncertainty
-
-```python
-from core.uncertainty import (
-    MeasurementWithUncertainty,
-    calculate_cold_flow_uncertainties,
-    calculate_hot_fire_uncertainties,
-)
-
-# Full uncertainty propagation
-measurements = calculate_cold_flow_uncertainties(
-    p_up=25.0,
-    p_down=24.5,
-    temp=293.15,
-    mass_flow=12.5,
-    area=1e-6,
-    config=config,  # Contains sensor and geometry uncertainties
-)
-
-cd = measurements['Cd']
-print(f"Cd = {cd.value:.4f} ± {cd.uncertainty:.4f} ({cd.relative_uncertainty_percent:.1f}%)")
-```
-
-### P0: QC Checks
-
-```python
-from core.qc_checks import run_qc_checks, assert_qc_passed
-
-# Run all QC checks
-report = run_qc_checks(df, config)
-
-print(f"Passed: {report.passed}")
-print(f"Summary: {report.summary}")
-
-for check in report.checks:
-    print(f"  {check.name}: {check.status.name} - {check.message}")
-
-# Raise exception if QC fails
-assert_qc_passed(report, strict=True)
-```
-
-### P1: SPC
-
-```python
-from core.spc import (
-    create_imr_chart,        # Individual-Moving Range chart
-    calculate_capability,     # Cp, Cpk, Pp, Ppk
-    check_western_electric_rules,  # Out-of-control detection
-    detect_trend,            # Trend analysis
-)
-
-# Control chart analysis
-analysis = create_imr_chart(df, 'avg_cd_CALC', usl=0.70, lsl=0.60)
-
-# Results include:
-# - analysis.limits (UCL, LCL, center line)
-# - analysis.points (with violations flagged)
-# - analysis.capability (Cpk, Ppk, etc.)
-# - analysis.has_trend, trend_direction
+```json
+{
+  "part_number": "INJ-B1-03",
+  "serial_number": "SN-2024-045",
+  "geometry": {
+    "orifice_area_mm2": 3.14159
+  },
+  "fluid": {
+    "name": "nitrogen",
+    "gamma": 1.4
+  }
+}
 ```
 
 ## Testing
 
-Run the test suite:
-
 ```bash
-# P0 tests
-python tests/test_p0_components.py
+# Run all tests
+python -m pytest tests/ -v
 
-# P1 tests
-python tests/test_p1_components.py
-
-# P2 tests
-python tests/test_p2_components.py
+# Individual test suites
+python tests/test_p0_components.py  # Core integrity
+python tests/test_p1_components.py  # Analysis & reporting
+python tests/test_p2_components.py  # Advanced features
 ```
-
-## P2: Advanced Anomaly Detection
-
-```python
-from core.advanced_anomaly import run_anomaly_detection, format_anomaly_table
-
-# Run comprehensive anomaly detection
-report = run_anomaly_detection(
-    df,
-    channels=['P_upstream', 'mass_flow', 'temperature'],
-    sample_rate_hz=100,
-    correlation_pairs=[('P_upstream', 'mass_flow')],
-)
-
-# Check results
-print(f"Total anomalies: {report.total_anomalies}")
-print(f"Critical: {report.critical_count}")
-print(f"Has issues: {report.has_critical}")
-
-# Sensor health scores
-for channel, health in report.sensor_health.items():
-    print(f"  {channel}: {health:.0%}")
-
-# Export as DataFrame
-anomaly_df = format_anomaly_table(report)
-```
-
-**Anomaly types detected:**
-- Spikes (z-score based)
-- Dropouts (signal loss)
-- Drift (systematic trend)
-- Oscillation (periodic noise)
-- Saturation (sensor limits)
-- Flatline (no variation)
-- Correlation breaks (unexpected decorrelation)
-- Transients (rapid changes)
-
-## P2: Data Comparison
-
-```python
-from core.comparison import (
-    compare_tests,
-    create_golden_from_campaign,
-    compare_to_golden,
-    linear_regression,
-    calculate_correlation_matrix,
-)
-
-# Test-to-test comparison
-result = compare_tests(
-    test_a={'Cd': 0.65, 'mass_flow': 12.5},
-    test_b={'Cd': 0.66, 'mass_flow': 12.3},
-    test_a_id="CF-001",
-    test_b_id="CF-002",
-    default_tolerance=5.0,
-)
-print(f"Pass: {result.overall_pass}")
-
-# Create golden reference from campaign
-golden = create_golden_from_campaign(
-    df, "INJ_Golden", 
-    parameters=['avg_cd_CALC', 'avg_mf_g_s'],
-    tolerance_multiplier=3.0,
-)
-
-# Compare test to golden
-comparison = compare_to_golden(test_data, "CF-010", golden)
-
-# Linear regression
-reg = linear_regression(x_data, y_data, "pressure", "flow_rate")
-print(f"R² = {reg.r_squared:.4f}")
-print(f"Equation: {reg.prediction_equation}")
-
-# Correlation matrix
-corr = calculate_correlation_matrix(df, ['param1', 'param2', 'param3'])
-strong_corrs = corr.get_strong_correlations(threshold=0.7)
-```
-
-## P2: Configuration Templates
-
-```python
-from core.templates import (
-    TemplateManager,
-    create_config_from_template,
-    BUILTIN_TEMPLATES,
-)
-
-# List available templates
-manager = TemplateManager()
-templates = manager.list_templates()
-
-# Use built-in template
-config = create_config_from_template(
-    'cold_flow_n2',
-    overrides={'geometry': {'orifice_area_mm2': 2.5}}
-)
-
-# Create template from parent
-child = manager.create_from_parent(
-    'cold_flow_n2',
-    "My Custom Template",
-    overrides={'fluid': {'name': 'helium', 'gamma': 1.66}}
-)
-manager.save_template(child, "my_template")
-
-# Built-in templates:
-# - cold_flow_n2: Nitrogen cold flow
-# - cold_flow_water: Water flow (incompressible)
-# - hot_fire_lox_rp1: LOX/RP-1 bipropellant
-# - hot_fire_n2o_htpb: N2O/HTPB hybrid
-```
-
-## Documentation
-
-### For Users
-- **[WHATS_NEW.md](WHATS_NEW.md)** - What's new in v2.1.0, v2.2.0, and v2.3.0 (start here for new features!)
-- **[METADATA_GUIDE.md](METADATA_GUIDE.md)** - Complete guide to using test metadata (v2.3.0+)
-- **[QUICK_ITERATION_MODE.md](QUICK_ITERATION_MODE.md)** - Comprehensive guide to Quick Iteration Mode for parameter sweeps
-- **[TEMPLATE_INTEGRATION.md](TEMPLATE_INTEGRATION.md)** - Template Integration feature documentation
-
-### For Developers
-- **[CLAUDE.md](CLAUDE.md)** - Developer guide, conventions, and AI assistant instructions
-- **[docs/development/](docs/development/)** - Development history and design rationale
-
-### For Reference
-- **[docs/archive/](docs/archive/)** - Archived documentation (PR descriptions, etc.)
 
 ## Version
 
-- **Application Version**: 2.3.0 (Configuration Architecture Release)
-- **Core Version**: 2.3.0 (Config/Metadata Separation)
+- **Application Version**: 2.3.0
 - **Schema Version**: 3 (campaign database)
 - **Processing Version**: 2.0.0+integrity
 
