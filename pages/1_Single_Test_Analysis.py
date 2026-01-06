@@ -586,143 +586,141 @@ except ImportError:
     FLUID_PROPS_SUPPORT = False
 
 # Data source selection
-st.header("1. Load Test Data")
+st.header("1. Load Test Data & Preprocessing")
 
-data_source = st.radio(
-    "Data Source",
-    ["Upload CSV", "Load from Test Folder"],
-    horizontal=True,
-    help="Upload a single CSV file or load from a structured test folder with metadata"
-)
+# Create two columns for Load Test Data and Preprocessing
+load_col, preprocess_col = st.columns(2)
 
-if data_source == "Upload CSV":
-    uploaded_file = st.file_uploader(
-        "Upload CSV file",
-        type=['csv'],
-        help="Upload a CSV file with test data. Must include timestamp column."
+with load_col:
+    st.subheader("Load Test Data")
+
+    data_source = st.radio(
+        "Data Source",
+        ["Upload CSV", "Load from Test Folder"],
+        horizontal=True,
+        help="Upload a single CSV file or load from a structured test folder with metadata"
     )
 
-    if uploaded_file:
-        # Load data
-        try:
-            df_raw = pd.read_csv(uploaded_file)
-            st.session_state.df = df_raw
-            st.session_state.test_folder_path = None
-            st.session_state.loaded_metadata = None
+if data_source == "Upload CSV":
+    with load_col:
+        uploaded_file = st.file_uploader(
+            "Upload CSV file",
+            type=['csv'],
+            help="Upload a CSV file with test data. Must include timestamp column."
+        )
 
-            # Compute file hash for traceability
-            uploaded_file.seek(0)
-            file_content = uploaded_file.read()
-            file_hash = f"sha256:{__import__('hashlib').sha256(file_content).hexdigest()[:16]}"
-            st.session_state.file_hash = file_hash
+        if uploaded_file:
+            # Load data
+            try:
+                df_raw = pd.read_csv(uploaded_file)
+                st.session_state.df = df_raw
+                st.session_state.test_folder_path = None
+                st.session_state.loaded_metadata = None
 
-            # Compact success message
-            st.success(f"✓ Loaded: {len(df_raw)} rows × {len(df_raw.columns)} columns")
+                # Compute file hash for traceability
+                uploaded_file.seek(0)
+                file_content = uploaded_file.read()
+                file_hash = f"sha256:{__import__('hashlib').sha256(file_content).hexdigest()[:16]}"
+                st.session_state.file_hash = file_hash
 
-            # Details in expander
-            with st.expander("Data Info"):
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Rows", len(df_raw))
-                with col2:
-                    st.metric("Columns", len(df_raw.columns))
-                with col3:
-                    st.metric("File Hash", file_hash[:12] + "...")
+                # Compact success message
+                st.success(f"✓ Loaded: {len(df_raw)} rows × {len(df_raw.columns)} columns")
 
-        except Exception as e:
-            st.error(f"Error loading file: {e}")
-            df_raw = None
-    else:
-        df_raw = st.session_state.df
+            except Exception as e:
+                st.error(f"Error loading file: {e}")
+                df_raw = None
+        else:
+            df_raw = st.session_state.df
 
 else:  # Load from Test Folder
-    if not TEST_FOLDER_SUPPORT:
-        st.warning("Test folder support not available. Please use CSV upload.")
-        df_raw = st.session_state.df
-    else:
-        # Recent folders selection
-        recent_folders = ConfigManager.get_recent_folders(limit=5)
+    with load_col:
+        if not TEST_FOLDER_SUPPORT:
+            st.warning("Test folder support not available. Please use CSV upload.")
+            df_raw = st.session_state.df
+        else:
+            # Recent folders selection
+            recent_folders = ConfigManager.get_recent_folders(limit=5)
 
-        if recent_folders:
-            folder_source = st.radio(
-                "Folder Selection",
-                ["Recent Locations", "Enter Path"],
-                horizontal=True,
-                label_visibility="collapsed"
-            )
-
-            if folder_source == "Recent Locations":
-                folder_options = ["-- Select Recent Folder --"] + recent_folders
-                selected_folder = st.selectbox(
-                    "Recent Folder Locations",
-                    folder_options,
-                    help="Select from recently used folder paths"
+            if recent_folders:
+                folder_source = st.radio(
+                    "Folder Selection",
+                    ["Recent Locations", "Enter Path"],
+                    horizontal=True,
+                    label_visibility="collapsed"
                 )
 
-                if selected_folder != "-- Select Recent Folder --":
-                    test_folder_path = selected_folder
+                if folder_source == "Recent Locations":
+                    folder_options = ["-- Select Recent Folder --"] + recent_folders
+                    selected_folder = st.selectbox(
+                        "Recent Folder Locations",
+                        folder_options,
+                        help="Select from recently used folder paths"
+                    )
+
+                    if selected_folder != "-- Select Recent Folder --":
+                        test_folder_path = selected_folder
+                    else:
+                        test_folder_path = st.session_state.get('test_folder_path', '')
                 else:
-                    test_folder_path = st.session_state.get('test_folder_path', '')
+                    test_folder_path = st.text_input(
+                        "Test Folder Path",
+                        value=st.session_state.get('test_folder_path', ''),
+                        help="Path to test folder or S3 path (future support)"
+                    )
             else:
                 test_folder_path = st.text_input(
                     "Test Folder Path",
                     value=st.session_state.get('test_folder_path', ''),
                     help="Path to test folder or S3 path (future support)"
                 )
-        else:
-            test_folder_path = st.text_input(
-                "Test Folder Path",
-                value=st.session_state.get('test_folder_path', ''),
-                help="Path to test folder or S3 path (future support)"
-            )
 
-        if st.button("Load Test Folder", type="primary"):
-            if test_folder_path and Path(test_folder_path).exists():
-                try:
-                    test_data = load_test_from_folder(test_folder_path)
+            if st.button("Load Test Folder", type="primary"):
+                if test_folder_path and Path(test_folder_path).exists():
+                    try:
+                        test_data = load_test_from_folder(test_folder_path)
 
-                    # Load raw data
-                    if test_data['raw_data_file']:
-                        df_raw = pd.read_csv(test_data['raw_data_file'])
-                        st.session_state.df = df_raw
-                        st.session_state.test_folder_path = test_folder_path
+                        # Load raw data
+                        if test_data['raw_data_file']:
+                            df_raw = pd.read_csv(test_data['raw_data_file'])
+                            st.session_state.df = df_raw
+                            st.session_state.test_folder_path = test_folder_path
 
-                        # Save to recent folders
-                        ConfigManager.save_recent_folder(test_folder_path)
+                            # Save to recent folders
+                            ConfigManager.save_recent_folder(test_folder_path)
 
-                        # Compute file hash
-                        with open(test_data['raw_data_file'], 'rb') as f:
-                            file_hash = f"sha256:{__import__('hashlib').sha256(f.read()).hexdigest()[:16]}"
-                        st.session_state.file_hash = file_hash
+                            # Compute file hash
+                            with open(test_data['raw_data_file'], 'rb') as f:
+                                file_hash = f"sha256:{__import__('hashlib').sha256(f.read()).hexdigest()[:16]}"
+                            st.session_state.file_hash = file_hash
 
-                        st.success(f"✓ Loaded {len(df_raw)} rows from {Path(test_data['raw_data_file']).name}")
-                    else:
-                        st.error("No raw data file found in test folder")
-                        df_raw = None
+                            st.success(f"✓ Loaded {len(df_raw)} rows from {Path(test_data['raw_data_file']).name}")
+                        else:
+                            st.error("No raw data file found in test folder")
+                            df_raw = None
 
-                    # Load metadata
-                    if test_data['metadata']:
-                        st.session_state.loaded_metadata = test_data['metadata']
-                        with st.expander("Loaded Metadata"):
-                            st.json(test_data['metadata'])
+                        # Load metadata
+                        if test_data['metadata']:
+                            st.session_state.loaded_metadata = test_data['metadata']
+                            with st.expander("Loaded Metadata"):
+                                st.json(test_data['metadata'])
 
-                    # Load config if found
-                    if test_data['config']:
-                        config = test_data['config']
-                        st.info(f"Loaded configuration from {Path(test_data['config_file']).name}")
+                        # Load config if found
+                        if test_data['config']:
+                            config = test_data['config']
+                            st.info(f"Loaded configuration from {Path(test_data['config_file']).name}")
 
-                except Exception as e:
-                    st.error(f"Error loading test folder: {e}")
+                    except Exception as e:
+                        st.error(f"Error loading test folder: {e}")
+                        df_raw = st.session_state.df
+                else:
+                    st.warning("Please enter a valid test folder path")
                     df_raw = st.session_state.df
             else:
-                st.warning("Please enter a valid test folder path")
                 df_raw = st.session_state.df
-        else:
-            df_raw = st.session_state.df
 
-        # Show expected folder structure
-        with st.expander("Expected Folder Structure"):
-            st.markdown("""
+            # Show expected folder structure
+            with st.expander("Expected Folder Structure"):
+                st.markdown("""
 ```
 TEST_ID/
     config/           - Configuration files (JSON)
@@ -750,127 +748,100 @@ TEST_ID/
     "operator": "J. Smith"
 }
 ```
-            """)
+                """)
 
-if df_raw is not None:
-    # Preprocessing section - compact layout
+# Preprocessing section - in the right column
+with preprocess_col:
     st.subheader("Data Preprocessing")
 
-    # Quick preprocess with defaults button
-    col_btn1, col_btn2 = st.columns([1, 3])
-    with col_btn1:
-        if st.button("⚡ Quick Preprocess", type="primary", help="Preprocess with default settings"):
-            with st.spinner("Preprocessing..."):
-                df_proc = df_raw.copy()
+    if df_raw is not None:
+        # Preprocessing options in expander
+        with st.expander("⚙️ Preprocessing Options", expanded=True):
+            # Channel mapping option
+            channel_config = config.get('channel_config', {})
+            if channel_config:
+                apply_mapping = st.checkbox(
+                    f"Apply channel mapping ({len(channel_config)} channels defined)",
+                    value=True,
+                    help="Rename raw DAQ channel IDs to sensor names using channel_config"
+                )
+                with st.expander("View Channel Mapping"):
+                    st.json(channel_config)
+            else:
+                apply_mapping = False
+                st.info("No channel_config defined in config. Raw column names will be used.")
 
-                # Apply channel mapping if available
-                channel_config = config.get('channel_config', {})
-                if channel_config:
-                    df_proc, _ = apply_channel_mapping(df_proc, config)
+            col1, col2 = st.columns(2)
 
-                # Convert time and add time_s column
-                df_proc = preprocess_data(df_proc, config, time_unit='ms', shift_to_zero=True)
+            with col1:
+                time_unit = st.selectbox(
+                    "Original time unit",
+                    ["ms", "s", "us"],
+                    index=0,
+                    help="Unit of the timestamp column in raw data"
+                )
 
-                # Handle NaN values
-                df_proc, _ = handle_nan_values(df_proc, method='interpolate', max_gap=5)
+                nan_method = st.selectbox(
+                    "NaN handling",
+                    ["interpolate", "drop", "ffill", "none"],
+                    index=0,
+                    help="How to handle missing values"
+                )
 
-                st.session_state.df_processed = df_proc
-                st.success(f"✓ Preprocessed: {len(df_proc)} rows, {df_proc['time_s'].min():.2f}s - {df_proc['time_s'].max():.2f}s")
-                st.rerun()
+            with col2:
+                shift_to_zero = st.checkbox(
+                    "Shift time to 0",
+                    value=True,
+                    help="Shift timestamps so data starts at t=0"
+                )
 
-    with col_btn2:
-        st.caption("Use Quick Preprocess for standard settings, or expand below for custom options")
+                max_interp_gap = st.number_input(
+                    "Max interp. gap",
+                    min_value=1,
+                    max_value=50,
+                    value=5,
+                    help="Maximum consecutive NaNs to interpolate"
+                )
 
-    # Advanced preprocessing options in expander
-    with st.expander("⚙️ Advanced Preprocessing Options"):
-        # Channel mapping option
-        channel_config = config.get('channel_config', {})
-        if channel_config:
-            apply_mapping = st.checkbox(
-                f"Apply channel mapping ({len(channel_config)} channels defined)",
-                value=True,
-                help="Rename raw DAQ channel IDs to sensor names using channel_config"
-            )
-            with st.expander("View Channel Mapping"):
-                st.json(channel_config)
-        else:
-            apply_mapping = False
-            st.info("No channel_config defined in config. Raw column names will be used.")
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            time_unit = st.selectbox(
-                "Original time unit",
-                ["ms", "s", "us"],
-                index=0,
-                help="Unit of the timestamp column in raw data"
-            )
-
-        with col2:
-            shift_to_zero = st.checkbox(
-                "Shift time to 0",
-                value=True,
-                help="Shift timestamps so data starts at t=0"
-            )
-
-        with col3:
-            nan_method = st.selectbox(
-                "NaN handling",
-                ["interpolate", "drop", "ffill", "none"],
-                index=0,
-                help="How to handle missing values"
-            )
-
-        with col4:
-            max_interp_gap = st.number_input(
-                "Max interp. gap",
-                min_value=1,
-                max_value=50,
-                value=5,
-                help="Maximum consecutive NaNs to interpolate"
-            )
-
-        # Resampling options
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
+            # Resampling options
             do_resample = st.checkbox(
                 "Resample to uniform rate",
                 value=False,
                 help="Resample data to a fixed sample rate using interpolation"
             )
 
-        with col2:
-            # Get default from config
-            default_rate = config.get('settings', {}).get('sample_rate_hz', 100)
-            target_rate = st.number_input(
-                "Target sample rate (Hz)",
-                min_value=1,
-                max_value=100000,
-                value=default_rate,
-                disabled=not do_resample,
-                help="Target uniform sample rate"
-            )
+            if do_resample:
+                col1, col2 = st.columns(2)
+                with col1:
+                    # Get default from config
+                    default_rate = config.get('settings', {}).get('sample_rate_hz', 100)
+                    target_rate = st.number_input(
+                        "Target sample rate (Hz)",
+                        min_value=1,
+                        max_value=100000,
+                        value=default_rate,
+                        help="Target uniform sample rate"
+                    )
 
-        with col3:
-            if do_resample and df_raw is not None:
-                # Show current rate estimate
-                timestamp_col = config.get('columns', {}).get('timestamp', 'timestamp')
-                if timestamp_col in df_raw.columns:
-                    dt = np.diff(df_raw[timestamp_col].values)
-                    if len(dt) > 0 and np.mean(dt) > 0:
-                        # Convert based on time unit
-                        if time_unit == 'ms':
-                            current_rate = 1000.0 / np.mean(dt)
-                        elif time_unit == 'us':
-                            current_rate = 1_000_000.0 / np.mean(dt)
-                        else:
-                            current_rate = 1.0 / np.mean(dt)
-                        st.metric("Current avg rate", f"{current_rate:.1f} Hz")
+                with col2:
+                    # Show current rate estimate
+                    timestamp_col = config.get('columns', {}).get('timestamp', 'timestamp')
+                    if timestamp_col in df_raw.columns:
+                        dt = np.diff(df_raw[timestamp_col].values)
+                        if len(dt) > 0 and np.mean(dt) > 0:
+                            # Convert based on time unit
+                            if time_unit == 'ms':
+                                current_rate = 1000.0 / np.mean(dt)
+                            elif time_unit == 'us':
+                                current_rate = 1_000_000.0 / np.mean(dt)
+                            else:
+                                current_rate = 1.0 / np.mean(dt)
+                            st.metric("Current avg rate", f"{current_rate:.1f} Hz")
+            else:
+                target_rate = 100  # Default value when not resampling
 
-        # Process data
-        if st.button("Preprocess Data (Custom)", type="secondary"):
+        # Preprocess Data button below the expander
+        if st.button("Preprocess Data", type="primary", use_container_width=True):
             with st.spinner("Preprocessing..."):
                 df_proc = df_raw.copy()
 
@@ -894,7 +865,11 @@ if df_raw is not None:
 
                 st.session_state.df_processed = df_proc
                 st.success(f"✓ Preprocessed: {len(df_proc)} rows, {df_proc['time_s'].min():.2f}s - {df_proc['time_s'].max():.2f}s")
+    else:
+        st.info("Load test data first to enable preprocessing options.")
 
+# Data Preview - below both columns
+if df_raw is not None:
     # Use processed data if available, otherwise raw
     df = st.session_state.df_processed if st.session_state.df_processed is not None else df_raw
 
@@ -962,7 +937,7 @@ if df_raw is not None:
 
             time_label = "Time (s)" if time_col == 'time_s' else "Time (ms)"
             fig.update_layout(
-                height=150 * n_sensors,
+                height=300 * n_sensors,
                 showlegend=False,
                 title="Data Overview",
                 margin=dict(t=40, b=40)
