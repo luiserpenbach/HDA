@@ -52,6 +52,10 @@ if 'file_hash' not in st.session_state:
     st.session_state.file_hash = None
 if 'detection_sensor' not in st.session_state:
     st.session_state.detection_sensor = None  # Track which sensor was used for detection
+if 'active_config' not in st.session_state:
+    st.session_state.active_config = None  # Persist loaded config across reruns
+if 'active_config_name' not in st.session_state:
+    st.session_state.active_config_name = None  # Track config name for display
 
 # Initialize detection preferences (persistent across tests)
 if 'detection_preferences' not in st.session_state:
@@ -417,6 +421,14 @@ with st.sidebar:
     # Configuration Source - Unified selector
     st.subheader("Configuration Source")
 
+    # Show currently active config if one is loaded
+    if st.session_state.active_config is not None:
+        st.success(f"✓ Active: {st.session_state.active_config_name or 'Custom Config'}")
+        if st.button("Clear Config", key="clear_config_btn"):
+            st.session_state.active_config = None
+            st.session_state.active_config_name = None
+            st.rerun()
+
     config_source = st.radio(
         "Select configuration source",
         ["Recent Configs", "Saved Configs", "Upload JSON", "Manual"],
@@ -424,7 +436,8 @@ with st.sidebar:
         help="Choose where to load your configuration from"
     )
 
-    config = None  # Will be set based on user selection
+    # Use active config from session state if available, otherwise load from source
+    config = st.session_state.active_config
 
     # ===== RECENT CONFIGS =====
     if config_source == "Recent Configs":
@@ -444,16 +457,14 @@ with st.sidebar:
             )
 
             if selected_recent != "-- Select Recent Config --":
-                # Find the selected config
-                idx = recent_options.index(selected_recent) - 1  # -1 for placeholder
-                config = recent_configs[idx]['config']
-                st.success(f"✓ Loaded: {recent_configs[idx]['info']['config_name']}")
-            else:
-                # Fallback to default if nothing selected
-                config = ConfigManager.get_default_config(test_type)
+                if st.button("Load Selected", key="load_recent_btn", type="primary"):
+                    # Find the selected config
+                    idx = recent_options.index(selected_recent) - 1  # -1 for placeholder
+                    st.session_state.active_config = recent_configs[idx]['config']
+                    st.session_state.active_config_name = recent_configs[idx]['info']['config_name']
+                    st.rerun()
         else:
             st.info("No recent configs yet. Use Saved Configs or upload a config file.")
-            config = ConfigManager.get_default_config(test_type)
 
     # ===== SAVED CONFIGS =====
     elif config_source == "Saved Configs":
@@ -487,57 +498,50 @@ with st.sidebar:
                         # Show template info
                         template_info = next(t for t in filtered_templates if t['id'] == template_id)
 
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            if template_info.get('description'):
-                                st.caption(f"📝 {template_info['description']}")
-                            if template_info.get('tags'):
-                                st.caption(f"🏷️ Tags: {', '.join(template_info['tags'])}")
+                        if template_info.get('description'):
+                            st.caption(f"📝 {template_info['description']}")
+                        if template_info.get('tags'):
+                            st.caption(f"🏷️ Tags: {', '.join(template_info['tags'])}")
 
-                        with col2:
-                            if st.button("Load", key="load_saved_config_btn", use_container_width=True):
-                                try:
-                                    config = load_saved_config(template_id)
-                                    ConfigManager.save_to_recent(config, 'saved_config', config.get('config_name', template_id))
-                                    st.success(f"✓ Loaded: {template_id}")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error loading saved config: {e}")
-
-                    # Fallback if nothing selected
-                    if config is None:
-                        config = ConfigManager.get_default_config(test_type)
+                        if st.button("Load Selected", key="load_saved_config_btn", type="primary"):
+                            try:
+                                loaded_config = load_saved_config(template_id)
+                                st.session_state.active_config = loaded_config
+                                st.session_state.active_config_name = loaded_config.get('config_name', template_id)
+                                ConfigManager.save_to_recent(loaded_config, 'saved_config', st.session_state.active_config_name)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error loading saved config: {e}")
                 else:
                     st.info(f"No {test_type} saved configs available. Create one in Saved Configurations page (Page 8).")
-                    config = ConfigManager.get_default_config(test_type)
             else:
                 st.info("No saved configs available. Create saved configs in Page 8 (Saved Configurations).")
-                config = ConfigManager.get_default_config(test_type)
 
         except ImportError:
             st.warning("Saved config system not available. Use Upload JSON or Manual.")
-            config = ConfigManager.get_default_config(test_type)
 
     # ===== UPLOAD JSON =====
     elif config_source == "Upload JSON":
         config_file = st.file_uploader("Upload config JSON", type=['json'])
         if config_file:
             try:
-                config = json.load(config_file)
-                st.success("✓ Configuration loaded from file")
-                # Save to recent configs
-                ConfigManager.save_to_recent(config, 'uploaded', config.get('config_name', 'Uploaded Config'))
+                uploaded_config = json.load(config_file)
+                if st.button("Load Uploaded Config", key="load_uploaded_btn", type="primary"):
+                    st.session_state.active_config = uploaded_config
+                    st.session_state.active_config_name = uploaded_config.get('config_name', 'Uploaded Config')
+                    ConfigManager.save_to_recent(uploaded_config, 'uploaded', st.session_state.active_config_name)
+                    st.rerun()
             except Exception as e:
-                st.error(f"Error loading config: {e}")
-                config = ConfigManager.get_default_config(test_type)
+                st.error(f"Error parsing config: {e}")
         else:
-            # No file uploaded yet - use default
-            config = ConfigManager.get_default_config(test_type)
-            st.info("Upload a JSON config file or use Manual to edit the default config below.")
+            st.info("Upload a JSON config file.")
 
     # ===== MANUAL =====
     else:  # Manual
-        st.info("Manual configuration - edit the JSON in the expander below")
+        st.info("Edit the JSON configuration below")
+
+    # If no active config, use default
+    if config is None:
         config = ConfigManager.get_default_config(test_type)
 
     st.divider()
@@ -550,13 +554,13 @@ with st.sidebar:
             height=300,
             key="config_editor"
         )
-        if st.button("Apply Changes"):
+        if st.button("Apply Changes", type="primary"):
             try:
-                config = json.loads(config_str)
-                st.success("Configuration updated")
-                # Save to recent configs
-                ConfigManager.save_to_recent(config, 'custom', config.get('config_name', 'Custom Config'))
-                st.rerun()  # Refresh to update recent configs list
+                edited_config = json.loads(config_str)
+                st.session_state.active_config = edited_config
+                st.session_state.active_config_name = edited_config.get('config_name', 'Custom Config')
+                ConfigManager.save_to_recent(edited_config, 'custom', st.session_state.active_config_name)
+                st.rerun()
             except Exception as e:
                 st.error(f"Invalid JSON: {e}")
 
