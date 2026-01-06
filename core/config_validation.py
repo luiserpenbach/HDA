@@ -209,6 +209,73 @@ class TestConfigDC:
         )
 
 
+def validate_hardware_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate a hardware-only configuration (v2.4.0+ format).
+
+    Hardware configs contain ONLY testbench info:
+    - config_name, version, test_type, description
+    - channel_config (DAQ channel mappings)
+    - uncertainties (measurement uncertainties)
+    - settings (sampling/processing settings)
+    - qc (quality control thresholds)
+
+    Fluid, geometry, and test-specific info should come from metadata files.
+
+    Args:
+        config: Configuration dictionary
+
+    Returns:
+        Validated config dictionary (unchanged if valid)
+
+    Raises:
+        ValueError: If validation fails
+    """
+    errors = []
+
+    # Check required top-level fields
+    if not config.get('config_name'):
+        errors.append("config_name is required")
+
+    if not config.get('test_type'):
+        errors.append("test_type is required ('cold_flow' or 'hot_fire')")
+    elif config.get('test_type') not in ['cold_flow', 'hot_fire']:
+        errors.append(f"test_type must be 'cold_flow' or 'hot_fire', got '{config.get('test_type')}'")
+
+    # Check channel_config is a dict (can be empty for manual column selection)
+    channel_config = config.get('channel_config', {})
+    if not isinstance(channel_config, dict):
+        errors.append("channel_config must be a dictionary")
+
+    # Check uncertainties structure if provided
+    uncertainties = config.get('uncertainties', {})
+    if not isinstance(uncertainties, dict):
+        errors.append("uncertainties must be a dictionary")
+    else:
+        for sensor_type, spec in uncertainties.items():
+            if not isinstance(spec, dict):
+                errors.append(f"uncertainties.{sensor_type} must be a dictionary")
+            elif 'type' not in spec or 'value' not in spec:
+                errors.append(f"uncertainties.{sensor_type} must have 'type' and 'value' fields")
+            elif spec.get('type') not in ['relative', 'absolute', 'rel', 'abs', 'pct_fs']:
+                errors.append(f"uncertainties.{sensor_type}.type must be 'relative' or 'absolute'")
+
+    # Check settings structure if provided
+    settings = config.get('settings', {})
+    if not isinstance(settings, dict):
+        errors.append("settings must be a dictionary")
+
+    # Check qc structure if provided
+    qc = config.get('qc', {})
+    if not isinstance(qc, dict):
+        errors.append("qc must be a dictionary")
+
+    if errors:
+        raise ValueError("Hardware config validation failed:\n  - " + "\n  - ".join(errors))
+
+    return config
+
+
 def validate_config_simple(config: Dict[str, Any], config_type: str = 'auto') -> TestConfigDC:
     """
     Simple validation using dataclasses (no pydantic required).

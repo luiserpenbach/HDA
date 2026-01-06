@@ -74,7 +74,17 @@ class ConfigManager:
 
     @staticmethod
     def _default_cold_flow_config() -> Dict[str, Any]:
-        """Create default cold flow configuration."""
+        """
+        Create default cold flow configuration.
+
+        Config contains ONLY testbench hardware info:
+        - Channel mappings
+        - Uncertainties
+        - Sampling settings
+        - QC thresholds
+
+        Fluid and geometry should come from metadata files.
+        """
         return {
             'config_name': 'Default Cold Flow',
             'version': '1.0.0',
@@ -82,34 +92,17 @@ class ConfigManager:
             'description': 'Default configuration for cold flow testing',
             'channel_config': {
                 # Example mapping - user should customize
-                # "10001": "PT-UP-01",
-                # "10002": "PT-DN-01",
-                # "10003": "TC-01",
-                # "10004": "FM-01",
-            },
-            'columns': {
-                'timestamp': 'timestamp',
-                'upstream_pressure': 'P_upstream',
-                'downstream_pressure': 'P_downstream',
-                'temperature': 'T_fluid',
-                'mass_flow': 'mass_flow',
-            },
-            'fluid': {
-                'name': 'nitrogen',
-                'gamma': 1.4,
-                'R': 296.8,  # J/(kg·K) for nitrogen
-            },
-            'geometry': {
-                'orifice_area_mm2': 1.0,
-                'orifice_diameter_mm': 1.128,
+                "10001": "IG-PT-01",
+                "10002": "FU-PT-01",
+                "10003": "OX-PT-15",
+                "10004": "OX-PT-12",
+                "10009": "OX-FM-01",
+                "10011": "OX-TS-13",
             },
             'uncertainties': {
                 'pressure': {'type': 'relative', 'value': 0.005},
                 'temperature': {'type': 'absolute', 'value': 1.0},
                 'mass_flow': {'type': 'relative', 'value': 0.01},
-            },
-            'geometry_uncertainties': {
-                'area': {'type': 'relative', 'value': 0.02},
             },
             'settings': {
                 'sample_rate_hz': 100,
@@ -125,7 +118,17 @@ class ConfigManager:
 
     @staticmethod
     def _default_hot_fire_config() -> Dict[str, Any]:
-        """Create default hot fire configuration."""
+        """
+        Create default hot fire configuration.
+
+        Config contains ONLY testbench hardware info:
+        - Channel mappings
+        - Uncertainties
+        - Sampling settings
+        - QC thresholds
+
+        Propellants and geometry should come from metadata files.
+        """
         return {
             'config_name': 'Default Hot Fire',
             'version': '1.0.0',
@@ -133,44 +136,28 @@ class ConfigManager:
             'description': 'Default configuration for hot fire testing',
             'channel_config': {
                 # Example mapping - user should customize
-                # "10001": "IG-PT-01",
-                # "10002": "FU-PT-01",
-                # "10003": "FU-FM-01",
-                # "10004": "OX-FM-01",
-                # "10009": "LC-01",
-            },
-            'columns': {
-                'timestamp': 'timestamp',
-                'chamber_pressure': 'P_chamber',
-                'ox_mass_flow': 'mf_ox',
-                'fuel_mass_flow': 'mf_fuel',
-                'thrust': 'thrust',
-            },
-            'propellants': {
-                'oxidizer': 'LOX',
-                'fuel': 'RP-1',
-            },
-            'geometry': {
-                'throat_area_mm2': 100.0,
-                'nozzle_expansion_ratio': 10.0,
+                "10001": "PC-PT-01",
+                "10002": "OX-PT-01",
+                "10003": "FU-PT-01",
+                "10004": "OX-FM-01",
+                "10005": "FU-FM-01",
+                "10006": "LC-01",
             },
             'uncertainties': {
                 'chamber_pressure': {'type': 'relative', 'value': 0.005},
                 'mass_flow': {'type': 'relative', 'value': 0.01},
                 'thrust': {'type': 'relative', 'value': 0.02},
             },
-            'geometry_uncertainties': {
-                'throat_area': {'type': 'relative', 'value': 0.02},
-            },
             'settings': {
                 'sample_rate_hz': 1000,
-                'target_c_star': 1800,
-                'target_cf': 1.5,
-                'target_isp': 300,
+                'resample_freq_ms': 1,
+                'steady_window_ms': 500,
+                'cv_threshold': 2.0,
+                'g0': 9.80665,
             },
             'qc': {
-                'max_nan_ratio': 0.05,
-                'min_correlation': 0.3,
+                'max_nan_ratio': 0.02,
+                'min_pc_bar': 5.0,
             }
         }
 

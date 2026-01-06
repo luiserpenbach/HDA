@@ -619,7 +619,6 @@ if data_source == "Upload CSV":
                 df_raw = pd.read_csv(uploaded_file)
                 st.session_state.df = df_raw
                 st.session_state.test_folder_path = None
-                st.session_state.loaded_metadata = None
 
                 # Compute file hash for traceability
                 uploaded_file.seek(0)
@@ -635,6 +634,57 @@ if data_source == "Upload CSV":
                 df_raw = None
         else:
             df_raw = st.session_state.df
+
+        # Optional metadata file upload
+        st.markdown("---")
+        st.markdown("**Test Metadata** *(optional)*")
+        metadata_file = st.file_uploader(
+            "Upload metadata JSON",
+            type=['json'],
+            help="Upload a JSON file with test metadata (test ID, fluid, geometry, etc.)"
+        )
+
+        if metadata_file:
+            try:
+                import json
+                metadata_content = json.load(metadata_file)
+                st.session_state.loaded_metadata = metadata_content
+                st.success(f"✓ Metadata loaded: {metadata_content.get('test_id', 'Unknown test')}")
+
+                # Show metadata summary
+                with st.expander("View Loaded Metadata"):
+                    st.json(metadata_content)
+            except Exception as e:
+                st.error(f"Error loading metadata: {e}")
+        else:
+            # Show info message if no metadata loaded
+            if st.session_state.get('loaded_metadata') is None:
+                st.info("No metadata file loaded. Test-specific info (fluid, geometry, test ID) will not be available.")
+
+        # Show expected metadata format
+        with st.expander("Metadata File Format"):
+            st.markdown("""
+```json
+{
+    "test_id": "RCS-CF-C01-RUN01",
+    "part_name": "Injector Assembly",
+    "part_number": "INJ-001-A",
+    "test_date": "2024-01-15",
+    "operator": "J. Smith",
+    "fluid": {
+        "name": "nitrogen",
+        "temperature_K": 293.15,
+        "pressure_Pa": 101325
+    },
+    "geometry": {
+        "orifice_area_mm2": 3.14,
+        "orifice_diameter_mm": 2.0
+    }
+}
+```
+**Note:** Fluid and geometry data are now stored in metadata files,
+not in the hardware configuration.
+            """)
 
 else:  # Load from Test Folder
     with load_col:
@@ -749,7 +799,16 @@ TEST_ID/
     "part_number": "INJ-001-A",
     "serial_number": "SN-0042",
     "test_date": "2024-01-15",
-    "operator": "J. Smith"
+    "operator": "J. Smith",
+    "fluid": {
+        "name": "nitrogen",
+        "temperature_K": 293.15,
+        "pressure_Pa": 101325
+    },
+    "geometry": {
+        "orifice_area_mm2": 3.14,
+        "orifice_diameter_mm": 2.0
+    }
 }
 ```
                 """)
