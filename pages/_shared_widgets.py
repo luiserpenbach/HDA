@@ -45,7 +45,7 @@ def campaign_selector_widget(
         if campaign:
             df = get_campaign_data(campaign)
     """
-    from data_lib.campaign_manager import get_available_campaigns
+    from core.campaign_manager_v2 import get_available_campaigns
 
     campaigns = get_available_campaigns()
 
@@ -66,8 +66,8 @@ def campaign_selector_widget(
                 st.caption(f"Type: {c.get('type', 'unknown')}")
                 if show_test_count:
                     st.caption(f"Tests: {c.get('test_count', 0)}")
-                if 'created_at' in c:
-                    st.caption(f"Created: {c['created_at'][:10]}")
+                if c.get('created_date'):
+                    st.caption(f"Created: {c['created_date'][:10]}")
                 break
 
     return selected_campaign
@@ -81,7 +81,7 @@ def campaign_info_display(campaign_name: str, compact: bool = False):
         campaign_name: Name of the campaign
         compact: If True, show compact view; otherwise show detailed metrics
     """
-    from data_lib.campaign_manager import get_campaign_info, get_campaign_data
+    from core.campaign_manager_v2 import get_campaign_info, get_campaign_data
 
     try:
         info = get_campaign_info(campaign_name)
@@ -92,20 +92,19 @@ def campaign_info_display(campaign_name: str, compact: bool = False):
             with col1:
                 st.metric("Campaign", campaign_name)
             with col2:
-                st.metric("Type", info.get('test_type', 'Unknown'))
+                st.metric("Type", info.get('campaign_type', 'Unknown'))
             with col3:
                 st.metric("Tests", len(df))
         else:
             st.subheader(f"Campaign: {campaign_name}")
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Test Type", info.get('test_type', 'Unknown'))
+                st.metric("Test Type", info.get('campaign_type', 'Unknown'))
             with col2:
                 st.metric("Total Tests", len(df))
             with col3:
-                st.metric("Created", info.get('created_at', 'Unknown')[:10])
-            with col4:
-                st.metric("Created By", info.get('created_by', 'Unknown'))
+                created = info.get('created_date', 'Unknown')
+                st.metric("Created", created[:10] if created and created != 'Unknown' else 'Unknown')
 
             if 'description' in info and info['description']:
                 st.caption(f"**Description:** {info['description']}")
@@ -148,7 +147,7 @@ def config_source_selector(
     config = None
 
     if config_source == "Use Template":
-        config = template_selector_widget(test_type, key_suffix)
+        config = saved_config_selector_widget(test_type, key_suffix)
 
     elif config_source == "Upload JSON":
         config = config_file_uploader_widget(key_suffix)
