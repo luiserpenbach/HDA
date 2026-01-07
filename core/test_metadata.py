@@ -5,27 +5,32 @@ Handles the standardized test folder structure for organizing test data,
 metadata, configurations, and results.
 
 Folder Structure:
-    SYSTEM/
-        SYSTEM-TEST_TYPE/
-            SYSTEM-TEST_TYPE-CAMPAIGN_ID/
-                TEST_ID/
-                    config/         - Test configuration files
-                    logs/           - DAQ logs, event logs
-                    media/          - Photos, videos
-                    plots/          - Generated plots
-                    processed_data/ - Resampled, filtered data
-                    raw_data/       - Original sensor data
-                    reports/        - Analysis reports
-                    metadata.json   - Test metadata
+    TEST_PROGRAM/                   - e.g., Engine-A, Hopper-Dev
+        SYSTEM/                     - e.g., RCS, MAIN
+            SYSTEM-TEST_TYPE/       - e.g., RCS-CF, RCS-HF
+                SYSTEM-TEST_TYPE-CAMPAIGN_ID/   - e.g., RCS-CF-C01
+                    TEST_ID/                    - e.g., RCS-CF-C01-001
+                        config/         - Test configuration files
+                        logs/           - DAQ logs, event logs
+                        media/          - Photos, videos
+                        plots/          - Generated plots
+                        processed_data/ - Resampled, filtered data
+                        raw_data/       - Original sensor data
+                        reports/        - Analysis reports
+                        metadata.json   - Test metadata
+
+Note: Test Program is for organization only - NOT included in Test IDs.
+Test ID format: SYSTEM-TEST_TYPE-CAMPAIGN_ID-NUMBER (e.g., RCS-CF-C01-001)
 
 Example:
-    RCS/
-        RCS-CF/
-            RCS-CF-C01/
-                RCS-CF-C01-RUN01/
-                    config/
-                    raw_data/
-                    metadata.json
+    Engine-A/
+        RCS/
+            RCS-CF/
+                RCS-CF-C01/
+                    RCS-CF-C01-001/
+                        config/
+                        raw_data/
+                        metadata.json
 """
 
 import json
@@ -41,9 +46,9 @@ import shutil
 class TestMetadata:
     """
     Metadata for a single test run.
-    
+
     This is stored as metadata.json in the test folder.
-    
+
     Fluid properties are calculated via CoolProp using the fluid names
     and conditions specified here. Common fluid names:
         - Cold flow: "Water", "Nitrogen", "Helium", "Air", "Ethanol", "IPA"
@@ -51,11 +56,12 @@ class TestMetadata:
         - Hot fire fuels: "n-Dodecane" (RP-1), "Ethanol", "Methane"
     """
     # Identifiers - all have defaults for flexibility when loading partial metadata
-    test_id: str = ""                     # e.g., "RCS-CF-C01-RUN01"
+    test_id: str = ""                     # e.g., "RCS-CF-C01-001"
+    program: str = ""                     # e.g., "Engine-A" (NOT in test_id)
     system: str = ""                      # e.g., "RCS"
     test_type: str = ""                   # e.g., "CF" (cold flow), "HF" (hot fire)
     campaign_id: str = ""                 # e.g., "C01"
-    run_id: str = ""                      # e.g., "RUN01"
+    run_id: str = ""                      # e.g., "001"
     
     # Test article info
     part_name: str = ""                   # e.g., "Injector Assembly"
@@ -198,64 +204,91 @@ def create_test_folder(
     test_id: str,
     metadata: Optional[TestMetadata] = None,
     create_subfolders: bool = True,
+    program: Optional[str] = None,
 ) -> Path:
     """
     Create a test folder with the standard structure.
-    
+
     Args:
         base_path: Base directory for all tests (e.g., /data/tests)
-        test_id: Test identifier (e.g., RCS-CF-C01-RUN01)
+        test_id: Test identifier (e.g., RCS-CF-C01-001)
         metadata: Optional metadata to save
         create_subfolders: Whether to create standard subfolders
-        
+        program: Optional test program name (e.g., "Engine-A")
+
     Returns:
         Path to the created test folder
+
+    Folder structure with program:
+        base_path / program / system / system-type / system-type-campaign / test_id
+
+    Folder structure without program (legacy):
+        base_path / system / system-type / system-type-campaign / test_id
     """
     base_path = Path(base_path)
-    
+
     # Parse test ID to get folder hierarchy
     if metadata is None:
         metadata = TestMetadata.from_test_id(test_id)
-    
-    # Build path: SYSTEM/SYSTEM-TEST_TYPE/SYSTEM-TEST_TYPE-CAMPAIGN_ID/TEST_ID
+
+    # Use program from metadata if not provided explicitly
+    if program is None:
+        program = metadata.program
+
+    # Build path
     system = metadata.system
     test_type_folder = f"{system}-{metadata.test_type}"
     campaign_folder = f"{system}-{metadata.test_type}-{metadata.campaign_id}"
-    
-    test_folder = base_path / system / test_type_folder / campaign_folder / test_id
-    
+
+    if program:
+        # New structure with program layer
+        test_folder = base_path / program / system / test_type_folder / campaign_folder / test_id
+    else:
+        # Legacy structure without program
+        test_folder = base_path / system / test_type_folder / campaign_folder / test_id
+
     # Create folder structure
     test_folder.mkdir(parents=True, exist_ok=True)
-    
+
     if create_subfolders:
         for subfolder in TEST_SUBFOLDERS:
             (test_folder / subfolder).mkdir(exist_ok=True)
-    
+
     # Save metadata
     if metadata:
+        if program:
+            metadata.program = program
         metadata.save(test_folder)
-    
+
     return test_folder
 
 
-def get_test_folder_path(base_path: Union[str, Path], test_id: str) -> Path:
+def get_test_folder_path(
+    base_path: Union[str, Path],
+    test_id: str,
+    program: Optional[str] = None
+) -> Path:
     """
     Get the expected path for a test folder.
-    
+
     Args:
         base_path: Base directory for all tests
         test_id: Test identifier
-        
+        program: Optional test program name
+
     Returns:
         Expected path (may not exist)
     """
     metadata = TestMetadata.from_test_id(test_id)
-    
+
     system = metadata.system
     test_type_folder = f"{system}-{metadata.test_type}"
     campaign_folder = f"{system}-{metadata.test_type}-{metadata.campaign_id}"
-    
-    return Path(base_path) / system / test_type_folder / campaign_folder / test_id
+
+    if program:
+        return Path(base_path) / program / system / test_type_folder / campaign_folder / test_id
+    else:
+        return Path(base_path) / system / test_type_folder / campaign_folder / test_id
 
 
 def find_test_folder(
