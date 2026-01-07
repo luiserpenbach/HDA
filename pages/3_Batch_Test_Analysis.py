@@ -1,6 +1,6 @@
 """
-Batch Processing Page
-=====================
+Batch Test Analysis Page
+========================
 Process multiple test files efficiently with consistent settings.
 """
 
@@ -27,9 +27,9 @@ from core.integrated_analysis import analyze_cold_flow_test, analyze_hot_fire_te
 from core.config_manager import ConfigManager
 from core.steady_state_detection import detect_steady_state_simple, detect_steady_state_auto
 
-st.set_page_config(page_title="Batch Processing", page_icon="BP", layout="wide")
+st.set_page_config(page_title="Batch Test Analysis", page_icon="BT", layout="wide")
 
-st.title("Batch Processing")
+st.title("Batch Test Analysis")
 st.markdown("Process multiple test files efficiently with consistent configuration.")
 
 # Initialize session state
