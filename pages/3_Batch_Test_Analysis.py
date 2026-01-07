@@ -74,12 +74,18 @@ def analyze_file_wrapper(df, config, test_id, file_path):
 
 
 # =============================================================================
-# SIDEBAR
+# SIDEBAR - Global Context & Configuration
 # =============================================================================
 
+from pages._shared_sidebar import render_global_context
+
 with st.sidebar:
+    # Global context at top
+    context = render_global_context()
+    st.divider()
+
     st.header("Configuration")
-    
+
     test_type = st.selectbox(
         "Test Type",
         ["cold_flow", "hot_fire"],
