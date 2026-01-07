@@ -1,6 +1,6 @@
 """
-New Test Page
-=============
+Test Explorer Page
+==================
 Browse test data structure and ingest new tests with metadata.
 
 Features:
@@ -31,9 +31,9 @@ from core.test_metadata import (
 )
 from core.config_manager import ConfigManager
 
-st.set_page_config(page_title="New Test", page_icon="NT", layout="wide")
+st.set_page_config(page_title="Test Explorer", page_icon="TE", layout="wide")
 
-st.title("New Test")
+st.title("Test Explorer")
 st.markdown("Browse test data structure and ingest new tests")
 
 # =============================================================================
