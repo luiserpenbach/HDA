@@ -7,9 +7,9 @@ metadata, configurations, and results.
 Folder Structure:
     TEST_PROGRAM/                   - e.g., Engine-A, Hopper-Dev
         SYSTEM/                     - e.g., RCS, MAIN
-            SYSTEM-TEST_TYPE/       - e.g., RCS-CF, RCS-HF
-                SYSTEM-TEST_TYPE-CAMPAIGN_ID/   - e.g., RCS-CF-C01
-                    TEST_ID/                    - e.g., RCS-CF-C01-001
+            SYSTEM-CAMPAIGN_ID/     - e.g., RCS-C01
+                SYSTEM-CAMPAIGN_ID-TEST_TYPE/   - e.g., RCS-C01-CF
+                    TEST_ID/                    - e.g., RCS-C01-CF-001
                         config/         - Test configuration files
                         logs/           - DAQ logs, event logs
                         media/          - Photos, videos
@@ -20,14 +20,15 @@ Folder Structure:
                         metadata.json   - Test metadata
 
 Note: Test Program is for organization only - NOT included in Test IDs.
-Test ID format: SYSTEM-TEST_TYPE-CAMPAIGN_ID-NUMBER (e.g., RCS-CF-C01-001)
+Test ID format: SYSTEM-CAMPAIGN_ID-TEST_TYPE-NUMBER (e.g., RCS-C01-CF-001)
+Campaign comes before Test Type since one campaign can have multiple test types.
 
 Example:
     Engine-A/
         RCS/
-            RCS-CF/
-                RCS-CF-C01/
-                    RCS-CF-C01-001/
+            RCS-C01/
+                RCS-C01-CF/
+                    RCS-C01-CF-001/
                         config/
                         raw_data/
                         metadata.json
@@ -139,17 +140,20 @@ class TestMetadata:
     def from_test_id(cls, test_id: str) -> 'TestMetadata':
         """
         Create metadata from a test ID string.
-        
-        Expected format: SYSTEM-TEST_TYPE-CAMPAIGN_ID-RUN_ID
-        Example: RCS-CF-C01-RUN01
+
+        Expected format: SYSTEM-CAMPAIGN_ID-TEST_TYPE-NUMBER
+        Example: RCS-C01-CF-001
+
+        Note: Campaign comes before Test Type since one campaign can have
+        multiple test types.
         """
         parts = test_id.split('-')
         if len(parts) >= 4:
             return cls(
                 test_id=test_id,
                 system=parts[0],
-                test_type=parts[1],
-                campaign_id=parts[2],
+                campaign_id=parts[1],
+                test_type=parts[2],
                 run_id='-'.join(parts[3:]),  # Handle run IDs with dashes
             )
         else:
@@ -157,9 +161,9 @@ class TestMetadata:
             return cls(
                 test_id=test_id,
                 system=parts[0] if parts else "UNKNOWN",
-                test_type=parts[1] if len(parts) > 1 else "XX",
-                campaign_id=parts[2] if len(parts) > 2 else "C00",
-                run_id=parts[3] if len(parts) > 3 else "RUN00",
+                campaign_id=parts[1] if len(parts) > 1 else "C00",
+                test_type=parts[2] if len(parts) > 2 else "XX",
+                run_id=parts[3] if len(parts) > 3 else "001",
             )
     
     def save(self, folder_path: Union[str, Path]) -> Path:
@@ -211,7 +215,7 @@ def create_test_folder(
 
     Args:
         base_path: Base directory for all tests (e.g., /data/tests)
-        test_id: Test identifier (e.g., RCS-CF-C01-001)
+        test_id: Test identifier (e.g., RCS-C01-CF-001)
         metadata: Optional metadata to save
         create_subfolders: Whether to create standard subfolders
         program: Optional test program name (e.g., "Engine-A")
@@ -220,10 +224,10 @@ def create_test_folder(
         Path to the created test folder
 
     Folder structure with program:
-        base_path / program / system / system-type / system-type-campaign / test_id
+        base_path / program / system / system-campaign / system-campaign-type / test_id
 
     Folder structure without program (legacy):
-        base_path / system / system-type / system-type-campaign / test_id
+        base_path / system / system-campaign / system-campaign-type / test_id
     """
     base_path = Path(base_path)
 
@@ -235,17 +239,17 @@ def create_test_folder(
     if program is None:
         program = metadata.program
 
-    # Build path
+    # Build path (campaign before test type)
     system = metadata.system
-    test_type_folder = f"{system}-{metadata.test_type}"
-    campaign_folder = f"{system}-{metadata.test_type}-{metadata.campaign_id}"
+    campaign_folder = f"{system}-{metadata.campaign_id}"
+    test_type_folder = f"{system}-{metadata.campaign_id}-{metadata.test_type}"
 
     if program:
         # New structure with program layer
-        test_folder = base_path / program / system / test_type_folder / campaign_folder / test_id
+        test_folder = base_path / program / system / campaign_folder / test_type_folder / test_id
     else:
         # Legacy structure without program
-        test_folder = base_path / system / test_type_folder / campaign_folder / test_id
+        test_folder = base_path / system / campaign_folder / test_type_folder / test_id
 
     # Create folder structure
     test_folder.mkdir(parents=True, exist_ok=True)
@@ -273,7 +277,7 @@ def get_test_folder_path(
 
     Args:
         base_path: Base directory for all tests
-        test_id: Test identifier
+        test_id: Test identifier (e.g., RCS-C01-CF-001)
         program: Optional test program name
 
     Returns:
@@ -282,13 +286,13 @@ def get_test_folder_path(
     metadata = TestMetadata.from_test_id(test_id)
 
     system = metadata.system
-    test_type_folder = f"{system}-{metadata.test_type}"
-    campaign_folder = f"{system}-{metadata.test_type}-{metadata.campaign_id}"
+    campaign_folder = f"{system}-{metadata.campaign_id}"
+    test_type_folder = f"{system}-{metadata.campaign_id}-{metadata.test_type}"
 
     if program:
-        return Path(base_path) / program / system / test_type_folder / campaign_folder / test_id
+        return Path(base_path) / program / system / campaign_folder / test_type_folder / test_id
     else:
-        return Path(base_path) / system / test_type_folder / campaign_folder / test_id
+        return Path(base_path) / system / campaign_folder / test_type_folder / test_id
 
 
 def find_test_folder(
