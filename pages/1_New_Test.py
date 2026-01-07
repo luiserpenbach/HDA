@@ -10,26 +10,24 @@ Features:
 - Suggest next available Test ID
 
 Folder Hierarchy:
-    TEST_ROOT / TEST_PROGRAM / SYSTEM / SYSTEM-TESTTYPE / SYSTEM-TESTTYPE-CAMPAIGN / TEST_ID
+    TEST_ROOT / TEST_PROGRAM / SYSTEM / SYSTEM-CAMPAIGN / SYSTEM-CAMPAIGN-TESTTYPE / TEST_ID
 
-Test ID Naming Scheme: SYSTEM-TESTTYPE-CAMPAIGN-#
-Example: RCS-CF-C01-001
+Test ID Naming Scheme: SYSTEM-CAMPAIGN-TESTTYPE-#
+Example: RCS-C01-CF-001
 Note: Test Program is NOT included in Test ID to keep it concise.
+Note: Campaign comes before Test Type since one campaign can have multiple test types.
 """
 
 import streamlit as st
 import pandas as pd
 from pathlib import Path
 import json
-import os
-import shutil
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
 
 # Import core modules
 from core.test_metadata import (
-    TestMetadata, TEST_SUBFOLDERS, create_test_folder,
-    list_campaigns, list_tests_in_campaign, load_test_metadata
+    TestMetadata, TEST_SUBFOLDERS, load_test_metadata
 )
 from core.config_manager import ConfigManager
 
@@ -50,6 +48,13 @@ if 'selected_system' not in st.session_state:
     st.session_state.selected_system = None
 if 'selected_campaign' not in st.session_state:
     st.session_state.selected_campaign = None
+# For new item creation
+if 'new_program_name' not in st.session_state:
+    st.session_state.new_program_name = ""
+if 'new_system_name' not in st.session_state:
+    st.session_state.new_system_name = ""
+if 'new_campaign_id' not in st.session_state:
+    st.session_state.new_campaign_id = ""
 
 
 # =============================================================================
@@ -86,13 +91,14 @@ def scan_test_root(root_path: Path) -> Dict[str, Any]:
                 if system_dir.is_dir() and not system_dir.name.startswith('.'):
                     systems.append(system_dir.name)
 
-                    for test_type_dir in system_dir.iterdir():
-                        if test_type_dir.is_dir() and '-' in test_type_dir.name:
-                            for campaign_dir in test_type_dir.iterdir():
-                                if campaign_dir.is_dir():
-                                    campaigns += 1
-                                    # Count tests in campaign
-                                    for test_dir in campaign_dir.iterdir():
+                    # New structure: SYSTEM-CAMPAIGN / SYSTEM-CAMPAIGN-TESTTYPE
+                    for campaign_dir in system_dir.iterdir():
+                        if campaign_dir.is_dir() and '-' in campaign_dir.name:
+                            campaigns += 1
+                            for test_type_dir in campaign_dir.iterdir():
+                                if test_type_dir.is_dir() and '-' in test_type_dir.name:
+                                    # Count tests in test type folder
+                                    for test_dir in test_type_dir.iterdir():
                                         if test_dir.is_dir() and not test_dir.name.startswith('.'):
                                             tests += 1
 
@@ -122,25 +128,25 @@ def get_systems_for_program(root_path: Path, program: str) -> List[Dict[str, Any
 
     for system_dir in sorted(program_dir.iterdir()):
         if system_dir.is_dir() and not system_dir.name.startswith('.'):
-            # Count test types and campaigns
-            test_types = []
+            # Count campaigns and tests
             campaigns = 0
             tests = 0
+            test_types = set()
 
-            for test_type_dir in system_dir.iterdir():
-                if test_type_dir.is_dir() and '-' in test_type_dir.name:
-                    test_types.append(test_type_dir.name.split('-')[-1])
-
-                    for campaign_dir in test_type_dir.iterdir():
-                        if campaign_dir.is_dir():
-                            campaigns += 1
-                            tests += sum(1 for t in campaign_dir.iterdir()
+            for campaign_dir in system_dir.iterdir():
+                if campaign_dir.is_dir() and '-' in campaign_dir.name:
+                    campaigns += 1
+                    for test_type_dir in campaign_dir.iterdir():
+                        if test_type_dir.is_dir() and '-' in test_type_dir.name:
+                            # Extract test type from folder name (last part)
+                            test_types.add(test_type_dir.name.split('-')[-1])
+                            tests += sum(1 for t in test_type_dir.iterdir()
                                         if t.is_dir() and not t.name.startswith('.'))
 
             systems.append({
                 'name': system_dir.name,
                 'path': str(system_dir),
-                'test_types': list(set(test_types)),
+                'test_types': sorted(test_types),
                 'campaign_count': campaigns,
                 'test_count': tests
             })
@@ -156,74 +162,87 @@ def get_campaigns_for_system(root_path: Path, program: str, system: str) -> List
     if not system_dir.exists():
         return campaigns
 
-    for test_type_dir in sorted(system_dir.iterdir()):
-        if test_type_dir.is_dir() and '-' in test_type_dir.name:
-            test_type = test_type_dir.name.split('-')[-1]
+    for campaign_dir in sorted(system_dir.iterdir()):
+        if campaign_dir.is_dir() and '-' in campaign_dir.name:
+            # Extract campaign ID from folder name (e.g., RCS-C01 -> C01)
+            campaign_id = campaign_dir.name.split('-')[-1]
 
-            for campaign_dir in sorted(test_type_dir.iterdir()):
-                if campaign_dir.is_dir():
-                    # Count tests
-                    test_count = sum(1 for t in campaign_dir.iterdir()
-                                    if t.is_dir() and not t.name.startswith('.'))
+            # Count test types and tests
+            test_types = []
+            test_count = 0
 
-                    campaigns.append({
-                        'name': campaign_dir.name,
-                        'path': str(campaign_dir),
-                        'test_type': test_type,
-                        'test_count': test_count
-                    })
+            for test_type_dir in campaign_dir.iterdir():
+                if test_type_dir.is_dir() and '-' in test_type_dir.name:
+                    test_type = test_type_dir.name.split('-')[-1]
+                    test_types.append(test_type)
+                    test_count += sum(1 for t in test_type_dir.iterdir()
+                                     if t.is_dir() and not t.name.startswith('.'))
+
+            campaigns.append({
+                'name': campaign_dir.name,
+                'campaign_id': campaign_id,
+                'path': str(campaign_dir),
+                'test_types': test_types,
+                'test_count': test_count
+            })
 
     return campaigns
 
 
 def get_tests_for_campaign(campaign_path: Path) -> List[Dict[str, Any]]:
-    """Get all tests in a campaign folder."""
+    """Get all tests in a campaign folder (across all test types)."""
     tests = []
 
     if not campaign_path.exists():
         return tests
 
-    for test_dir in sorted(campaign_path.iterdir()):
-        if test_dir.is_dir() and not test_dir.name.startswith('.'):
-            test_info = {
-                'test_id': test_dir.name,
-                'path': str(test_dir),
-                'has_metadata': (test_dir / 'metadata.json').exists(),
-                'has_raw_data': (test_dir / 'raw_data').exists() and any((test_dir / 'raw_data').glob('*.csv')),
-                'has_config': (test_dir / 'config').exists() and any((test_dir / 'config').glob('*.json')),
-            }
+    # Iterate through test type folders
+    for test_type_dir in sorted(campaign_path.iterdir()):
+        if test_type_dir.is_dir() and '-' in test_type_dir.name:
+            test_type = test_type_dir.name.split('-')[-1]
 
-            # Try to load metadata
-            if test_info['has_metadata']:
-                try:
-                    metadata = load_test_metadata(test_dir)
-                    if metadata:
-                        test_info['status'] = metadata.status
-                        test_info['test_date'] = metadata.test_date
-                        test_info['operator'] = metadata.operator
-                except Exception:
-                    test_info['status'] = 'error'
-            else:
-                test_info['status'] = 'no_metadata'
+            for test_dir in sorted(test_type_dir.iterdir()):
+                if test_dir.is_dir() and not test_dir.name.startswith('.'):
+                    test_info = {
+                        'test_id': test_dir.name,
+                        'test_type': test_type,
+                        'path': str(test_dir),
+                        'has_metadata': (test_dir / 'metadata.json').exists(),
+                        'has_raw_data': (test_dir / 'raw_data').exists() and any((test_dir / 'raw_data').glob('*.csv')),
+                        'has_config': (test_dir / 'config').exists() and any((test_dir / 'config').glob('*.json')),
+                    }
 
-            tests.append(test_info)
+                    # Try to load metadata
+                    if test_info['has_metadata']:
+                        try:
+                            metadata = load_test_metadata(test_dir)
+                            if metadata:
+                                test_info['status'] = metadata.status
+                                test_info['test_date'] = metadata.test_date
+                                test_info['operator'] = metadata.operator
+                        except Exception:
+                            test_info['status'] = 'error'
+                    else:
+                        test_info['status'] = 'no_metadata'
+
+                    tests.append(test_info)
 
     return tests
 
 
-def get_next_test_id(campaign_path: Path, system: str, test_type: str, campaign_id: str) -> str:
+def get_next_test_id(test_type_path: Path, system: str, campaign_id: str, test_type: str) -> str:
     """
-    Get the next available Test ID for a campaign.
+    Get the next available Test ID for a test type within a campaign.
 
-    Format: SYSTEM-TESTTYPE-CAMPAIGN-NNN
-    Example: RCS-CF-C01-001
+    Format: SYSTEM-CAMPAIGN-TESTTYPE-NNN
+    Example: RCS-C01-CF-001
     """
-    if not campaign_path.exists():
-        return f"{system}-{test_type}-{campaign_id}-001"
+    if not test_type_path.exists():
+        return f"{system}-{campaign_id}-{test_type}-001"
 
     # Get existing test numbers
     existing_numbers = []
-    for test_dir in campaign_path.iterdir():
+    for test_dir in test_type_path.iterdir():
         if test_dir.is_dir():
             parts = test_dir.name.split('-')
             if len(parts) >= 4:
@@ -236,15 +255,15 @@ def get_next_test_id(campaign_path: Path, system: str, test_type: str, campaign_
     # Get next number
     next_num = max(existing_numbers, default=0) + 1
 
-    return f"{system}-{test_type}-{campaign_id}-{next_num:03d}"
+    return f"{system}-{campaign_id}-{test_type}-{next_num:03d}"
 
 
 def create_new_test(
     root_path: Path,
     program: str,
     system: str,
-    test_type: str,
     campaign_id: str,
+    test_type: str,
     test_id: str,
     metadata: Optional[TestMetadata] = None
 ) -> Tuple[bool, str, Optional[Path]]:
@@ -255,18 +274,18 @@ def create_new_test(
         root_path: Test root directory
         program: Test program name (e.g., "Engine-A", "Hopper-Dev")
         system: System name (e.g., "RCS", "MAIN")
-        test_type: Test type code (e.g., "CF", "HF")
         campaign_id: Campaign ID (e.g., "C01")
-        test_id: Full test ID (e.g., "RCS-CF-C01-001")
+        test_type: Test type code (e.g., "CF", "HF")
+        test_id: Full test ID (e.g., "RCS-C01-CF-001")
         metadata: Optional TestMetadata object
 
     Returns: (success, message, test_folder_path)
     """
     try:
-        # Build path: root / program / system / system-testtype / system-testtype-campaign / test_id
-        test_type_folder = f"{system}-{test_type}"
-        campaign_folder = f"{system}-{test_type}-{campaign_id}"
-        test_folder = root_path / program / system / test_type_folder / campaign_folder / test_id
+        # Build path: root / program / system / system-campaign / system-campaign-testtype / test_id
+        campaign_folder = f"{system}-{campaign_id}"
+        test_type_folder = f"{system}-{campaign_id}-{test_type}"
+        test_folder = root_path / program / system / campaign_folder / test_type_folder / test_id
 
         if test_folder.exists():
             return False, f"Test folder already exists: {test_id}", None
@@ -280,13 +299,20 @@ def create_new_test(
         # Save metadata if provided
         if metadata:
             metadata.test_id = test_id
+            metadata.program = program
             metadata.system = system
-            metadata.test_type = test_type
             metadata.campaign_id = campaign_id
+            metadata.test_type = test_type
             metadata.save(test_folder)
         else:
             # Create minimal metadata
-            min_metadata = TestMetadata.from_test_id(test_id)
+            min_metadata = TestMetadata(
+                test_id=test_id,
+                program=program,
+                system=system,
+                campaign_id=campaign_id,
+                test_type=test_type
+            )
             min_metadata.save(test_folder)
 
         return True, f"Created test folder: {test_id}", test_folder
@@ -351,9 +377,9 @@ with st.expander("Expected Folder Structure"):
 TEST_ROOT/
     TEST_PROGRAM/                        # e.g., Engine-A, Hopper-Dev
         SYSTEM/                          # e.g., RCS, MAIN
-            SYSTEM-TESTTYPE/             # e.g., RCS-CF, RCS-HF
-                SYSTEM-TESTTYPE-CAMPAIGN/   # e.g., RCS-CF-C01
-                    TEST_ID/                # e.g., RCS-CF-C01-001
+            SYSTEM-CAMPAIGN/             # e.g., RCS-C01
+                SYSTEM-CAMPAIGN-TESTTYPE/   # e.g., RCS-C01-CF
+                    TEST_ID/                # e.g., RCS-C01-CF-001
                         config/
                         logs/
                         media/
@@ -364,6 +390,7 @@ TEST_ROOT/
                         metadata.json
 
 Note: Test Program is for organization only - NOT included in Test IDs.
+Test ID format: SYSTEM-CAMPAIGN-TESTTYPE-NNN (e.g., RCS-C01-CF-001)
     """, language="text")
 
 st.divider()
@@ -437,7 +464,14 @@ if st.session_state.test_root_path:
                 st.dataframe(programs_df, use_container_width=True, hide_index=True)
             else:
                 st.info("No programs found")
-                st.caption("Create a new test to get started")
+
+            # Create New Program button
+            with st.popover("+ New Program", use_container_width=True):
+                new_prog = st.text_input("Program Name", key="create_program_name", placeholder="e.g., Engine-A")
+                if st.button("Create", key="btn_create_program", disabled=not new_prog):
+                    (root_path / new_prog).mkdir(parents=True, exist_ok=True)
+                    st.success(f"Created: {new_prog}")
+                    st.rerun()
 
         # Panel 2: Systems
         with browse_col2:
@@ -473,6 +507,14 @@ if st.session_state.test_root_path:
                     st.dataframe(systems_df, use_container_width=True, hide_index=True)
                 else:
                     st.info(f"No systems in {st.session_state.selected_program}")
+
+                # Create New System button
+                with st.popover("+ New System", use_container_width=True):
+                    new_sys = st.text_input("System Name", key="create_system_name", placeholder="e.g., RCS")
+                    if st.button("Create", key="btn_create_system", disabled=not new_sys):
+                        (root_path / st.session_state.selected_program / new_sys).mkdir(parents=True, exist_ok=True)
+                        st.success(f"Created: {new_sys}")
+                        st.rerun()
             else:
                 st.info("Select a program first")
 
@@ -490,28 +532,38 @@ if st.session_state.test_root_path:
                 if campaigns:
                     campaigns_df = pd.DataFrame([
                         {
-                            'Campaign': c['name'],
-                            'Type': c['test_type'],
+                            'Campaign': c['campaign_id'],
+                            'Types': ', '.join(c['test_types']),
                             'Tests': c['test_count']
                         }
                         for c in campaigns
                     ])
 
-                    selected_campaign = st.selectbox(
+                    selected_campaign_name = st.selectbox(
                         "Select Campaign",
                         [""] + [c['name'] for c in campaigns],
-                        format_func=lambda x: x if x else "-- Select --",
+                        format_func=lambda x: x.split('-')[-1] if x and '-' in x else (x if x else "-- Select --"),
                         key="campaign_selector"
                     )
 
-                    if selected_campaign:
+                    if selected_campaign_name:
                         st.session_state.selected_campaign = next(
-                            c for c in campaigns if c['name'] == selected_campaign
+                            c for c in campaigns if c['name'] == selected_campaign_name
                         )
 
                     st.dataframe(campaigns_df, use_container_width=True, hide_index=True)
                 else:
                     st.info(f"No campaigns in {st.session_state.selected_system}")
+
+                # Create New Campaign button
+                with st.popover("+ New Campaign", use_container_width=True):
+                    new_camp = st.text_input("Campaign ID", key="create_campaign_id", placeholder="e.g., C01")
+                    if st.button("Create", key="btn_create_campaign", disabled=not new_camp):
+                        sys = st.session_state.selected_system
+                        campaign_folder = f"{sys}-{new_camp}"
+                        (root_path / st.session_state.selected_program / sys / campaign_folder).mkdir(parents=True, exist_ok=True)
+                        st.success(f"Created: {campaign_folder}")
+                        st.rerun()
             else:
                 st.info("Select a system first")
 
@@ -528,7 +580,7 @@ if st.session_state.test_root_path:
                     tests_df = pd.DataFrame([
                         {
                             'Test ID': t['test_id'],
-                            'Status': t.get('status', 'unknown'),
+                            'Type': t['test_type'],
                             'Data': 'Y' if t['has_raw_data'] else 'N'
                         }
                         for t in tests
@@ -552,7 +604,7 @@ if st.session_state.test_root_path:
                             st.session_state.test_folder_path = test_info['path']
                             st.info("Test path saved. Navigate to 'Single Test Analysis' page.")
                 else:
-                    st.info(f"No tests in {campaign['name']}")
+                    st.info(f"No tests in {campaign['campaign_id']}")
             else:
                 st.info("Select a campaign first")
 
@@ -564,45 +616,34 @@ if st.session_state.test_root_path:
 
         st.header("3. Ingest New Test")
 
+        # Use selections from browser or allow override
         col1, col2 = st.columns([1, 1])
 
         with col1:
             st.subheader("Test Location")
 
-            # Program selection (from existing or new)
-            existing_programs = structure['programs']
-            program_option = st.radio(
-                "Test Program",
-                ["Use Existing", "Create New"] if existing_programs else ["Create New"],
-                horizontal=True,
-                key="program_option"
-            )
+            # Program (from browser selection)
+            ing_program = st.session_state.selected_program or ""
+            st.text_input("Program", value=ing_program, disabled=True, key="ing_program_display")
+            if not ing_program:
+                st.caption("Select or create a program above")
 
-            if program_option == "Use Existing" and existing_programs:
-                new_program = st.selectbox("Select Program", existing_programs, key="new_program_select")
-            else:
-                new_program = st.text_input("New Program Name", placeholder="e.g., Engine-A, Hopper-Dev")
+            # System (from browser selection)
+            ing_system = st.session_state.selected_system or ""
+            st.text_input("System", value=ing_system, disabled=True, key="ing_system_display")
+            if not ing_system:
+                st.caption("Select or create a system above")
 
-            # System selection (from existing within program or new)
-            if new_program and st.session_state.selected_program == new_program:
-                existing_systems = [s['name'] for s in get_systems_for_program(root_path, new_program)]
-            else:
-                existing_systems = []
+            # Campaign (from browser selection)
+            ing_campaign_id = ""
+            if st.session_state.selected_campaign:
+                ing_campaign_id = st.session_state.selected_campaign.get('campaign_id', '')
+            st.text_input("Campaign", value=ing_campaign_id, disabled=True, key="ing_campaign_display")
+            if not ing_campaign_id:
+                st.caption("Select or create a campaign above")
 
-            system_option = st.radio(
-                "System",
-                ["Use Existing", "Create New"] if existing_systems else ["Create New"],
-                horizontal=True,
-                key="system_option"
-            )
-
-            if system_option == "Use Existing" and existing_systems:
-                new_system = st.selectbox("Select System", existing_systems, key="new_system_select")
-            else:
-                new_system = st.text_input("New System Name", placeholder="e.g., RCS, MAIN")
-
-            # Test Type
-            test_type_options = ["CF", "HF", "LK", "PR"]  # Cold Flow, Hot Fire, Leak, Pressure
+            # Test Type (user selects)
+            test_type_options = ["CF", "HF", "LK", "PR"]
             test_type_labels = {
                 "CF": "CF - Cold Flow",
                 "HF": "HF - Hot Fire",
@@ -615,38 +656,15 @@ if st.session_state.test_root_path:
                 format_func=lambda x: test_type_labels.get(x, x)
             )
 
-            # Campaign (from existing or new)
-            if new_program and new_system and st.session_state.selected_program == new_program:
-                campaigns = get_campaigns_for_system(root_path, new_program, new_system)
-                matching_campaigns = [c for c in campaigns if c['test_type'] == new_test_type]
+            # Suggested Test ID
+            if ing_program and ing_system and ing_campaign_id and new_test_type:
+                campaign_folder = f"{ing_system}-{ing_campaign_id}"
+                test_type_folder = f"{ing_system}-{ing_campaign_id}-{new_test_type}"
+                test_type_path = root_path / ing_program / ing_system / campaign_folder / test_type_folder
 
-                campaign_option = st.radio(
-                    "Campaign",
-                    ["Use Existing", "Create New"] if matching_campaigns else ["Create New"],
-                    horizontal=True,
-                    key="campaign_option"
-                )
-
-                if campaign_option == "Use Existing" and matching_campaigns:
-                    selected = st.selectbox(
-                        "Select Campaign",
-                        [c['name'] for c in matching_campaigns]
-                    )
-                    new_campaign_id = selected.split('-')[-1] if selected else "C01"
-                else:
-                    new_campaign_id = st.text_input("New Campaign ID", value="C01", placeholder="e.g., C01, C02")
-            else:
-                new_campaign_id = st.text_input("Campaign ID", value="C01", placeholder="e.g., C01, C02")
-
-            # Suggested Test ID (does NOT include program)
-            if new_program and new_system and new_test_type and new_campaign_id:
-                campaign_folder = f"{new_system}-{new_test_type}-{new_campaign_id}"
-                campaign_path = root_path / new_program / new_system / f"{new_system}-{new_test_type}" / campaign_folder
-
-                suggested_id = get_next_test_id(campaign_path, new_system, new_test_type, new_campaign_id)
+                suggested_id = get_next_test_id(test_type_path, ing_system, ing_campaign_id, new_test_type)
 
                 st.info(f"Suggested Test ID: **{suggested_id}**")
-                st.caption("(Test ID does not include Program name)")
 
                 use_suggested = st.checkbox("Use suggested ID", value=True)
                 if use_suggested:
@@ -655,7 +673,7 @@ if st.session_state.test_root_path:
                     new_test_id = st.text_input("Custom Test ID", value=suggested_id)
             else:
                 new_test_id = ""
-                st.warning("Fill in Program, System, Test Type, and Campaign to generate Test ID")
+                st.warning("Select Program, System, and Campaign above to generate Test ID")
 
         with col2:
             st.subheader("Metadata")
@@ -707,9 +725,10 @@ if st.session_state.test_root_path:
                 # Build metadata
                 new_metadata = TestMetadata(
                     test_id=new_test_id,
-                    system=new_system if new_system else "",
+                    program=ing_program,
+                    system=ing_system,
+                    campaign_id=ing_campaign_id,
                     test_type=new_test_type,
-                    campaign_id=new_campaign_id,
                     part_name=meta_part,
                     part_number=meta_pn,
                     serial_number=meta_sn,
@@ -733,7 +752,7 @@ if st.session_state.test_root_path:
 
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            create_enabled = bool(new_program and new_system and new_test_type and new_campaign_id and new_test_id)
+            create_enabled = bool(ing_program and ing_system and ing_campaign_id and new_test_type and new_test_id)
 
             if st.button(
                 "Create New Test",
@@ -743,10 +762,10 @@ if st.session_state.test_root_path:
             ):
                 success, message, test_folder = create_new_test(
                     root_path,
-                    new_program,
-                    new_system,
+                    ing_program,
+                    ing_system,
+                    ing_campaign_id,
                     new_test_type,
-                    new_campaign_id,
                     new_test_id,
                     new_metadata
                 )
@@ -764,10 +783,10 @@ if st.session_state.test_root_path:
                     # Show created structure
                     with st.expander("Created Folder Structure", expanded=True):
                         st.code(f"""
-{new_program}/
-  {new_system}/
-    {new_system}-{new_test_type}/
-      {new_system}-{new_test_type}-{new_campaign_id}/
+{ing_program}/
+  {ing_system}/
+    {ing_system}-{ing_campaign_id}/
+      {ing_system}-{ing_campaign_id}-{new_test_type}/
         {new_test_id}/
           config/
           logs/
@@ -781,8 +800,8 @@ if st.session_state.test_root_path:
 
                     # Save to session for easy navigation
                     st.session_state.test_folder_path = str(test_folder)
-                    # Save root path (go up 5 levels: test -> campaign -> type -> system -> program -> root)
-                    ConfigManager.save_recent_folder(str(test_folder.parent.parent.parent.parent.parent))
+                    # Save root path
+                    ConfigManager.save_recent_folder(str(root_path))
 
                     # Option to continue
                     st.info("Test created. You can now:")
