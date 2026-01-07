@@ -29,8 +29,20 @@ from core.comparison import (
     GoldenReference,
 )
 from core.campaign_manager_v2 import get_available_campaigns, get_campaign_data
+from pages._shared_sidebar import render_global_context
 
 st.set_page_config(page_title="Analysis Tools", page_icon="AT", layout="wide")
+
+# =============================================================================
+# SIDEBAR - Global Context
+# =============================================================================
+
+with st.sidebar:
+    context = render_global_context()
+
+# =============================================================================
+# MAIN CONTENT
+# =============================================================================
 
 st.title("Analysis Tools")
 st.markdown("Advanced analysis tools including anomaly detection and data comparison.")

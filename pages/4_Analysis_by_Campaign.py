@@ -40,10 +40,16 @@ st.title("Analysis by Campaign")
 st.markdown("Comprehensive campaign analysis with summary, plots, SPC analysis, and reports.")
 
 # =============================================================================
-# SIDEBAR - Campaign Selection
+# SIDEBAR - Global Context & Campaign Selection
 # =============================================================================
 
+from pages._shared_sidebar import render_global_context
+
 with st.sidebar:
+    # Global context at top
+    context = render_global_context()
+    st.divider()
+
     st.header("Campaign Selection")
 
     campaigns = get_available_campaigns()

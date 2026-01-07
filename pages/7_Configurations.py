@@ -26,12 +26,18 @@ st.markdown("Manage configuration templates for consistent test analysis.")
 manager = TemplateManager()
 
 # =============================================================================
-# SIDEBAR
+# SIDEBAR - Global Context & Actions
 # =============================================================================
 
+from pages._shared_sidebar import render_global_context
+
 with st.sidebar:
+    # Global context at top
+    context = render_global_context()
+    st.divider()
+
     st.header("Actions")
-    
+
     action = st.radio(
         "Select action",
         ["Browse Templates", "Create Template", "Import/Export"]

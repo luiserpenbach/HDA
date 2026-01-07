@@ -5,8 +5,22 @@ System-level analysis and cross-campaign comparison.
 """
 
 import streamlit as st
+from pages._shared_sidebar import render_global_context
 
 st.set_page_config(page_title="Analysis by System", page_icon="AS", layout="wide")
+
+# =============================================================================
+# SIDEBAR - Global Context
+# =============================================================================
+
+with st.sidebar:
+    context = render_global_context()
+    st.divider()
+    st.caption("Select a Test Root and Program to view system-level analysis.")
+
+# =============================================================================
+# MAIN CONTENT
+# =============================================================================
 
 st.title("Analysis by System")
 st.markdown("System-level analysis and cross-campaign comparison.")
