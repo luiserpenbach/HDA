@@ -670,21 +670,25 @@ if data_source == "Upload CSV":
     "test_id": "RCS-CF-C01-RUN01",
     "part_name": "Injector Assembly",
     "part_number": "INJ-001-A",
+    "serial_number": "SN-0042",
     "test_date": "2024-01-15",
     "operator": "J. Smith",
-    "fluid": {
-        "name": "nitrogen",
-        "temperature_K": 293.15,
-        "pressure_Pa": 101325
-    },
+    "test_fluid": "Nitrogen",
     "geometry": {
         "orifice_area_mm2": 3.14,
-        "orifice_diameter_mm": 2.0
+        "orifice_diameter_mm": 2.0,
+        "orifice_area_uncertainty_mm2": 0.02
+    },
+    "sensor_roles": {
+        "fluid_temperature": "OX-TS-13",
+        "fluid_pressure": "FU-PT-01"
     }
 }
 ```
-**Note:** Fluid and geometry data are now stored in metadata files,
-not in the hardware configuration.
+**Note:**
+- `geometry` contains test article dimensions (orifice, throat, etc.)
+- `sensor_roles` maps measurement types to sensor names for automatic extraction
+- Fluid T/P are extracted from sensor data during steady-state analysis
             """)
 
 else:  # Load from Test Folder
@@ -801,17 +805,20 @@ TEST_ID/
     "serial_number": "SN-0042",
     "test_date": "2024-01-15",
     "operator": "J. Smith",
-    "fluid": {
-        "name": "nitrogen",
-        "temperature_K": 293.15,
-        "pressure_Pa": 101325
-    },
+    "test_fluid": "Nitrogen",
     "geometry": {
         "orifice_area_mm2": 3.14,
-        "orifice_diameter_mm": 2.0
+        "orifice_diameter_mm": 2.0,
+        "orifice_area_uncertainty_mm2": 0.02
+    },
+    "sensor_roles": {
+        "fluid_temperature": "OX-TS-13",
+        "fluid_pressure": "FU-PT-01"
     }
 }
 ```
+
+**Note:** `sensor_roles` maps measurement types to sensor names for automatic T/P extraction.
                 """)
 
 # Preprocessing section - in the right column
@@ -1301,16 +1308,25 @@ if df_raw is not None:
 
     st.header("4. Run Analysis")
 
-    col1, col2 = st.columns([1, 2])
+    # Pre-populate from loaded metadata if available
+    loaded_meta = st.session_state.get('loaded_metadata') or {}
 
-    with col1:
-        # Pre-populate from loaded metadata if available
-        loaded_meta = st.session_state.get('loaded_metadata') or {}
+    # Get sensor roles from metadata (for fluid T/P extraction)
+    sensor_roles = loaded_meta.get('sensor_roles', {})
 
-        default_test_id = loaded_meta.get('test_id', f"TEST-{datetime.now().strftime('%Y%m%d-%H%M')}")
-        test_id = st.text_input("Test ID", value=default_test_id)
+    # Get geometry from metadata
+    geometry = loaded_meta.get('geometry', {})
 
-        with st.expander("Metadata", expanded=bool(loaded_meta)):
+    # -------------------------------------------------------------------------
+    # METADATA EXPANDER - Contains Test ID, Test Fluid, and all metadata
+    # -------------------------------------------------------------------------
+    with st.expander("Metadata", expanded=True):
+        meta_col1, meta_col2 = st.columns(2)
+
+        with meta_col1:
+            default_test_id = loaded_meta.get('test_id', f"TEST-{datetime.now().strftime('%Y%m%d-%H%M')}")
+            test_id = st.text_input("Test ID", value=default_test_id)
+
             part_number = st.text_input(
                 "Part Number",
                 value=loaded_meta.get('part_number', '')
@@ -1323,23 +1339,8 @@ if df_raw is not None:
                 "Operator",
                 value=loaded_meta.get('operator', '')
             )
-            part_name = st.text_input(
-                "Part Name",
-                value=loaded_meta.get('part_name', '')
-            )
-            facility = st.text_input(
-                "Facility",
-                value=loaded_meta.get('facility', '')
-            )
-            notes = st.text_area(
-                "Notes",
-                value=loaded_meta.get('notes', '')
-            )
 
-        # Test Conditions (fluid properties via CoolProp)
-        with st.expander("Test Conditions", expanded=True):
-            st.caption("Fluid properties calculated via CoolProp from these inputs")
-
+        with meta_col2:
             # Common fluid options
             fluid_options = [
                 "", "Water", "Nitrogen", "Air", "Helium", "Oxygen",
@@ -1361,112 +1362,322 @@ if df_raw is not None:
                 help="Select fluid for property calculation via CoolProp"
             )
 
-            col_temp, col_press = st.columns(2)
-            with col_temp:
-                fluid_temp_C = st.number_input(
-                    "Fluid Temperature [C]",
-                    value=loaded_meta.get('fluid_temperature_K', 293.15) - 273.15,
-                    format="%.1f",
-                    help="Fluid temperature for property lookup"
-                )
-            with col_press:
-                fluid_press_bar = st.number_input(
-                    "Fluid Pressure [bar]",
-                    value=loaded_meta.get('fluid_pressure_Pa', 101325.0) / 1e5,
-                    format="%.2f",
-                    help="Fluid pressure for property lookup"
-                )
+            part_name = st.text_input(
+                "Part Name",
+                value=loaded_meta.get('part_name', '')
+            )
+            facility = st.text_input(
+                "Facility",
+                value=loaded_meta.get('facility', '')
+            )
+            notes = st.text_area(
+                "Notes",
+                value=loaded_meta.get('notes', ''),
+                height=68
+            )
 
-            # Convert to SI units
-            fluid_temperature_K = fluid_temp_C + 273.15
-            fluid_pressure_Pa = fluid_press_bar * 1e5
+    # -------------------------------------------------------------------------
+    # ANALYSIS TOOLS - Tabs for Cold Flow and Hot Fire
+    # -------------------------------------------------------------------------
+    st.subheader("Analysis Tools")
 
-            # Show calculated properties if fluid module available
-            if test_fluid and FLUID_PROPS_SUPPORT:
-                try:
-                    props = get_fluid_properties(test_fluid, fluid_temperature_K, fluid_pressure_Pa)
-                    if props:
-                        st.success(f"Density: {props.density_kg_m3:.2f} kg/m3 | "
-                                  f"Viscosity: {props.viscosity_Pa_s*1000:.4f} mPa.s | "
-                                  f"Phase: {props.phase}")
-                        if not COOLPROP_AVAILABLE:
-                            st.info("Using fallback values. Install CoolProp for accurate properties: pip install CoolProp")
-                except Exception as e:
-                    st.warning(f"Could not calculate properties: {e}")
+    # Helper function to check parameter availability
+    def check_parameter_availability(
+        param_name: str,
+        source_type: str,  # 'sensor', 'geometry', 'metadata', 'sensor_role'
+        source_key: str,
+        config: dict,
+        metadata: dict,
+        df_columns: list,
+        sensor_roles: dict
+    ) -> tuple:
+        """
+        Check if a parameter is available.
 
-        run_analysis = st.button("Run Analysis", type="primary", use_container_width=True)
+        Returns:
+            (is_available: bool, source_value: str, status_icon: str)
+        """
+        if source_type == 'sensor':
+            # Check if sensor is in columns config and available in data
+            cols = config.get('columns', {})
+            sensor_name = cols.get(source_key)
+            if sensor_name and sensor_name in df_columns:
+                return True, sensor_name, "✓"
+            elif sensor_name:
+                return False, f"{sensor_name} (not in data)", "✗"
+            else:
+                return False, "(not configured)", "✗"
 
-    with col2:
-        if run_analysis and st.session_state.steady_window:
-            with st.spinner("Analyzing..."):
-                try:
-                    metadata = {
-                        'part_number': part_number,
-                        'part_name': part_name,
-                        'serial_number': serial_number,
-                        'operator': operator,
-                        'facility': facility,
-                        'notes': notes,
-                        'test_folder': st.session_state.get('test_folder_path'),
-                        # Test conditions
-                        'test_fluid': test_fluid,
-                        'fluid_temperature_K': fluid_temperature_K,
-                        'fluid_pressure_Pa': fluid_pressure_Pa,
-                    }
+        elif source_type == 'sensor_role':
+            # Check sensor_roles from metadata
+            sensor_name = sensor_roles.get(source_key)
+            if sensor_name and sensor_name in df_columns:
+                return True, sensor_name, "✓"
+            elif sensor_name:
+                return False, f"{sensor_name} (not in data)", "⚠"
+            else:
+                return False, "(not assigned in metadata)", "⚠"
 
-                    # Get fluid properties and add to metadata
-                    if test_fluid and FLUID_PROPS_SUPPORT:
-                        try:
-                            fluid_props = get_fluid_properties(test_fluid, fluid_temperature_K, fluid_pressure_Pa)
-                            if fluid_props:
-                                metadata['fluid_density_kg_m3'] = fluid_props.density_kg_m3
-                                metadata['fluid_density_uncertainty_kg_m3'] = fluid_props.density_kg_m3 * fluid_props.density_uncertainty
-                                metadata['fluid_viscosity_Pa_s'] = fluid_props.viscosity_Pa_s
-                                metadata['fluid_phase'] = fluid_props.phase
-                                metadata['fluid_source'] = fluid_props.source
-                        except Exception:
-                            pass
+        elif source_type == 'geometry':
+            # Check geometry from metadata
+            geom = metadata.get('geometry', {})
+            value = geom.get(source_key)
+            if value is not None:
+                return True, f"{value}", "✓"
+            else:
+                return False, "(not in metadata)", "✗"
 
-                    # Determine file path for traceability
-                    # If loaded from test folder with a real file, use that path
-                    test_folder_path = st.session_state.get('test_folder_path')
-                    file_path = None
-                    if test_folder_path and TEST_FOLDER_SUPPORT:
-                        raw_file = find_raw_data_file(test_folder_path)
-                        if raw_file:
-                            file_path = str(raw_file)
+        elif source_type == 'metadata':
+            # Check direct metadata field
+            value = metadata.get(source_key)
+            if value:
+                return True, str(value), "✓"
+            else:
+                return False, "(not set)", "⚠"
 
-                    if test_type == "cold_flow":
-                        result = analyze_cold_flow_test(
-                            df=df,
-                            config=config,
-                            steady_window=st.session_state.steady_window,
-                            test_id=test_id,
-                            file_path=file_path,
-                            metadata=metadata,
-                            skip_qc=False,
-                        )
-                    else:
-                        result = analyze_hot_fire_test(
-                            df=df,
-                            config=config,
-                            steady_window=st.session_state.steady_window,
-                            test_id=test_id,
-                            file_path=file_path,
-                            metadata=metadata,
-                            skip_qc=False,
-                        )
+        return False, "(unknown)", "?"
 
-                    st.session_state.analysis_result = result
-                    st.success("Analysis complete!")
+    # Get available columns from data
+    available_columns = list(df.columns) if df is not None else []
 
-                except Exception as e:
-                    st.error(f"Analysis error: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())
+    # Create tabs
+    cf_tab, hf_tab = st.tabs(["Cold Flow", "Hot Fire"])
 
-        elif run_analysis:
-            st.warning("Please select a steady-state window first")
+    # -------------------------------------------------------------------------
+    # COLD FLOW TAB
+    # -------------------------------------------------------------------------
+    with cf_tab:
+        st.markdown("**Parameter Requirements for Cold Flow Analysis**")
+        st.caption("Parameters needed to calculate Cd (discharge coefficient) with uncertainty propagation")
+
+        # Define Cold Flow requirements
+        cf_requirements = [
+            ("Upstream Pressure", "sensor", "upstream_pressure", "Required for ΔP calculation"),
+            ("Mass Flow", "sensor", "mass_flow", "Required for Cd calculation"),
+            ("Downstream Pressure", "sensor", "downstream_pressure", "Optional - defaults to 0 if not available"),
+            ("Fluid Temperature", "sensor_role", "fluid_temperature", "For fluid property lookup (from sensor)"),
+            ("Fluid Pressure", "sensor_role", "fluid_pressure", "For fluid property lookup (from sensor)"),
+            ("Orifice Area", "geometry", "orifice_area_mm2", "Required for Cd calculation"),
+            ("Test Fluid", "metadata", "test_fluid", "For CoolProp property lookup"),
+        ]
+
+        # Build requirements table
+        cf_table_data = []
+        cf_all_required_available = True
+
+        for param_name, source_type, source_key, description in cf_requirements:
+            is_available, source_value, icon = check_parameter_availability(
+                param_name, source_type, source_key,
+                config, loaded_meta, available_columns, sensor_roles
+            )
+
+            # Check test_fluid from the UI selection
+            if source_key == "test_fluid" and test_fluid:
+                is_available = True
+                source_value = test_fluid
+                icon = "✓"
+
+            # Track required parameters (exclude optional ones)
+            if "Optional" not in description and not is_available:
+                cf_all_required_available = False
+
+            cf_table_data.append({
+                "Status": icon,
+                "Parameter": param_name,
+                "Source": source_value,
+                "Notes": description
+            })
+
+        # Display table with styling
+        cf_df = pd.DataFrame(cf_table_data)
+
+        # Apply red color to missing required parameters
+        def style_cf_row(row):
+            if row['Status'] == '✗' and 'Optional' not in row['Notes']:
+                return ['color: red'] * len(row)
+            elif row['Status'] == '⚠':
+                return ['color: orange'] * len(row)
+            return [''] * len(row)
+
+        styled_cf_df = cf_df.style.apply(style_cf_row, axis=1)
+        st.dataframe(styled_cf_df, use_container_width=True, hide_index=True)
+
+        # Status summary
+        if cf_all_required_available:
+            st.success("All required parameters available for Cold Flow analysis")
+        else:
+            st.warning("Some required parameters are missing - check configuration and metadata")
+
+    # -------------------------------------------------------------------------
+    # HOT FIRE TAB
+    # -------------------------------------------------------------------------
+    with hf_tab:
+        st.markdown("**Parameter Requirements for Hot Fire Analysis**")
+        st.caption("Parameters needed to calculate Isp, C*, and O/F ratio with uncertainty propagation")
+
+        # Define Hot Fire requirements
+        hf_requirements = [
+            ("Chamber Pressure", "sensor", "chamber_pressure", "Required for C* calculation"),
+            ("Thrust", "sensor", "thrust", "Required for Isp calculation"),
+            ("Mass Flow (Oxidizer)", "sensor", "mass_flow_ox", "Required for O/F and total mass flow"),
+            ("Mass Flow (Fuel)", "sensor", "mass_flow_fuel", "Required for O/F and total mass flow"),
+            ("Throat Area", "geometry", "throat_area_mm2", "Required for C* calculation"),
+            ("Oxidizer Temperature", "sensor_role", "oxidizer_temperature", "For propellant property lookup"),
+            ("Fuel Temperature", "sensor_role", "fuel_temperature", "For propellant property lookup"),
+        ]
+
+        # Build requirements table
+        hf_table_data = []
+        hf_all_required_available = True
+
+        for param_name, source_type, source_key, description in hf_requirements:
+            is_available, source_value, icon = check_parameter_availability(
+                param_name, source_type, source_key,
+                config, loaded_meta, available_columns, sensor_roles
+            )
+
+            # Track required parameters
+            if not is_available:
+                hf_all_required_available = False
+
+            hf_table_data.append({
+                "Status": icon,
+                "Parameter": param_name,
+                "Source": source_value,
+                "Notes": description
+            })
+
+        # Display table with styling
+        hf_df = pd.DataFrame(hf_table_data)
+
+        def style_hf_row(row):
+            if row['Status'] == '✗':
+                return ['color: red'] * len(row)
+            elif row['Status'] == '⚠':
+                return ['color: orange'] * len(row)
+            return [''] * len(row)
+
+        styled_hf_df = hf_df.style.apply(style_hf_row, axis=1)
+        st.dataframe(styled_hf_df, use_container_width=True, hide_index=True)
+
+        # Status summary
+        if hf_all_required_available:
+            st.success("All required parameters available for Hot Fire analysis")
+        else:
+            st.warning("Some required parameters are missing - check configuration and metadata")
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
+    # RUN ANALYSIS BUTTON
+    # -------------------------------------------------------------------------
+    run_analysis = st.button("Run Analysis", type="primary", use_container_width=True)
+
+    if run_analysis and st.session_state.steady_window:
+        with st.spinner("Analyzing..."):
+            try:
+                # Extract fluid temperature and pressure from sensor data if available
+                fluid_temperature_K = 293.15  # Default 20°C
+                fluid_pressure_Pa = 101325.0  # Default 1 atm
+
+                # Get steady-state data for sensor extraction
+                steady_start, steady_end = st.session_state.steady_window
+                time_col = 'time_s' if 'time_s' in df.columns else 'timestamp'
+
+                if time_col in df.columns:
+                    steady_df = df[(df[time_col] >= steady_start) & (df[time_col] <= steady_end)]
+
+                    # Extract fluid temperature from sensor if configured
+                    temp_sensor = sensor_roles.get('fluid_temperature')
+                    if temp_sensor and temp_sensor in df.columns:
+                        fluid_temperature_K = steady_df[temp_sensor].mean()
+                        # Assume sensor reads in Celsius, convert to Kelvin
+                        if fluid_temperature_K < 200:  # Likely Celsius
+                            fluid_temperature_K = fluid_temperature_K + 273.15
+
+                    # Extract fluid pressure from sensor if configured
+                    pressure_sensor = sensor_roles.get('fluid_pressure')
+                    if pressure_sensor and pressure_sensor in df.columns:
+                        fluid_pressure_bar = steady_df[pressure_sensor].mean()
+                        fluid_pressure_Pa = fluid_pressure_bar * 1e5  # Convert bar to Pa
+
+                metadata = {
+                    'part_number': part_number,
+                    'part_name': part_name,
+                    'serial_number': serial_number,
+                    'operator': operator,
+                    'facility': facility,
+                    'notes': notes,
+                    'test_folder': st.session_state.get('test_folder_path'),
+                    # Test conditions (extracted from sensors or defaults)
+                    'test_fluid': test_fluid,
+                    'fluid_temperature_K': fluid_temperature_K,
+                    'fluid_pressure_Pa': fluid_pressure_Pa,
+                    # Sensor roles used
+                    'sensor_roles': sensor_roles,
+                    # Geometry from loaded metadata
+                    'geometry': geometry,
+                }
+
+                # Get fluid properties and add to metadata
+                if test_fluid and FLUID_PROPS_SUPPORT:
+                    try:
+                        fluid_props = get_fluid_properties(test_fluid, fluid_temperature_K, fluid_pressure_Pa)
+                        if fluid_props:
+                            metadata['fluid_density_kg_m3'] = fluid_props.density_kg_m3
+                            metadata['fluid_density_uncertainty_kg_m3'] = fluid_props.density_kg_m3 * fluid_props.density_uncertainty
+                            metadata['fluid_viscosity_Pa_s'] = fluid_props.viscosity_Pa_s
+                            metadata['fluid_phase'] = fluid_props.phase
+                            metadata['fluid_source'] = fluid_props.source
+
+                            # Show extracted conditions
+                            temp_C = fluid_temperature_K - 273.15
+                            pressure_bar = fluid_pressure_Pa / 1e5
+                            st.info(f"Fluid conditions: {test_fluid} @ {temp_C:.1f}°C, {pressure_bar:.2f} bar → "
+                                   f"ρ = {fluid_props.density_kg_m3:.2f} kg/m³")
+                    except Exception as e:
+                        st.warning(f"Could not calculate fluid properties: {e}")
+
+                # Determine file path for traceability
+                # If loaded from test folder with a real file, use that path
+                test_folder_path = st.session_state.get('test_folder_path')
+                file_path = None
+                if test_folder_path and TEST_FOLDER_SUPPORT:
+                    raw_file = find_raw_data_file(test_folder_path)
+                    if raw_file:
+                        file_path = str(raw_file)
+
+                if test_type == "cold_flow":
+                    result = analyze_cold_flow_test(
+                        df=df,
+                        config=config,
+                        steady_window=st.session_state.steady_window,
+                        test_id=test_id,
+                        file_path=file_path,
+                        metadata=metadata,
+                        skip_qc=False,
+                    )
+                else:
+                    result = analyze_hot_fire_test(
+                        df=df,
+                        config=config,
+                        steady_window=st.session_state.steady_window,
+                        test_id=test_id,
+                        file_path=file_path,
+                        metadata=metadata,
+                        skip_qc=False,
+                    )
+
+                st.session_state.analysis_result = result
+                st.success("Analysis complete!")
+
+            except Exception as e:
+                st.error(f"Analysis error: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+
+    elif run_analysis:
+        st.warning("Please select a steady-state window first")
 
     # =============================================================================
     # RESULTS
@@ -1625,9 +1836,13 @@ if df_raw is not None:
                         try:
                             with st.spinner("Updating results..."):
                                 # Prepare metadata (simplified for iteration)
+                                # Use variables defined in Metadata expander
                                 iter_metadata = {
-                                    'part_number': metadata.get('part_number', ''),
-                                    'serial_number': metadata.get('serial_number', ''),
+                                    'part_number': part_number,
+                                    'serial_number': serial_number,
+                                    'test_fluid': test_fluid,
+                                    'geometry': geometry,
+                                    'sensor_roles': sensor_roles,
                                 }
 
                                 new_result = run_quick_analysis(
