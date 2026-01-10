@@ -627,7 +627,7 @@ if context['root_path']:
             if new_test_type in ["CF", "LK", "PR"]:
                 meta_fluid = st.selectbox(
                     "Test Fluid",
-                    ["", "Water", "Nitrogen", "Helium", "Air", "Ethanol", "IPA"]
+                    ["", "Water", "Nitrogen", "Nitrous Oxide", "Helium", "Air", "Ethanol", "IPA"]
                 )
             else:
                 meta_fluid = ""
