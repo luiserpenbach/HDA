@@ -28,14 +28,20 @@ def load_sample_config():
 def load_sample_metadata():
     """Load the sample metadata file."""
     with open('sample_test_metadata.json', 'r') as f:
-        metadata = json.load(f)
-    # Flatten test_article and test_metadata for analysis
+        metadata_file = json.load(f)
+
+    # Flatten for analysis - include geometry and fluid (test-article specific)
     flattened = {
-        'part': metadata['test_article']['part_number'],
-        'serial_num': metadata['test_article']['serial_number'],
-        'test_date': metadata['test_metadata']['test_date'],
-        'operator': metadata['test_metadata']['operator'],
-        'fluid': metadata['fluid_properties']['oxidizer']['name'],
+        'part': metadata_file['test_article']['part_number'],
+        'serial_num': metadata_file['test_article']['serial_number'],
+        'test_date': metadata_file['test_metadata']['test_date'],
+        'operator': metadata_file['test_metadata']['operator'],
+
+        # Geometry (test-article specific - NOT in config)
+        'geometry': metadata_file['geometry'],
+
+        # Fluid properties (test-specific - NOT in config)
+        'fluid': metadata_file['fluid_properties']['oxidizer'],
     }
     return flattened
 
@@ -111,9 +117,9 @@ def main():
     print("-" * 70)
     config = load_sample_config()
     metadata = load_sample_metadata()
-    print(f"   Config: {config['config_name']}")
+    print(f"   Config: {config['config_name']} (testbench hardware)")
     print(f"   Test Article: {metadata['part']} / {metadata['serial_num']}")
-    print(f"   Orifice Area: {config['geometry']['orifice_area_mm2']:.5f} mm²")
+    print(f"   Orifice Area: {metadata['geometry']['orifice_area_mm2']:.5f} mm² (from metadata)")
     print()
 
     # 3. Generate synthetic test data

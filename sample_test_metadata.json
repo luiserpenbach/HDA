@@ -19,13 +19,14 @@
 
   "geometry": {
     "orifice_area_mm2": 3.14159,
+    "orifice_area_uncertainty_mm2": 0.01,
     "orifice_diameter_mm": 2.0,
     "orifice_length_mm": 5.0,
     "throat_area_mm2": 12.566,
     "throat_diameter_mm": 4.0,
     "design_cd": 0.65,
     "design_cd_tolerance": 0.05,
-    "notes": "Nominal geometry from CAD model"
+    "notes": "Nominal geometry from CAD model with machining tolerances"
   },
 
   "test_conditions": {
@@ -65,6 +66,6 @@
   "notes": [
     "This is a sample metadata file for plugin architecture testing",
     "Adjust values to match your actual test article and conditions",
-    "Geometry values should match those in the configuration file"
+    "Geometry and fluid properties are test-article specific (not in config)"
   ]
 }

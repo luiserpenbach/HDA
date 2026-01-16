@@ -301,13 +301,20 @@ def analyze_test(
     # Get plugin from registry
     plugin = PluginRegistry.get_plugin(plugin_slug)
 
-    # Step 1: Plugin validates config (test-specific)
-    plugin.validate_config(config)
+    # Merge config and metadata (geometry/fluid come from metadata)
+    from .config_validation import merge_config_and_metadata
+    if metadata:
+        merged_config = merge_config_and_metadata(config, metadata)
+    else:
+        merged_config = config
+
+    # Step 1: Plugin validates merged config (test-specific)
+    plugin.validate_config(merged_config)
 
     # Step 2: Run QC checks
     if not skip_qc:
         # Plugin runs test-specific QC
-        qc_report = plugin.run_qc_checks(df, config, quick=False)
+        qc_report = plugin.run_qc_checks(df, merged_config, quick=False)
 
         # Check if QC passed
         if not qc_report.passed:
@@ -317,20 +324,20 @@ def analyze_test(
             )
     else:
         # Quick QC (lightweight)
-        qc_report = plugin.run_qc_checks(df, config, quick=True)
+        qc_report = plugin.run_qc_checks(df, merged_config, quick=True)
 
     # Step 3: Plugin extracts steady state
-    steady_df = plugin.extract_steady_state(df, steady_window, config)
+    steady_df = plugin.extract_steady_state(df, steady_window, merged_config)
 
     # Step 4: Plugin computes raw metrics
-    avg_values = plugin.compute_raw_metrics(steady_df, config, metadata)
+    avg_values = plugin.compute_raw_metrics(steady_df, merged_config, metadata)
 
     # Step 5: Plugin calculates measurements WITH uncertainties
     # (Phase 1: Delegates to existing uncertainty functions)
     # (Future phases: Core enforces uncertainty wrapper)
     if hasattr(plugin, 'calculate_measurements_with_uncertainties'):
         measurements = plugin.calculate_measurements_with_uncertainties(
-            avg_values, config, metadata
+            avg_values, merged_config, metadata
         )
     else:
         # Fallback: Just wrap raw values (no uncertainties)
@@ -343,8 +350,8 @@ def analyze_test(
     traceability = create_full_traceability_record(
         df=df,
         file_path=file_path,
-        config=config,
-        config_name=config.get('config_name', 'unnamed'),
+        config=merged_config,
+        config_name=merged_config.get('config_name', 'unnamed'),
         steady_window=steady_window,
         detection_method=detection_method,
         detection_params=detection_params or {},
@@ -359,7 +366,7 @@ def analyze_test(
         measurements=measurements,
         raw_values=avg_values,
         traceability=traceability,
-        config=config,
+        config=merged_config,
         steady_window=steady_window,
         metadata=metadata,
     )
