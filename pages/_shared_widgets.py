@@ -19,6 +19,11 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime
 
+from pages._shared_styles import apply_custom_styles, render_status_badge
+
+# Apply custom styles
+apply_custom_styles()
+
 
 # =============================================================================
 # Campaign Selection Widgets
@@ -88,26 +93,46 @@ def campaign_info_display(campaign_name: str, compact: bool = False):
         df = get_campaign_data(campaign_name)
 
         if compact:
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Campaign", campaign_name)
-            with col2:
-                st.metric("Type", info.get('campaign_type', 'Unknown'))
-            with col3:
-                st.metric("Tests", len(df))
+            st.markdown(f"""
+            <div class="card" style="padding: 1rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <p style="margin: 0; font-size: 0.75rem; color: #71717a;">Campaign</p>
+                        <p style="margin: 0; font-size: 1rem; font-weight: 600;">{campaign_name}</p>
+                    </div>
+                    <div style="text-align: center;">
+                        <p style="margin: 0; font-size: 0.75rem; color: #71717a;">Type</p>
+                        <p style="margin: 0; font-size: 1rem; font-weight: 600;">{info.get('campaign_type', 'Unknown')}</p>
+                    </div>
+                    <div style="text-align: right;">
+                        <p style="margin: 0; font-size: 0.75rem; color: #71717a;">Tests</p>
+                        <p style="margin: 0; font-size: 1rem; font-weight: 600;">{len(df)}</p>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
         else:
-            st.subheader(f"Campaign: {campaign_name}")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Test Type", info.get('campaign_type', 'Unknown'))
-            with col2:
-                st.metric("Total Tests", len(df))
-            with col3:
-                created = info.get('created_date', 'Unknown')
-                st.metric("Created", created[:10] if created and created != 'Unknown' else 'Unknown')
-
-            if 'description' in info and info['description']:
-                st.caption(f"**Description:** {info['description']}")
+            # Detailed view
+            st.markdown(f"""
+            <div class="card-elevated" style="margin-bottom: 1.5rem;">
+                <h3 style="margin: 0 0 1rem 0;">Campaign: {campaign_name}</h3>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
+                    <div>
+                        <p style="margin: 0; font-size: 0.75rem; color: #71717a; text-transform: uppercase; letter-spacing: 0.05em;">Test Type</p>
+                        <p style="margin: 0.25rem 0 0 0; font-size: 1.5rem; font-weight: 700;">{info.get('campaign_type', 'Unknown')}</p>
+                    </div>
+                    <div>
+                        <p style="margin: 0; font-size: 0.75rem; color: #71717a; text-transform: uppercase; letter-spacing: 0.05em;">Total Tests</p>
+                        <p style="margin: 0.25rem 0 0 0; font-size: 1.5rem; font-weight: 700;">{len(df)}</p>
+                    </div>
+                    <div>
+                        <p style="margin: 0; font-size: 0.75rem; color: #71717a; text-transform: uppercase; letter-spacing: 0.05em;">Created</p>
+                        <p style="margin: 0.25rem 0 0 0; font-size: 1.5rem; font-weight: 700;">{info.get('created_date', 'Unknown')[:10] if info.get('created_date') else 'Unknown'}</p>
+                    </div>
+                </div>
+                {f'<p style="margin: 1rem 0 0 0; padding-top: 1rem; border-top: 1px solid #e4e4e7; font-size: 0.875rem; color: #71717a;"><strong>Description:</strong> {info["description"]}</p>' if info.get('description') else ''}
+            </div>
+            """, unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Error loading campaign info: {e}")
@@ -561,12 +586,29 @@ def success_with_next_steps(message: str, next_steps: List[str]):
         message: Success message to display
         next_steps: List of recommended next actions
     """
-    st.success(message)
+    st.markdown(f"""
+    <div style="background: #dcfce7; border-left: 4px solid #16a34a; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;">
+        <p style="margin: 0; color: #16a34a; font-weight: 600;">✓ {message}</p>
+    </div>
+    """, unsafe_allow_html=True)
 
     if next_steps:
-        st.info("**Recommended next steps:**")
+        st.markdown("""
+        <div style="background: #dbeafe; border-left: 4px solid #2563eb; border-radius: 0.5rem; padding: 1rem;">
+            <p style="margin: 0 0 0.75rem 0; color: #2563eb; font-weight: 600;">💡 Recommended next steps:</p>
+        """, unsafe_allow_html=True)
+
         for i, step in enumerate(next_steps, 1):
-            st.markdown(f"{i}. {step}")
+            st.markdown(f"""
+            <div style="display: flex; align-items: start; margin-bottom: 0.5rem;">
+                <span style="background: #2563eb; color: white; width: 20px; height: 20px; border-radius: 50%;
+                            display: flex; align-items: center; justify-content: center; font-size: 0.75rem;
+                            font-weight: 600; margin-right: 0.5rem; flex-shrink: 0;">{i}</span>
+                <p style="margin: 0; font-size: 0.875rem; color: #1e40af;">{step}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def error_with_troubleshooting(error_message: str, suggestions: List[str]):
@@ -577,9 +619,18 @@ def error_with_troubleshooting(error_message: str, suggestions: List[str]):
         error_message: Error message to display
         suggestions: List of troubleshooting suggestions
     """
-    st.error(error_message)
+    st.markdown(f"""
+    <div style="background: #fee2e2; border-left: 4px solid #dc2626; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;">
+        <p style="margin: 0; color: #dc2626; font-weight: 600;">✗ {error_message}</p>
+    </div>
+    """, unsafe_allow_html=True)
 
     if suggestions:
-        with st.expander("Troubleshooting Suggestions"):
+        with st.expander("🔧 Troubleshooting Suggestions", expanded=True):
             for suggestion in suggestions:
-                st.markdown(f"- {suggestion}")
+                st.markdown(f"""
+                <div style="display: flex; align-items: start; margin-bottom: 0.5rem;">
+                    <span style="color: #ca8a04; margin-right: 0.5rem;">•</span>
+                    <p style="margin: 0; font-size: 0.875rem;">{suggestion}</p>
+                </div>
+                """, unsafe_allow_html=True)
