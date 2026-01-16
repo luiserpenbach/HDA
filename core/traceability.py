@@ -25,7 +25,8 @@ import os
 
 
 # Module version - increment when calculation methods change
-PROCESSING_VERSION = "2.0.0"
+# v2.1.0 - Added plugin architecture (Phase 1), maintained backward compatibility
+PROCESSING_VERSION = "2.1.0"
 
 
 def compute_file_hash(file_path: Union[str, Path]) -> str:
