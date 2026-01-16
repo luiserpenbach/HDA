@@ -217,4 +217,7 @@ from .saved_configs import (
     create_config_from_template,  # Alias for load_saved_config
 )
 
-__version__ = "2.3.0"
+# Version history:
+# 2.4.0 - Plugin architecture (Phase 1): Modular test type support with backward compatibility
+# 2.3.0 - Configuration system v2 (active config + metadata separation)
+__version__ = "2.4.0"

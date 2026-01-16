@@ -52,6 +52,9 @@ from .config_validation import (
     validate_config_simple,
 )
 
+# Plugin system (Phase 1 - Plugin Architecture)
+from .plugins import PluginRegistry, AnalysisPlugin
+
 
 class AnalysisResult:
     """
@@ -228,6 +231,144 @@ class AnalysisResult:
         return "\n".join(lines)
 
 
+# =============================================================================
+# PLUGIN-BASED ANALYSIS (Phase 1 - Plugin Architecture)
+# =============================================================================
+
+def analyze_test(
+    df: pd.DataFrame,
+    config: Dict[str, Any],
+    steady_window: Tuple[float, float],
+    test_id: str,
+    plugin_slug: str,
+    file_path: Optional[Union[str, Path]] = None,
+    detection_method: str = 'CV-based',
+    detection_params: Optional[Dict[str, Any]] = None,
+    stability_channels: Optional[List[str]] = None,
+    resample_freq_ms: float = 10.0,
+    metadata: Optional[Dict[str, Any]] = None,
+    skip_qc: bool = False,
+) -> AnalysisResult:
+    """
+    Generic test analysis function using plugin system.
+
+    This is the new plugin-based entry point that routes analysis
+    to the appropriate plugin based on plugin_slug.
+
+    Core responsibilities (enforced by wrapper):
+    - QC validation
+    - Traceability creation
+    - Result packaging
+
+    Plugin responsibilities (delegated):
+    - Config validation
+    - Test-specific QC checks
+    - Steady-state extraction
+    - Metric calculation
+    - Uncertainty propagation
+
+    Args:
+        df: DataFrame with test data (already resampled)
+        config: Test configuration dictionary
+        steady_window: (start_ms, end_ms) of steady state window
+        test_id: Unique identifier for this test
+        plugin_slug: Plugin identifier (e.g., 'cold_flow', 'hot_fire')
+        file_path: Path to raw data file (for traceability)
+        detection_method: How steady window was detected
+        detection_params: Parameters used for detection
+        stability_channels: Channels used for stability detection
+        resample_freq_ms: Resampling frequency used
+        metadata: Additional metadata (part, serial, operator, etc.)
+        skip_qc: If True, skip QC checks (not recommended)
+
+    Returns:
+        AnalysisResult with all P0 components
+
+    Raises:
+        KeyError: If plugin not found
+        ValueError: If QC fails and skip_qc is False
+
+    Example:
+        >>> result = analyze_test(
+        ...     df=df,
+        ...     config=config,
+        ...     steady_window=(1500, 5000),
+        ...     test_id="INJ-CF-001",
+        ...     plugin_slug="cold_flow",
+        ...     file_path="test_data.csv"
+        ... )
+    """
+    # Get plugin from registry
+    plugin = PluginRegistry.get_plugin(plugin_slug)
+
+    # Step 1: Plugin validates config (test-specific)
+    plugin.validate_config(config)
+
+    # Step 2: Run QC checks
+    if not skip_qc:
+        # Plugin runs test-specific QC
+        qc_report = plugin.run_qc_checks(df, config, quick=False)
+
+        # Check if QC passed
+        if not qc_report.passed:
+            raise ValueError(
+                f"QC checks failed for {test_id}. "
+                f"Blocking failures: {[c.name for c in qc_report.blocking_failures]}"
+            )
+    else:
+        # Quick QC (lightweight)
+        qc_report = plugin.run_qc_checks(df, config, quick=True)
+
+    # Step 3: Plugin extracts steady state
+    steady_df = plugin.extract_steady_state(df, steady_window, config)
+
+    # Step 4: Plugin computes raw metrics
+    avg_values = plugin.compute_raw_metrics(steady_df, config, metadata)
+
+    # Step 5: Plugin calculates measurements WITH uncertainties
+    # (Phase 1: Delegates to existing uncertainty functions)
+    # (Future phases: Core enforces uncertainty wrapper)
+    if hasattr(plugin, 'calculate_measurements_with_uncertainties'):
+        measurements = plugin.calculate_measurements_with_uncertainties(
+            avg_values, config, metadata
+        )
+    else:
+        # Fallback: Just wrap raw values (no uncertainties)
+        measurements = {
+            name: MeasurementWithUncertainty(value=value, uncertainty=0.0, name=name)
+            for name, value in avg_values.items()
+        }
+
+    # Step 6: Core creates traceability (P0 - enforced by wrapper)
+    traceability = create_full_traceability_record(
+        df=df,
+        file_path=file_path,
+        config=config,
+        config_name=config.get('config_name', 'unnamed'),
+        steady_window=steady_window,
+        detection_method=detection_method,
+        detection_params=detection_params or {},
+        stability_channels=stability_channels or [],
+        resample_freq_ms=resample_freq_ms,
+    )
+
+    # Step 7: Core packages result
+    return AnalysisResult(
+        test_id=test_id,
+        qc_report=qc_report,
+        measurements=measurements,
+        raw_values=avg_values,
+        traceability=traceability,
+        config=config,
+        steady_window=steady_window,
+        metadata=metadata,
+    )
+
+
+# =============================================================================
+# BACKWARD-COMPATIBLE WRAPPERS
+# =============================================================================
+
 def analyze_cold_flow_test(
     df: pd.DataFrame,
     config: Dict[str, Any],
@@ -243,9 +384,14 @@ def analyze_cold_flow_test(
 ) -> AnalysisResult:
     """
     Complete cold flow test analysis with all P0 components.
-    
-    This is the main entry point for cold flow analysis.
-    
+
+    **Backward-Compatible Wrapper** (Phase 1 - Plugin Architecture)
+
+    This function now routes through the plugin system while maintaining
+    100% backward compatibility with existing code.
+
+    New code should use: analyze_test(..., plugin_slug='cold_flow')
+
     Args:
         df: DataFrame with test data (already resampled)
         config: Test configuration dictionary
@@ -258,61 +404,27 @@ def analyze_cold_flow_test(
         resample_freq_ms: Resampling frequency used
         metadata: Additional metadata (part, serial, operator, etc.)
         skip_qc: If True, skip QC checks (not recommended)
-        
+
     Returns:
         AnalysisResult with all components
-        
+
     Raises:
         ValueError: If QC fails and skip_qc is False
     """
-    # Validate config
-    validated_config = validate_config_simple(config, 'cold_flow')
-    
-    # Run QC checks
-    if not skip_qc:
-        qc_report = run_qc_checks(df, config, time_col='timestamp')
-        if not qc_report.passed:
-            raise ValueError(
-                f"QC checks failed for {test_id}. "
-                f"Blocking failures: {[c.name for c in qc_report.blocking_failures]}"
-            )
-    else:
-        qc_report = run_quick_qc(df, time_col='timestamp')
-    
-    # Extract steady state data
-    steady_df = df[
-        (df['timestamp'] >= steady_window[0]) & 
-        (df['timestamp'] <= steady_window[1])
-    ]
-    
-    # Calculate average values
-    avg_values = steady_df.mean().to_dict()
-    
-    # Calculate uncertainties
-    measurements = calculate_cold_flow_uncertainties(avg_values, config)
-    
-    # Create traceability record
-    traceability = create_full_traceability_record(
+    # Route through plugin system
+    return analyze_test(
         df=df,
-        file_path=file_path,
         config=config,
-        config_name=config.get('config_name', 'unnamed'),
         steady_window=steady_window,
-        detection_method=detection_method,
-        detection_params=detection_params or {},
-        stability_channels=stability_channels or [],
-        resample_freq_ms=resample_freq_ms,
-    )
-    
-    return AnalysisResult(
         test_id=test_id,
-        qc_report=qc_report,
-        measurements=measurements,
-        raw_values=avg_values,
-        traceability=traceability,
-        config=config,
-        steady_window=steady_window,
+        plugin_slug='cold_flow',
+        file_path=file_path,
+        detection_method=detection_method,
+        detection_params=detection_params,
+        stability_channels=stability_channels,
+        resample_freq_ms=resample_freq_ms,
         metadata=metadata,
+        skip_qc=skip_qc,
     )
 
 
