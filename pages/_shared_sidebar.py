@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from core.config_manager import ConfigManager
+from pages._shared_styles import apply_custom_styles
+
+# Apply custom styles whenever sidebar is rendered
+apply_custom_styles()
 
 
 def get_programs_for_root(root_path: Path) -> List[str]:
@@ -68,7 +72,15 @@ def render_global_context(show_recent: bool = True) -> Dict[str, Any]:
         - program: str or None
         - is_configured: bool
     """
-    st.header("📁 Test Data")
+    # Modern styled header
+    st.markdown("""
+    <div style="margin-bottom: 1.5rem;">
+        <h2 style="font-size: 0.875rem; font-weight: 600; text-transform: uppercase;
+                   letter-spacing: 0.05em; color: #52525b; margin: 0;">
+            📁 Test Data
+        </h2>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Initialize session state
     if 'global_test_root' not in st.session_state:
@@ -233,7 +245,15 @@ def render_campaign_selector(
 
 def render_not_configured_message():
     """Display a message when global context is not configured."""
-    st.info("👈 Select a **Test Root** folder and **Program** in the sidebar to get started.")
+    st.markdown("""
+    <div class="card" style="text-align: center; padding: 3rem 2rem;">
+        <div style="font-size: 3rem; margin-bottom: 1rem;">📁</div>
+        <h3 style="margin: 0 0 0.5rem 0;">No Test Data Selected</h3>
+        <p style="margin: 0; color: #71717a;">
+            Select a <strong>Test Root</strong> folder and <strong>Program</strong> in the sidebar to get started.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 def get_current_context() -> Dict[str, Any]:

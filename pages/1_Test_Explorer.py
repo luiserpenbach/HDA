@@ -31,8 +31,12 @@ from core.test_metadata import (
 )
 from core.config_manager import ConfigManager
 from pages._shared_sidebar import render_global_context
+from pages._shared_styles import apply_custom_styles, render_page_header
 
-st.set_page_config(page_title="Test Explorer", page_icon="TE", layout="wide")
+st.set_page_config(page_title="Test Explorer", page_icon="🔍", layout="wide")
+
+# Apply custom styles
+apply_custom_styles()
 
 # =============================================================================
 # SIDEBAR - Global Context
@@ -47,8 +51,12 @@ with st.sidebar:
 # MAIN CONTENT
 # =============================================================================
 
-st.title("Test Explorer")
-st.markdown("Browse test data structure and ingest new tests")
+render_page_header(
+    title="Test Explorer",
+    description="Browse test data structure and ingest new tests with metadata",
+    badge_text="P1",
+    badge_type="info"
+)
 
 # =============================================================================
 # SESSION STATE INITIALIZATION (page-specific)

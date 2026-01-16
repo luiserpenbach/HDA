@@ -1,3 +1,22 @@
+# Streamlit Configuration for Hopper Data Studio
+# Modern, professional theme inspired by shadcn/ui design principles
+
 [server]
 # Maximum size of file uploads in MB
 maxUploadSize = 1024
+
+[theme]
+# Primary color palette - inspired by shadcn/ui zinc theme
+primaryColor = "#18181b"        # zinc-900 - primary actions
+backgroundColor = "#ffffff"     # white - main background
+secondaryBackgroundColor = "#f4f4f5"  # zinc-100 - cards and containers
+textColor = "#09090b"          # zinc-950 - primary text
+font = "sans serif"
+
+# Base theme
+base = "light"
+
+[client]
+# Performance and UX settings
+showErrorDetails = false
+toolbarMode = "minimal"
