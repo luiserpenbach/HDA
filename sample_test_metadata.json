@@ -1,0 +1,70 @@
+{
+  "test_metadata": {
+    "test_id": "INJ-CF-001",
+    "test_date": "2026-01-16",
+    "test_type": "cold_flow",
+    "operator": "Test Engineer",
+    "facility": "Cold Flow Test Stand A",
+    "campaign": "Injector_Acceptance_Q1_2026"
+  },
+
+  "test_article": {
+    "part_number": "INJ-B1-03",
+    "serial_number": "SN-2026-045",
+    "description": "Bipropellant injector element - design iteration 3",
+    "revision": "C",
+    "material": "316L Stainless Steel",
+    "manufacturing_method": "CNC machined"
+  },
+
+  "geometry": {
+    "orifice_area_mm2": 3.14159,
+    "orifice_diameter_mm": 2.0,
+    "orifice_length_mm": 5.0,
+    "throat_area_mm2": 12.566,
+    "throat_diameter_mm": 4.0,
+    "design_cd": 0.65,
+    "design_cd_tolerance": 0.05,
+    "notes": "Nominal geometry from CAD model"
+  },
+
+  "test_conditions": {
+    "target_p_upstream_bar": 10.0,
+    "target_p_downstream_bar": 1.0,
+    "target_mass_flow_gs": 125.0,
+    "ambient_temp_k": 295.0,
+    "ambient_pressure_bar": 1.01325,
+    "humidity_percent": 45.0
+  },
+
+  "fluid_properties": {
+    "oxidizer": {
+      "name": "nitrogen",
+      "temperature_k": 300,
+      "density_kg_m3": 1.165,
+      "density_uncertainty_kg_m3": 0.01,
+      "molecular_weight": 28.014,
+      "gamma": 1.4
+    }
+  },
+
+  "acceptance_criteria": {
+    "cd_min": 0.60,
+    "cd_max": 0.70,
+    "cd_uncertainty_max_percent": 5.0,
+    "flow_uniformity_cv_max": 0.05,
+    "pressure_drop_stability_cv_max": 0.02
+  },
+
+  "references": {
+    "test_procedure": "TP-INJ-CF-001 Rev B",
+    "acceptance_spec": "AS-INJ-001 Rev A",
+    "drawing": "DWG-INJ-B1-03 Rev C"
+  },
+
+  "notes": [
+    "This is a sample metadata file for plugin architecture testing",
+    "Adjust values to match your actual test article and conditions",
+    "Geometry values should match those in the configuration file"
+  ]
+}
