@@ -321,21 +321,27 @@ def validate_config_simple(config: Dict[str, Any], config_type: str = 'auto') ->
             config_type = 'cold_flow'
     
     if config_type == 'cold_flow':
-        if not geometry.get('orifice_area_mm2'):
-            errors.append("orifice_area_mm2 is required in geometry for cold flow")
-        
+        # NOTE: geometry comes from metadata, not config (as of v2.4.0)
+        # Validate geometry only if present (indicates merged config+metadata)
+        # Check 'geometry' in config (not just truthiness, since {} is falsy)
+        if 'geometry' in config and not geometry.get('orifice_area_mm2'):
+            errors.append("orifice_area_mm2 is required in geometry for cold flow (provide in metadata)")
+
         has_pressure = columns.get('upstream_pressure') or columns.get('inlet_pressure')
         has_flow = columns.get('mass_flow') or columns.get('mf')
-        
+
         if not has_pressure:
             errors.append("upstream_pressure or inlet_pressure required in columns")
         if not has_flow:
             errors.append("mass_flow or mf required in columns")
-    
+
     elif config_type == 'hot_fire':
-        if not geometry.get('throat_area_mm2'):
-            errors.append("throat_area_mm2 is required in geometry for hot fire")
-        
+        # NOTE: geometry comes from metadata, not config (as of v2.4.0)
+        # Validate geometry only if present (indicates merged config+metadata)
+        # Check 'geometry' in config (not just truthiness, since {} is falsy)
+        if 'geometry' in config and not geometry.get('throat_area_mm2'):
+            errors.append("throat_area_mm2 is required in geometry for hot fire (provide in metadata)")
+
         if not columns.get('chamber_pressure'):
             errors.append("chamber_pressure required in columns for hot fire")
     
@@ -551,18 +557,40 @@ class ColdFlowConfig(BaseModel):
     
     @root_validator(skip_on_failure=True)
     def check_geometry_for_cd(cls, values):
-        """Verify we have geometry needed for Cd calculation."""
+        """
+        Verify we have geometry needed for Cd calculation.
+
+        NOTE: As of v2.4.0, geometry comes from metadata, not config.
+        This validator only runs if geometry is present (merged config).
+        """
         geom = values.get('geometry')
-        if geom and geom.orifice_area_mm2 is None:
-            raise ValueError("orifice_area_mm2 is required in geometry for Cd calculation")
+        # Only validate if geometry is present (indicates merged config+metadata)
+        if geom:
+            # Check if orifice_area_mm2 is missing or None
+            if hasattr(geom, 'orifice_area_mm2'):
+                if geom.orifice_area_mm2 is None:
+                    raise ValueError("orifice_area_mm2 is required in geometry for Cd calculation (provide in metadata)")
+            else:
+                raise ValueError("orifice_area_mm2 is required in geometry for Cd calculation (provide in metadata)")
         return values
-    
+
     @root_validator(skip_on_failure=True)
     def check_fluid_for_cd(cls, values):
-        """Verify we have fluid properties needed for Cd calculation."""
+        """
+        Verify we have fluid properties needed for Cd calculation.
+
+        NOTE: As of v2.4.0, fluid properties come from metadata, not config.
+        This validator only runs if fluid is present (merged config).
+        """
         fluid = values.get('fluid')
-        if fluid and fluid.get_density() is None:
-            raise ValueError("Fluid density is required for Cd calculation (set density_kg_m3)")
+        # Only validate if fluid is present (indicates merged config+metadata)
+        if fluid:
+            # Check if density is available
+            if hasattr(fluid, 'get_density'):
+                if fluid.get_density() is None:
+                    raise ValueError("Fluid density is required for Cd calculation (set density_kg_m3 in metadata)")
+            else:
+                raise ValueError("Fluid density is required for Cd calculation (set density_kg_m3 in metadata)")
         return values
     
     def to_dict(self) -> Dict[str, Any]:

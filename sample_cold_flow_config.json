@@ -1,0 +1,76 @@
+{
+  "config_name": "Sample_Injector_Cold_Flow_Config",
+  "test_type": "cold_flow",
+  "description": "Example configuration for cold flow injector characterization tests",
+  "created": "2026-01-16",
+  "version": "1.0",
+
+  "columns": {
+    "upstream_pressure": "IG-PT-01",
+    "downstream_pressure": "IG-PT-02",
+    "mass_flow": "FM-01",
+    "temperature": "TC-01"
+  },
+
+  "uncertainties": {
+    "IG-PT-01": {
+      "type": "relative",
+      "value": 0.005,
+      "description": "Upstream pressure transducer - ±0.5% of reading"
+    },
+    "IG-PT-02": {
+      "type": "relative",
+      "value": 0.005,
+      "description": "Downstream pressure transducer - ±0.5% of reading"
+    },
+    "FM-01": {
+      "type": "relative",
+      "value": 0.01,
+      "description": "Coriolis mass flow meter - ±1.0% of reading"
+    },
+    "TC-01": {
+      "type": "absolute",
+      "value": 1.0,
+      "unit": "K",
+      "description": "Type K thermocouple - ±1 K"
+    }
+  },
+
+  "settings": {
+    "resample_freq_ms": 10,
+    "steady_state_cv_threshold": 0.02,
+    "steady_state_min_duration_s": 1.0,
+    "p_atm_bar": 1.01325
+  },
+
+  "sensor_ranges": {
+    "IG-PT-01": {
+      "min": 0,
+      "max": 50,
+      "unit": "bar"
+    },
+    "IG-PT-02": {
+      "min": 0,
+      "max": 10,
+      "unit": "bar"
+    },
+    "FM-01": {
+      "min": 0,
+      "max": 500,
+      "unit": "g/s"
+    },
+    "TC-01": {
+      "min": 200,
+      "max": 400,
+      "unit": "K"
+    }
+  },
+
+  "notes": [
+    "TESTBENCH HARDWARE CONFIGURATION - Changes rarely",
+    "Contains: sensor mappings, calibration uncertainties, processing settings",
+    "Does NOT contain: geometry (test-article specific) or fluid (test-specific)",
+    "Geometry and fluid properties belong in metadata.json (changes per test)",
+    "Adjust sensor channels and uncertainties for your specific hardware"
+  ]
+}
