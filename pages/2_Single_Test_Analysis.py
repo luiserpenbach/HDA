@@ -1405,7 +1405,8 @@ if df_raw is not None:
         """
         if source_type == 'sensor':
             # Check if sensor is in columns config and available in data
-            cols = config.get('columns', {})
+            # Support both 'columns' (semantic) and 'channel_config' (DAQ mapping)
+            cols = config.get('columns', {}) or config.get('channel_config', {})
             sensor_name = cols.get(source_key)
             if sensor_name and sensor_name in df_columns:
                 return True, sensor_name, "✓"

@@ -450,9 +450,14 @@ def analyze_hot_fire_test(
 ) -> AnalysisResult:
     """
     Complete hot fire test analysis with all P0 components.
-    
-    This is the main entry point for hot fire analysis.
-    
+
+    **Backward-Compatible Wrapper** (Phase 1 - Plugin Architecture)
+
+    This function now routes through the plugin system while maintaining
+    100% backward compatibility with existing code.
+
+    New code should use: analyze_test(..., plugin_slug='hot_fire')
+
     Args:
         df: DataFrame with test data (already resampled)
         config: Test configuration dictionary
@@ -465,70 +470,27 @@ def analyze_hot_fire_test(
         resample_freq_ms: Resampling frequency used
         metadata: Additional metadata (part, serial, operator, etc.)
         skip_qc: If True, skip QC checks (not recommended)
-        
+
     Returns:
         AnalysisResult with all components
-        
+
     Raises:
         ValueError: If QC fails and skip_qc is False
     """
-    # Validate config
-    validated_config = validate_config_simple(config, 'hot_fire')
-    
-    # Run QC checks
-    if not skip_qc:
-        qc_report = run_qc_checks(df, config, time_col='timestamp')
-        if not qc_report.passed:
-            raise ValueError(
-                f"QC checks failed for {test_id}. "
-                f"Blocking failures: {[c.name for c in qc_report.blocking_failures]}"
-            )
-    else:
-        qc_report = run_quick_qc(df, time_col='timestamp')
-    
-    # Extract steady state data
-    steady_df = df[
-        (df['timestamp'] >= steady_window[0]) & 
-        (df['timestamp'] <= steady_window[1])
-    ]
-    
-    # Calculate average values
-    avg_values = steady_df.mean().to_dict()
-    
-    # Add derived columns if not present
-    cols = config.get('columns', {})
-    mf_ox_col = cols.get('mass_flow_ox')
-    mf_fuel_col = cols.get('mass_flow_fuel')
-    
-    if mf_ox_col and mf_fuel_col and mf_ox_col in avg_values and mf_fuel_col in avg_values:
-        avg_values['mass_flow_total'] = avg_values[mf_ox_col] + avg_values[mf_fuel_col]
-        avg_values['of_ratio'] = avg_values[mf_ox_col] / avg_values[mf_fuel_col] if avg_values[mf_fuel_col] > 0 else 0
-    
-    # Calculate uncertainties
-    measurements = calculate_hot_fire_uncertainties(avg_values, config)
-    
-    # Create traceability record
-    traceability = create_full_traceability_record(
+    # Route through plugin system
+    return analyze_test(
         df=df,
-        file_path=file_path,
         config=config,
-        config_name=config.get('config_name', 'unnamed'),
         steady_window=steady_window,
-        detection_method=detection_method,
-        detection_params=detection_params or {},
-        stability_channels=stability_channels or [],
-        resample_freq_ms=resample_freq_ms,
-    )
-    
-    return AnalysisResult(
         test_id=test_id,
-        qc_report=qc_report,
-        measurements=measurements,
-        raw_values=avg_values,
-        traceability=traceability,
-        config=config,
-        steady_window=steady_window,
+        plugin_slug='hot_fire',
+        file_path=file_path,
+        detection_method=detection_method,
+        detection_params=detection_params,
+        stability_channels=stability_channels,
+        resample_freq_ms=resample_freq_ms,
         metadata=metadata,
+        skip_qc=skip_qc,
     )
 
 
