@@ -553,23 +553,21 @@ with st.sidebar:
 
     st.divider()
 
-    # Show config expander for all cases
-    with st.expander("📝 View/Edit Configuration"):
-        config_str = st.text_area(
-            "Config JSON",
-            value=json.dumps(config, indent=2),
-            height=300,
-            key="config_editor"
-        )
-        if st.button("Apply Changes", type="primary"):
-            try:
-                edited_config = json.loads(config_str)
-                st.session_state.active_config = edited_config
-                st.session_state.active_config_name = edited_config.get('config_name', 'Custom Config')
-                ConfigManager.save_to_recent(edited_config, 'custom', st.session_state.active_config_name)
-                st.rerun()
-            except Exception as e:
-                st.error(f"Invalid JSON: {e}")
+    # Show config viewer (read-only) if config loaded
+    if config is not None:
+        with st.expander("📋 View Configuration", expanded=False):
+            st.json(config)
+
+            # Show key config info in compact format
+            st.caption(f"**Config Name:** {config.get('config_name', 'Unnamed')}")
+            st.caption(f"**Test Type:** {config.get('test_type', 'Unknown')}")
+
+            # Show sensor mappings
+            cols = config.get('columns', {}) or config.get('channel_config', {})
+            if cols:
+                st.caption(f"**Sensors Mapped:** {len(cols)}")
+    else:
+        st.info("ℹ️ No configuration loaded. Please select a configuration source above.")
 
 # =============================================================================
 # MAIN CONTENT
@@ -661,6 +659,9 @@ if data_source == "Upload CSV":
                 # Show metadata summary
                 with st.expander("View Loaded Metadata"):
                     st.json(metadata_content)
+
+                # Force rerun to update metadata form below
+                st.rerun()
             except Exception as e:
                 st.error(f"Error loading metadata: {e}")
         else:
@@ -1382,6 +1383,78 @@ if df_raw is not None:
                 height=68
             )
 
+        # -------------------------------------------------------------------------
+        # GEOMETRY SECTION - Dynamic based on test type
+        # -------------------------------------------------------------------------
+        st.markdown("---")
+        st.markdown("**Geometry** *(test article dimensions)*")
+
+        geom_col1, geom_col2 = st.columns(2)
+
+        # Determine test type from config
+        test_type = config.get('test_type', 'cold_flow') if config else 'cold_flow'
+
+        with geom_col1:
+            if test_type == 'cold_flow':
+                # Cold flow requires orifice area
+                orifice_area = st.number_input(
+                    "Orifice Area (mm²)",
+                    value=float(geometry.get('orifice_area_mm2', 0.0)) if geometry.get('orifice_area_mm2') else 0.0,
+                    min_value=0.0,
+                    format="%.4f",
+                    help="Required for Cd calculation"
+                )
+                orifice_diameter = st.number_input(
+                    "Orifice Diameter (mm)",
+                    value=float(geometry.get('orifice_diameter_mm', 0.0)) if geometry.get('orifice_diameter_mm') else 0.0,
+                    min_value=0.0,
+                    format="%.3f",
+                    help="Optional - for reference only"
+                )
+            elif test_type == 'hot_fire':
+                # Hot fire requires throat area
+                throat_area = st.number_input(
+                    "Throat Area (mm²)",
+                    value=float(geometry.get('throat_area_mm2', 0.0)) if geometry.get('throat_area_mm2') else 0.0,
+                    min_value=0.0,
+                    format="%.4f",
+                    help="Required for C* calculation"
+                )
+                throat_diameter = st.number_input(
+                    "Throat Diameter (mm)",
+                    value=float(geometry.get('throat_diameter_mm', 0.0)) if geometry.get('throat_diameter_mm') else 0.0,
+                    min_value=0.0,
+                    format="%.3f",
+                    help="Optional - for reference only"
+                )
+
+        with geom_col2:
+            if test_type == 'cold_flow':
+                # Optional fields for cold flow
+                downstream_area = st.number_input(
+                    "Downstream Area (mm²)",
+                    value=float(geometry.get('downstream_area_mm2', 0.0)) if geometry.get('downstream_area_mm2') else 0.0,
+                    min_value=0.0,
+                    format="%.4f",
+                    help="Optional - for area ratio calculations"
+                )
+            elif test_type == 'hot_fire':
+                # Optional fields for hot fire
+                expansion_ratio = st.number_input(
+                    "Expansion Ratio (ε)",
+                    value=float(geometry.get('expansion_ratio', 0.0)) if geometry.get('expansion_ratio') else 0.0,
+                    min_value=0.0,
+                    format="%.2f",
+                    help="Nozzle exit area / throat area"
+                )
+                chamber_volume = st.number_input(
+                    "Chamber Volume (cc)",
+                    value=float(geometry.get('chamber_volume_cc', 0.0)) if geometry.get('chamber_volume_cc') else 0.0,
+                    min_value=0.0,
+                    format="%.1f",
+                    help="Optional - for L* calculations"
+                )
+
     # -------------------------------------------------------------------------
     # ANALYSIS TOOLS - Tabs for Cold Flow and Hot Fire
     # -------------------------------------------------------------------------
@@ -1608,6 +1681,25 @@ if df_raw is not None:
                         fluid_pressure_bar = steady_df[pressure_sensor].mean()
                         fluid_pressure_Pa = fluid_pressure_bar * 1e5  # Convert bar to Pa
 
+                # Build geometry dict from form inputs
+                geometry_dict = {}
+                if test_type == 'cold_flow':
+                    if 'orifice_area' in locals() and orifice_area > 0:
+                        geometry_dict['orifice_area_mm2'] = orifice_area
+                    if 'orifice_diameter' in locals() and orifice_diameter > 0:
+                        geometry_dict['orifice_diameter_mm'] = orifice_diameter
+                    if 'downstream_area' in locals() and downstream_area > 0:
+                        geometry_dict['downstream_area_mm2'] = downstream_area
+                elif test_type == 'hot_fire':
+                    if 'throat_area' in locals() and throat_area > 0:
+                        geometry_dict['throat_area_mm2'] = throat_area
+                    if 'throat_diameter' in locals() and throat_diameter > 0:
+                        geometry_dict['throat_diameter_mm'] = throat_diameter
+                    if 'expansion_ratio' in locals() and expansion_ratio > 0:
+                        geometry_dict['expansion_ratio'] = expansion_ratio
+                    if 'chamber_volume' in locals() and chamber_volume > 0:
+                        geometry_dict['chamber_volume_cc'] = chamber_volume
+
                 metadata = {
                     'part_number': part_number,
                     'part_name': part_name,
@@ -1622,8 +1714,8 @@ if df_raw is not None:
                     'fluid_pressure_Pa': fluid_pressure_Pa,
                     # Sensor roles used
                     'sensor_roles': sensor_roles,
-                    # Geometry from loaded metadata
-                    'geometry': geometry,
+                    # Geometry from form inputs (overrides loaded metadata)
+                    'geometry': geometry_dict,
                 }
 
                 # Get fluid properties and add to metadata
@@ -1631,11 +1723,23 @@ if df_raw is not None:
                     try:
                         fluid_props = get_fluid_properties(test_fluid, fluid_temperature_K, fluid_pressure_Pa)
                         if fluid_props:
+                            # Individual fields (legacy)
                             metadata['fluid_density_kg_m3'] = fluid_props.density_kg_m3
                             metadata['fluid_density_uncertainty_kg_m3'] = fluid_props.density_kg_m3 * fluid_props.density_uncertainty
                             metadata['fluid_viscosity_Pa_s'] = fluid_props.viscosity_Pa_s
                             metadata['fluid_phase'] = fluid_props.phase
                             metadata['fluid_source'] = fluid_props.source
+
+                            # Fluid dict (for plugin validation)
+                            metadata['fluid'] = {
+                                'name': test_fluid,
+                                'temperature_k': fluid_temperature_K,
+                                'pressure_pa': fluid_pressure_Pa,
+                                'density_kg_m3': fluid_props.density_kg_m3,
+                                'density_uncertainty_kg_m3': fluid_props.density_kg_m3 * fluid_props.density_uncertainty,
+                                'viscosity_pa_s': fluid_props.viscosity_Pa_s,
+                                'phase': fluid_props.phase,
+                            }
 
                             # Show extracted conditions
                             temp_C = fluid_temperature_K - 273.15
@@ -1644,6 +1748,14 @@ if df_raw is not None:
                                    f"ρ = {fluid_props.density_kg_m3:.2f} kg/m³")
                     except Exception as e:
                         st.warning(f"Could not calculate fluid properties: {e}")
+                else:
+                    # If no fluid props available, still create minimal fluid dict to avoid validation errors
+                    if test_fluid:
+                        metadata['fluid'] = {
+                            'name': test_fluid,
+                            'density_kg_m3': 1.0,  # Default placeholder
+                            'density_uncertainty_kg_m3': 0.1,
+                        }
 
                 # Determine file path for traceability
                 # If loaded from test folder with a real file, use that path
