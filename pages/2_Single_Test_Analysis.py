@@ -905,16 +905,25 @@ with preprocess_col:
                     # Show current rate estimate
                     timestamp_col = config.get('columns', {}).get('timestamp', 'timestamp')
                     if timestamp_col in df_raw.columns:
-                        dt = np.diff(df_raw[timestamp_col].values)
-                        if len(dt) > 0 and np.mean(dt) > 0:
-                            # Convert based on time unit
-                            if time_unit == 'ms':
-                                current_rate = 1000.0 / np.mean(dt)
-                            elif time_unit == 'us':
-                                current_rate = 1_000_000.0 / np.mean(dt)
-                            else:
-                                current_rate = 1.0 / np.mean(dt)
-                            st.metric("Current avg rate", f"{current_rate:.1f} Hz")
+                        try:
+                            # Convert to numeric to ensure we can calculate differences
+                            timestamp_values = pd.to_numeric(df_raw[timestamp_col], errors='coerce')
+                            # Drop NaN values before calculating diff
+                            timestamp_values = timestamp_values.dropna()
+
+                            if len(timestamp_values) > 1:
+                                dt = np.diff(timestamp_values.values)
+                                if len(dt) > 0 and np.mean(dt) > 0:
+                                    # Convert based on time unit
+                                    if time_unit == 'ms':
+                                        current_rate = 1000.0 / np.mean(dt)
+                                    elif time_unit == 'us':
+                                        current_rate = 1_000_000.0 / np.mean(dt)
+                                    else:
+                                        current_rate = 1.0 / np.mean(dt)
+                                    st.metric("Current avg rate", f"{current_rate:.1f} Hz")
+                        except Exception as e:
+                            st.caption(f"⚠ Could not estimate sample rate: {type(e).__name__}")
             else:
                 target_rate = 100  # Default value when not resampling
 
