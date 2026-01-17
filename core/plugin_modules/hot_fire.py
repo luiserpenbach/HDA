@@ -175,18 +175,34 @@ class HotFirePlugin:
         validated = validate_config_simple(config, 'hot_fire')
 
         # Additional plugin-specific checks
+        # Support both 'columns' (semantic mapping) and 'channel_config' (legacy DAQ mapping)
+        # Prefer 'columns' as it provides semantic role → sensor name mapping
         cols = config.get('columns', {})
+
+        # If no 'columns', check 'channel_config' as fallback
+        if not cols:
+            cols = config.get('channel_config', {})
+            if cols:
+                import warnings
+                warnings.warn(
+                    "Config uses legacy 'channel_config' without 'columns'. "
+                    "Please add 'columns' with semantic mappings. "
+                    "Attempting to infer from sensor names...",
+                    DeprecationWarning
+                )
 
         # Check for chamber pressure sensor
         if not cols.get('chamber_pressure'):
             raise ValueError(
-                "Hot fire config must specify 'chamber_pressure' in columns"
+                "Hot fire config must specify 'chamber_pressure' in columns. "
+                "Add: \"columns\": {\"chamber_pressure\": \"YOUR-PT-SENSOR\", \"thrust\": \"YOUR-LC-SENSOR\", ...}"
             )
 
         # Check for thrust sensor
         if not cols.get('thrust'):
             raise ValueError(
-                "Hot fire config must specify 'thrust' in columns"
+                "Hot fire config must specify 'thrust' in columns. "
+                "Add: \"columns\": {\"chamber_pressure\": \"YOUR-PT-SENSOR\", \"thrust\": \"YOUR-LC-SENSOR\", ...}"
             )
 
         # Check for mass flow sensors
@@ -195,7 +211,8 @@ class HotFirePlugin:
 
         if not (has_ox_flow and has_fuel_flow):
             raise ValueError(
-                "Hot fire config must specify both 'mass_flow_ox' and 'mass_flow_fuel' in columns"
+                "Hot fire config must specify both 'mass_flow_ox' and 'mass_flow_fuel' in columns. "
+                "Add: \"mass_flow_ox\": \"YOUR-OX-FM\", \"mass_flow_fuel\": \"YOUR-FUEL-FM\""
             )
 
         # Check geometry (needed for C* calculation) - should be in metadata

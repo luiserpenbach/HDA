@@ -141,26 +141,43 @@ class ColdFlowPlugin:
         validated = validate_config_simple(config, 'cold_flow')
 
         # Additional plugin-specific checks
+        # Support both 'columns' (semantic mapping) and 'channel_config' (legacy DAQ mapping)
+        # Prefer 'columns' as it provides semantic role → sensor name mapping
         cols = config.get('columns', {})
 
-        # Check for pressure sensor
+        # If no 'columns', check 'channel_config' as fallback
+        # but warn that it should be updated to include 'columns'
+        if not cols:
+            cols = config.get('channel_config', {})
+            if cols:
+                import warnings
+                warnings.warn(
+                    "Config uses legacy 'channel_config' without 'columns'. "
+                    "Please add 'columns' with semantic mappings (e.g., 'mass_flow': 'OX-FM-01'). "
+                    "Attempting to infer from sensor names...",
+                    DeprecationWarning
+                )
+
+        # Check for pressure sensor (semantic keys)
         has_pressure = (
             cols.get('upstream_pressure') is not None or
             cols.get('inlet_pressure') is not None
         )
         if not has_pressure:
             raise ValueError(
-                "Cold flow config must specify 'upstream_pressure' or 'inlet_pressure' in columns"
+                "Cold flow config must specify 'upstream_pressure' or 'inlet_pressure' in columns. "
+                "Add: \"columns\": {\"upstream_pressure\": \"YOUR-PT-SENSOR\", \"mass_flow\": \"YOUR-FM-SENSOR\"}"
             )
 
-        # Check for flow sensor
+        # Check for flow sensor (semantic keys)
         has_flow = (
             cols.get('mass_flow') is not None or
             cols.get('mf') is not None
         )
         if not has_flow:
             raise ValueError(
-                "Cold flow config must specify 'mass_flow' or 'mf' in columns"
+                "Cold flow config must specify 'mass_flow' or 'mf' in columns. "
+                "Add: \"columns\": {\"upstream_pressure\": \"YOUR-PT-SENSOR\", \"mass_flow\": \"YOUR-FM-SENSOR\"}"
             )
 
         # Check geometry (needed for Cd calculation)

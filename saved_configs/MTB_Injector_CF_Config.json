@@ -12,6 +12,13 @@
     "10009": "OX-FM-01",
     "10011": "OX-TS-13"
   },
+
+  "columns": {
+    "upstream_pressure": "IG-PT-01",
+    "downstream_pressure": "OX-PT-12",
+    "mass_flow": "OX-FM-01",
+    "temperature": "OX-TS-13"
+  },
   "uncertainties": {
     "IG-PT-01": { "type": "rel", "value": 0.005 },
     "LC-01":    { "type": "abs", "value": 5.0 },
