@@ -660,8 +660,8 @@ if data_source == "Upload CSV":
                 with st.expander("View Loaded Metadata"):
                     st.json(metadata_content)
 
-                # Force rerun to update metadata form below
-                st.rerun()
+                # Don't auto-rerun to avoid loading state - add refresh button below instead
+                st.info("📋 Metadata loaded. Scroll to metadata form and click 'Refresh Form from File' to update fields.")
             except Exception as e:
                 st.error(f"Error loading metadata: {e}")
         else:
@@ -1337,6 +1337,12 @@ if df_raw is not None:
     # METADATA EXPANDER - Contains Test ID, Test Fluid, and all metadata
     # -------------------------------------------------------------------------
     with st.expander("Metadata", expanded=True):
+        # Refresh button at top if metadata file was loaded
+        if st.session_state.get('loaded_metadata'):
+            if st.button("🔄 Refresh Form from File", help="Reload form fields from uploaded metadata file"):
+                st.rerun()
+            st.markdown("---")
+
         meta_col1, meta_col2 = st.columns(2)
 
         with meta_col1:
@@ -1464,6 +1470,52 @@ if df_raw is not None:
                     help="Optional - for L* calculations"
                 )
 
+        # -------------------------------------------------------------------------
+        # EXTRACT METADATA BUTTON - Shows current metadata for analysis
+        # -------------------------------------------------------------------------
+        st.markdown("---")
+
+        if st.button("📊 Show Active Metadata for Analysis", type="primary", use_container_width=True):
+            # Build the metadata dict that will be used in analysis
+            geometry_dict = {}
+            if test_type == 'cold_flow':
+                if 'orifice_area' in locals() and orifice_area > 0:
+                    geometry_dict['orifice_area_mm2'] = orifice_area
+                if 'orifice_diameter' in locals() and orifice_diameter > 0:
+                    geometry_dict['orifice_diameter_mm'] = orifice_diameter
+                if 'downstream_area' in locals() and downstream_area > 0:
+                    geometry_dict['downstream_area_mm2'] = downstream_area
+            elif test_type == 'hot_fire':
+                if 'throat_area' in locals() and throat_area > 0:
+                    geometry_dict['throat_area_mm2'] = throat_area
+                if 'throat_diameter' in locals() and throat_diameter > 0:
+                    geometry_dict['throat_diameter_mm'] = throat_diameter
+                if 'expansion_ratio' in locals() and expansion_ratio > 0:
+                    geometry_dict['expansion_ratio'] = expansion_ratio
+                if 'chamber_volume' in locals() and chamber_volume > 0:
+                    geometry_dict['chamber_volume_cc'] = chamber_volume
+
+            preview_metadata = {
+                'test_id': test_id,
+                'part_number': part_number,
+                'part_name': part_name,
+                'serial_number': serial_number,
+                'operator': operator,
+                'facility': facility,
+                'test_fluid': test_fluid,
+                'geometry': geometry_dict,
+                'sensor_roles': sensor_roles,
+            }
+
+            st.success("This metadata will be used when you click 'Run Analysis':")
+            st.json(preview_metadata)
+
+            # Show warnings if required fields are missing
+            if test_type == 'cold_flow' and not geometry_dict.get('orifice_area_mm2'):
+                st.warning("⚠️ Orifice area is required for Cd calculation")
+            elif test_type == 'hot_fire' and not geometry_dict.get('throat_area_mm2'):
+                st.warning("⚠️ Throat area is required for C* calculation")
+
     # -------------------------------------------------------------------------
     # ANALYSIS TOOLS - Tabs for Cold Flow and Hot Fire
     # -------------------------------------------------------------------------
@@ -1488,14 +1540,32 @@ if df_raw is not None:
         if source_type == 'sensor':
             # Check if sensor is in columns config and available in data
             # Support both 'columns' (semantic) and 'channel_config' (DAQ mapping)
-            cols = config.get('columns', {}) or config.get('channel_config', {})
+            if config is None:
+                return False, "(no config loaded)", "✗"
+
+            cols = config.get('columns', {})
+            if not cols:
+                # Fallback to channel_config
+                cols = config.get('channel_config', {})
+
             sensor_name = cols.get(source_key)
-            if sensor_name and sensor_name in df_columns:
-                return True, sensor_name, "✓"
-            elif sensor_name:
-                return False, f"{sensor_name} (not in data)", "✗"
-            else:
+
+            if not sensor_name:
                 return False, "(not configured)", "✗"
+
+            # Check if sensor name is in dataframe columns
+            if sensor_name in df_columns:
+                return True, sensor_name, "✓"
+
+            # If not found, check if the raw channel ID is in the dataframe
+            # (user might not have applied channel mapping yet)
+            channel_config = config.get('channel_config', {})
+            for raw_id, mapped_name in channel_config.items():
+                if mapped_name == sensor_name and (raw_id in df_columns or str(raw_id) in df_columns):
+                    return True, f"{sensor_name} (via {raw_id})", "✓"
+
+            # Sensor is configured but not in data
+            return False, f"{sensor_name} (not in data)", "✗"
 
         elif source_type == 'sensor_role':
             # Check sensor_roles from metadata
