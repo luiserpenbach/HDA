@@ -1237,6 +1237,10 @@ def merge_config_and_metadata(
     if 'fluid' in metadata_dict:
         merged['fluid'] = metadata_dict['fluid']
 
+    # Add sensor_roles from metadata (v2.4.0+ - ALL sensor assignments in metadata)
+    if 'sensor_roles' in metadata_dict:
+        merged['sensor_roles'] = metadata_dict['sensor_roles']
+
     # Add test conditions if present
     if 'test_conditions' in metadata_dict:
         merged.setdefault('test_conditions', {}).update(metadata_dict['test_conditions'])
