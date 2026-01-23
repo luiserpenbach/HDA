@@ -216,16 +216,19 @@ class ColdFlowPlugin:
 
         Args:
             df: Full preprocessed test data
-            steady_window: (start_ms, end_ms) for steady state
+            steady_window: (start_s, end_s) for steady state in seconds
             config: Active configuration
 
         Returns:
             DataFrame subset containing steady-state data
         """
-        # Simple time-based extraction
+        # Determine time column (preprocessing creates 'time_s', but fallback to 'timestamp')
+        time_col = 'time_s' if 'time_s' in df.columns else 'timestamp'
+
+        # Extract steady state window (in seconds)
         steady_df = df[
-            (df['timestamp'] >= steady_window[0]) &
-            (df['timestamp'] <= steady_window[1])
+            (df[time_col] >= steady_window[0]) &
+            (df[time_col] <= steady_window[1])
         ].copy()
 
         return steady_df
