@@ -858,3 +858,34 @@ def get_fluid_properties_from_metadata(
 def list_available_fluids() -> List[str]:
     """List commonly supported fluids."""
     return sorted(set(FLUID_NAME_MAP.values()))
+
+
+def parse_campaign_from_test_id(test_id: str) -> Optional[Dict[str, str]]:
+    """
+    Parse campaign information from test_id.
+
+    Expected format: SYSTEM-CAMPAIGN-TYPE-RUN
+    Example: "RCS-C01-CF-001" → {"system": "RCS", "campaign": "C01", "type": "CF", "run": "001"}
+
+    Args:
+        test_id: Test identifier (e.g., "RCS-C01-CF-001")
+
+    Returns:
+        Dict with system, campaign, type, run keys or None if parsing fails
+
+    Note:
+        This follows the naming convention documented at the top of this module:
+        SYSTEM-CAMPAIGN_ID-TEST_TYPE-NUMBER
+    """
+    if not test_id:
+        return None
+
+    parts = test_id.split('-')
+    if len(parts) >= 3:
+        return {
+            'system': parts[0],
+            'campaign': parts[1],
+            'type': parts[2] if len(parts) > 2 else 'UNKNOWN',
+            'run': parts[3] if len(parts) > 3 else '001'
+        }
+    return None

@@ -383,12 +383,12 @@ def _get_properties_coolprop(fluid_name: str, T_K: float, P_Pa: float) -> FluidP
     )
     
     try:
-        # Core properties
-        props.density_kg_m3 = PropsSI('D', 'T', T_K, 'P', P_Pa, fluid_name)
-        props.viscosity_Pa_s = PropsSI('V', 'T', T_K, 'P', P_Pa, fluid_name)
-        props.specific_heat_J_kg_K = PropsSI('C', 'T', T_K, 'P', P_Pa, fluid_name)
-        props.thermal_conductivity_W_m_K = PropsSI('L', 'T', T_K, 'P', P_Pa, fluid_name)
-        
+        # Core properties (convert NumPy types to native Python floats for SQLite compatibility)
+        props.density_kg_m3 = float(PropsSI('D', 'T', T_K, 'P', P_Pa, fluid_name))
+        props.viscosity_Pa_s = float(PropsSI('V', 'T', T_K, 'P', P_Pa, fluid_name))
+        props.specific_heat_J_kg_K = float(PropsSI('C', 'T', T_K, 'P', P_Pa, fluid_name))
+        props.thermal_conductivity_W_m_K = float(PropsSI('L', 'T', T_K, 'P', P_Pa, fluid_name))
+
         # Phase determination
         phase_index = PropsSI('Phase', 'T', T_K, 'P', P_Pa, fluid_name)
         phase_map = {
@@ -400,18 +400,18 @@ def _get_properties_coolprop(fluid_name: str, T_K: float, P_Pa: float) -> FluidP
             6: 'two-phase',
         }
         props.phase = phase_map.get(int(phase_index), 'unknown')
-        
-        # Gas properties
+
+        # Gas properties (convert NumPy types to native Python floats)
         if props.phase in ['gas', 'supercritical', 'supercritical_gas']:
-            cp = PropsSI('C', 'T', T_K, 'P', P_Pa, fluid_name)
-            cv = PropsSI('O', 'T', T_K, 'P', P_Pa, fluid_name)  # O = Cv
+            cp = float(PropsSI('C', 'T', T_K, 'P', P_Pa, fluid_name))
+            cv = float(PropsSI('O', 'T', T_K, 'P', P_Pa, fluid_name))  # O = Cv
             if cv > 0:
-                props.gamma = cp / cv
-            props.speed_of_sound_m_s = PropsSI('A', 'T', T_K, 'P', P_Pa, fluid_name)
-            props.compressibility_factor = PropsSI('Z', 'T', T_K, 'P', P_Pa, fluid_name)
-        
-        # Molar mass (always available)
-        props.molar_mass_kg_mol = PropsSI('M', 'T', T_K, 'P', P_Pa, fluid_name)
+                props.gamma = float(cp / cv)
+            props.speed_of_sound_m_s = float(PropsSI('A', 'T', T_K, 'P', P_Pa, fluid_name))
+            props.compressibility_factor = float(PropsSI('Z', 'T', T_K, 'P', P_Pa, fluid_name))
+
+        # Molar mass (always available, convert to native Python float)
+        props.molar_mass_kg_mol = float(PropsSI('M', 'T', T_K, 'P', P_Pa, fluid_name))
         
         # CoolProp uncertainty estimates (rough)
         props.density_uncertainty = 0.001  # CoolProp typically <0.1% for common fluids
