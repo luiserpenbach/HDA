@@ -140,44 +140,35 @@ class ColdFlowPlugin:
         # Use existing validation (already comprehensive)
         validated = validate_config_simple(config, 'cold_flow')
 
-        # Additional plugin-specific checks
-        # Support both 'columns' (semantic mapping) and 'channel_config' (legacy DAQ mapping)
-        # Prefer 'columns' as it provides semantic role → sensor name mapping
-        cols = config.get('columns', {})
+        # Check sensor_roles in metadata (ALL sensor assignments should be in metadata, NOT config)
+        sensor_roles = config.get('sensor_roles', {})
 
-        # If no 'columns', check 'channel_config' as fallback
-        # but warn that it should be updated to include 'columns'
-        if not cols:
-            cols = config.get('channel_config', {})
-            if cols:
-                import warnings
-                warnings.warn(
-                    "Config uses legacy 'channel_config' without 'columns'. "
-                    "Please add 'columns' with semantic mappings (e.g., 'mass_flow': 'OX-FM-01'). "
-                    "Attempting to infer from sensor names...",
-                    DeprecationWarning
-                )
+        if not sensor_roles:
+            raise ValueError(
+                "Cold flow analysis requires 'sensor_roles' in metadata. "
+                "Add to metadata.json: \"sensor_roles\": {\"upstream_pressure\": \"YOUR-PT-SENSOR\", \"mass_flow\": \"YOUR-FM-SENSOR\"}"
+            )
 
-        # Check for pressure sensor (semantic keys)
+        # Check for required pressure sensor
         has_pressure = (
-            cols.get('upstream_pressure') is not None or
-            cols.get('inlet_pressure') is not None
+            sensor_roles.get('upstream_pressure') is not None or
+            sensor_roles.get('inlet_pressure') is not None
         )
         if not has_pressure:
             raise ValueError(
-                "Cold flow config must specify 'upstream_pressure' or 'inlet_pressure' in columns. "
-                "Add: \"columns\": {\"upstream_pressure\": \"YOUR-PT-SENSOR\", \"mass_flow\": \"YOUR-FM-SENSOR\"}"
+                "Cold flow analysis requires 'upstream_pressure' or 'inlet_pressure' in metadata sensor_roles. "
+                "Add to metadata.json: \"sensor_roles\": {\"upstream_pressure\": \"YOUR-PT-SENSOR\"}"
             )
 
-        # Check for flow sensor (semantic keys)
+        # Check for required flow sensor
         has_flow = (
-            cols.get('mass_flow') is not None or
-            cols.get('mf') is not None
+            sensor_roles.get('mass_flow') is not None or
+            sensor_roles.get('mf') is not None
         )
         if not has_flow:
             raise ValueError(
-                "Cold flow config must specify 'mass_flow' or 'mf' in columns. "
-                "Add: \"columns\": {\"upstream_pressure\": \"YOUR-PT-SENSOR\", \"mass_flow\": \"YOUR-FM-SENSOR\"}"
+                "Cold flow analysis requires 'mass_flow' or 'mf' in metadata sensor_roles. "
+                "Add to metadata.json: \"sensor_roles\": {\"mass_flow\": \"YOUR-FM-SENSOR\"}"
             )
 
         # Check geometry (needed for Cd calculation)

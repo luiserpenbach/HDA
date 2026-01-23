@@ -174,44 +174,36 @@ class HotFirePlugin:
         # Use existing validation (already comprehensive)
         validated = validate_config_simple(config, 'hot_fire')
 
-        # Additional plugin-specific checks
-        # Support both 'columns' (semantic mapping) and 'channel_config' (legacy DAQ mapping)
-        # Prefer 'columns' as it provides semantic role → sensor name mapping
-        cols = config.get('columns', {})
+        # Check sensor_roles in metadata (ALL sensor assignments should be in metadata, NOT config)
+        sensor_roles = config.get('sensor_roles', {})
 
-        # If no 'columns', check 'channel_config' as fallback
-        if not cols:
-            cols = config.get('channel_config', {})
-            if cols:
-                import warnings
-                warnings.warn(
-                    "Config uses legacy 'channel_config' without 'columns'. "
-                    "Please add 'columns' with semantic mappings. "
-                    "Attempting to infer from sensor names...",
-                    DeprecationWarning
-                )
-
-        # Check for chamber pressure sensor
-        if not cols.get('chamber_pressure'):
+        if not sensor_roles:
             raise ValueError(
-                "Hot fire config must specify 'chamber_pressure' in columns. "
-                "Add: \"columns\": {\"chamber_pressure\": \"YOUR-PT-SENSOR\", \"thrust\": \"YOUR-LC-SENSOR\", ...}"
+                "Hot fire analysis requires 'sensor_roles' in metadata. "
+                "Add to metadata.json: \"sensor_roles\": {\"chamber_pressure\": \"YOUR-PT\", \"thrust\": \"YOUR-LC\", ...}"
             )
 
-        # Check for thrust sensor
-        if not cols.get('thrust'):
+        # Check for required chamber pressure sensor
+        if not sensor_roles.get('chamber_pressure'):
             raise ValueError(
-                "Hot fire config must specify 'thrust' in columns. "
-                "Add: \"columns\": {\"chamber_pressure\": \"YOUR-PT-SENSOR\", \"thrust\": \"YOUR-LC-SENSOR\", ...}"
+                "Hot fire analysis requires 'chamber_pressure' in metadata sensor_roles. "
+                "Add to metadata.json: \"sensor_roles\": {\"chamber_pressure\": \"YOUR-PT-SENSOR\"}"
             )
 
-        # Check for mass flow sensors
-        has_ox_flow = cols.get('mass_flow_ox') is not None
-        has_fuel_flow = cols.get('mass_flow_fuel') is not None
+        # Check for required thrust sensor
+        if not sensor_roles.get('thrust'):
+            raise ValueError(
+                "Hot fire analysis requires 'thrust' in metadata sensor_roles. "
+                "Add to metadata.json: \"sensor_roles\": {\"thrust\": \"YOUR-LC-SENSOR\"}"
+            )
+
+        # Check for required mass flow sensors
+        has_ox_flow = sensor_roles.get('mass_flow_ox') is not None
+        has_fuel_flow = sensor_roles.get('mass_flow_fuel') is not None
 
         if not (has_ox_flow and has_fuel_flow):
             raise ValueError(
-                "Hot fire config must specify both 'mass_flow_ox' and 'mass_flow_fuel' in columns. "
+                "Hot fire analysis requires both 'mass_flow_ox' and 'mass_flow_fuel' in metadata sensor_roles. "
                 "Add: \"mass_flow_ox\": \"YOUR-OX-FM\", \"mass_flow_fuel\": \"YOUR-FUEL-FM\""
             )
 

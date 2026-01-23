@@ -49,6 +49,14 @@
     }
   },
 
+  "sensor_roles": {
+    "upstream_pressure": "IG-PT-01",
+    "downstream_pressure": "IG-PT-02",
+    "mass_flow": "FM-01",
+    "fluid_temperature": "TC-01",
+    "fluid_pressure": "IG-PT-01"
+  },
+
   "acceptance_criteria": {
     "cd_min": 0.60,
     "cd_max": 0.70,

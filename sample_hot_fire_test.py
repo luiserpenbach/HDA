@@ -28,15 +28,6 @@ def create_hot_fire_config():
         "created": "2026-01-16",
         "version": "1.0",
 
-        "columns": {
-            "chamber_pressure": "HF-PT-01",
-            "thrust": "HF-LC-01",
-            "mass_flow_ox": "HF-FM-01",
-            "mass_flow_fuel": "HF-FM-02",
-            "temperature_ox": "HF-TC-01",
-            "temperature_fuel": "HF-TC-02",
-        },
-
         "uncertainties": {
             "HF-PT-01": {
                 "type": "relative",
@@ -124,6 +115,16 @@ def create_hot_fire_metadata():
             'molecular_weight': 22.0,  # Approximate
             'density_kg_m3': 1.0,  # Placeholder - not used for Isp/C* calculations
             'density_uncertainty_kg_m3': 0.1,
+        },
+
+        # Sensor roles - ALL sensor assignments belong in metadata, not config
+        'sensor_roles': {
+            'chamber_pressure': 'HF-PT-01',
+            'thrust': 'HF-LC-01',
+            'mass_flow_ox': 'HF-FM-01',
+            'mass_flow_fuel': 'HF-FM-02',
+            'temperature_ox': 'HF-TC-01',
+            'temperature_fuel': 'HF-TC-02',
         }
     }
     return metadata

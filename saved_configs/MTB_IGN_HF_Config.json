@@ -10,14 +10,8 @@
     "10004": "OX-FM-01",
     "10009": "LC-01"
   },
-  "columns": {
-    "chamber_pressure": "IG-PT-01",
-    "thrust": "LC-01",
-    "mass_flow_ox": "OX-FM-01",
-    "mass_flow_fuel": "FU-FM-01",
-    "inlet_pressure_fuel": "FU-PT-01"
-  },
-    "uncertainties": {
+
+  "uncertainties": {
         "IG-PT-01": { "type": "rel", "value": 0.005 },
         "LC-01":    { "type": "abs", "value": 5.0 },
         "OX-FM-01": { "type": "rel", "value": 0.01 },
