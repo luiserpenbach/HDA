@@ -164,7 +164,7 @@ class TestConfigDC:
     config_name: str
     fluid: FluidConfigDC
     geometry: GeometryConfigDC
-    columns: ColumnsConfigDC
+    columns: Optional[ColumnsConfigDC] = None  # Optional as of v2.4.0 - sensor roles moved to metadata
     description: Optional[str] = None
     channel_config: Optional[Dict[str, str]] = None
     uncertainties: Optional[Dict[str, Any]] = None
@@ -178,7 +178,7 @@ class TestConfigDC:
             'description': self.description,
             'fluid': asdict(self.fluid),
             'geometry': asdict(self.geometry),
-            'columns': asdict(self.columns),
+            'columns': asdict(self.columns) if self.columns else None,  # Optional as of v2.4.0
             'channel_config': self.channel_config,
             'uncertainties': self.uncertainties,
             'sensor_limits': self.sensor_limits,
@@ -192,9 +192,10 @@ class TestConfigDC:
     def from_dict(cls, data: Dict) -> 'TestConfigDC':
         fluid = FluidConfigDC.from_dict(data.get('fluid', {}))
         geometry = GeometryConfigDC.from_dict(data.get('geometry', {}))
-        columns = ColumnsConfigDC.from_dict(data.get('columns', {}))
+        # Columns are optional as of v2.4.0 - sensor assignments moved to metadata
+        columns = ColumnsConfigDC.from_dict(data.get('columns', {})) if 'columns' in data else None
         settings = SettingsConfigDC.from_dict(data.get('settings', {})) if data.get('settings') else None
-        
+
         return cls(
             config_name=data.get('config_name', 'unnamed'),
             description=data.get('description'),
@@ -312,14 +313,12 @@ def validate_config_simple(config: Dict[str, Any], config_type: str = 'auto') ->
     # Check geometry based on type
     geometry = config.get('geometry', {})
     columns = config.get('columns', {})
-    
+
     # Auto-detect type
     if config_type == 'auto':
-        if 'chamber_pressure' in columns:
-            config_type = 'hot_fire'
-        else:
-            config_type = 'cold_flow'
-    
+        # Can't auto-detect without columns, default to cold_flow
+        config_type = 'cold_flow'
+
     if config_type == 'cold_flow':
         # NOTE: geometry comes from metadata, not config (as of v2.4.0)
         # Validate geometry only if present (indicates merged config+metadata)
@@ -327,13 +326,9 @@ def validate_config_simple(config: Dict[str, Any], config_type: str = 'auto') ->
         if 'geometry' in config and not geometry.get('orifice_area_mm2'):
             errors.append("orifice_area_mm2 is required in geometry for cold flow (provide in metadata)")
 
-        has_pressure = columns.get('upstream_pressure') or columns.get('inlet_pressure')
-        has_flow = columns.get('mass_flow') or columns.get('mf')
-
-        if not has_pressure:
-            errors.append("upstream_pressure or inlet_pressure required in columns")
-        if not has_flow:
-            errors.append("mass_flow or mf required in columns")
+        # NOTE: Sensor assignments (columns) removed in v2.4.0 - now in metadata sensor_roles
+        # Plugin will validate sensor_roles from merged config+metadata
+        # Don't validate here since config doesn't have sensor assignments anymore
 
     elif config_type == 'hot_fire':
         # NOTE: geometry comes from metadata, not config (as of v2.4.0)
@@ -342,12 +337,13 @@ def validate_config_simple(config: Dict[str, Any], config_type: str = 'auto') ->
         if 'geometry' in config and not geometry.get('throat_area_mm2'):
             errors.append("throat_area_mm2 is required in geometry for hot fire (provide in metadata)")
 
-        if not columns.get('chamber_pressure'):
-            errors.append("chamber_pressure required in columns for hot fire")
-    
+        # NOTE: Sensor assignments (columns) removed in v2.4.0 - now in metadata sensor_roles
+        # Plugin will validate sensor_roles from merged config+metadata
+        # Don't validate here since config doesn't have sensor assignments anymore
+
     if errors:
         raise ValueError("Configuration validation failed:\n  - " + "\n  - ".join(errors))
-    
+
     return TestConfigDC.from_dict(config)
 
 
