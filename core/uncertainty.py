@@ -440,14 +440,14 @@ def calculate_cold_flow_uncertainties(
 
     geom_uncertainties = parse_geometry_uncertainties(config)
 
-    # Get column mappings
-    cols = config.get('columns', {})
+    # Get sensor role mappings (v2.4.0+ - sensor assignments moved to metadata)
+    sensor_roles = config.get('sensor_roles', {})
     geom = config.get('geometry', {})
 
-    # Extract values and uncertainties
-    p_up_col = cols.get('upstream_pressure') or cols.get('inlet_pressure')
-    p_down_col = cols.get('downstream_pressure')
-    mf_col = cols.get('mass_flow') or cols.get('mf')
+    # Extract values and uncertainties (using sensor_roles, not columns)
+    p_up_col = sensor_roles.get('upstream_pressure') or sensor_roles.get('inlet_pressure')
+    p_down_col = sensor_roles.get('downstream_pressure')
+    mf_col = sensor_roles.get('mass_flow') or sensor_roles.get('mf')
 
     p_up = avg_values.get(p_up_col, 0)
     p_down = avg_values.get(p_down_col, 0) if p_down_col else 0
@@ -660,16 +660,16 @@ def calculate_hot_fire_uncertainties(
         sensor_uncertainties = parse_uncertainty_config(config)
     
     geom_uncertainties = parse_geometry_uncertainties(config)
-    
-    # Get column mappings
-    cols = config.get('columns', {})
+
+    # Get sensor role mappings (v2.4.0+ - sensor assignments moved to metadata)
+    sensor_roles = config.get('sensor_roles', {})
     geom = config.get('geometry', {})
-    
-    # Extract values
-    pc_col = cols.get('chamber_pressure')
-    thrust_col = cols.get('thrust')
-    mf_ox_col = cols.get('mass_flow_ox')
-    mf_fuel_col = cols.get('mass_flow_fuel')
+
+    # Extract values (using sensor_roles, not columns)
+    pc_col = sensor_roles.get('chamber_pressure')
+    thrust_col = sensor_roles.get('thrust')
+    mf_ox_col = sensor_roles.get('mass_flow_ox')
+    mf_fuel_col = sensor_roles.get('mass_flow_fuel')
     
     pc = avg_values.get(pc_col, 0) if pc_col else 0
     thrust = avg_values.get(thrust_col, 0) if thrust_col else 0
