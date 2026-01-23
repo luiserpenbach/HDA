@@ -5,13 +5,6 @@
   "created": "2026-01-16",
   "version": "1.0",
 
-  "columns": {
-    "upstream_pressure": "IG-PT-01",
-    "downstream_pressure": "IG-PT-02",
-    "mass_flow": "FM-01",
-    "temperature": "TC-01"
-  },
-
   "uncertainties": {
     "IG-PT-01": {
       "type": "relative",

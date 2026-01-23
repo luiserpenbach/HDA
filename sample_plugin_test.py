@@ -30,7 +30,7 @@ def load_sample_metadata():
     with open('sample_test_metadata.json', 'r') as f:
         metadata_file = json.load(f)
 
-    # Flatten for analysis - include geometry and fluid (test-article specific)
+    # Flatten for analysis - include geometry, fluid, and sensor_roles (test-specific)
     flattened = {
         'part': metadata_file['test_article']['part_number'],
         'serial_num': metadata_file['test_article']['serial_number'],
@@ -42,6 +42,9 @@ def load_sample_metadata():
 
         # Fluid properties (test-specific - NOT in config)
         'fluid': metadata_file['fluid_properties']['oxidizer'],
+
+        # Sensor roles (ALL sensor assignments - NOT in config)
+        'sensor_roles': metadata_file['sensor_roles'],
     }
     return flattened
 

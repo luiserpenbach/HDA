@@ -1537,21 +1537,13 @@ if df_raw is not None:
         Returns:
             (is_available: bool, source_value: str, status_icon: str)
         """
-        if source_type == 'sensor':
-            # Check if sensor is in columns config and available in data
-            # Support both 'columns' (semantic) and 'channel_config' (DAQ mapping)
-            if config is None:
-                return False, "(no config loaded)", "✗"
-
-            cols = config.get('columns', {})
-            if not cols:
-                # Fallback to channel_config
-                cols = config.get('channel_config', {})
-
-            sensor_name = cols.get(source_key)
+        if source_type == 'sensor' or source_type == 'sensor_role':
+            # Check if sensor is in metadata sensor_roles and available in data
+            # ALL sensor assignments are in metadata, not config
+            sensor_name = sensor_roles.get(source_key)
 
             if not sensor_name:
-                return False, "(not configured)", "✗"
+                return False, "(not in metadata)", "✗"
 
             # Check if sensor name is in dataframe columns
             if sensor_name in df_columns:
@@ -1559,23 +1551,14 @@ if df_raw is not None:
 
             # If not found, check if the raw channel ID is in the dataframe
             # (user might not have applied channel mapping yet)
-            channel_config = config.get('channel_config', {})
-            for raw_id, mapped_name in channel_config.items():
-                if mapped_name == sensor_name and (raw_id in df_columns or str(raw_id) in df_columns):
-                    return True, f"{sensor_name} (via {raw_id})", "✓"
+            if config:
+                channel_config = config.get('channel_config', {})
+                for raw_id, mapped_name in channel_config.items():
+                    if mapped_name == sensor_name and (raw_id in df_columns or str(raw_id) in df_columns):
+                        return True, f"{sensor_name} (via {raw_id})", "✓"
 
             # Sensor is configured but not in data
             return False, f"{sensor_name} (not in data)", "✗"
-
-        elif source_type == 'sensor_role':
-            # Check sensor_roles from metadata
-            sensor_name = sensor_roles.get(source_key)
-            if sensor_name and sensor_name in df_columns:
-                return True, sensor_name, "✓"
-            elif sensor_name:
-                return False, f"{sensor_name} (not in data)", "⚠"
-            else:
-                return False, "(not assigned in metadata)", "⚠"
 
         elif source_type == 'geometry':
             # Check geometry from metadata
