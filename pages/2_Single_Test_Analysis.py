@@ -2132,11 +2132,44 @@ if df_raw is not None:
         with col1:
             st.subheader("Save to Campaign")
 
+            # Suggest campaign name based on test_id
+            from core.campaign_manager_v2 import suggest_campaign_name, check_campaign_exists
+
+            suggested_name = suggest_campaign_name(test_id, test_type)
+
+            # Show suggestion if we have one
+            if suggested_name:
+                exists = check_campaign_exists(suggested_name)
+
+                if exists:
+                    st.info(f"💡 Detected campaign: **{suggested_name}** (matches your test folder structure)")
+                else:
+                    st.info(f"💡 Suggested campaign: **{suggested_name}** (based on test ID pattern)")
+                    if st.button(f"Create Campaign '{suggested_name}'", key="create_suggested_campaign"):
+                        try:
+                            from core.campaign_manager_v2 import create_campaign
+                            create_campaign(suggested_name, test_type, "Auto-created from test folder structure")
+                            st.success(f"Created campaign '{suggested_name}'")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to create campaign: {e}")
+
+            # Get available campaigns
             campaigns = get_available_campaigns()
             campaign_options = [c['name'] for c in campaigns if c.get('type') == test_type]
 
             if campaign_options:
-                selected_campaign = st.selectbox("Select Campaign", campaign_options)
+                # Pre-select suggested campaign if it exists
+                default_index = 0
+                if suggested_name and suggested_name in campaign_options:
+                    default_index = campaign_options.index(suggested_name)
+
+                selected_campaign = st.selectbox(
+                    "Select Campaign",
+                    campaign_options,
+                    index=default_index,
+                    help="Database campaign for time-series analysis and SPC"
+                )
 
                 if st.button("Save to Campaign"):
                     try:
@@ -2151,7 +2184,7 @@ if df_raw is not None:
                     except Exception as e:
                         st.error(f"Save error: {e}")
             else:
-                st.info(f"No {test_type} campaigns found. Create one in Campaign Management.")
+                st.info(f"No {test_type} campaigns found. Create one using the button above or in Campaign Management.")
 
         with col2:
             st.subheader("Generate Report")

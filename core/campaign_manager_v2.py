@@ -403,13 +403,68 @@ def get_campaign_names() -> List[str]:
     return [os.path.splitext(f)[0] for f in dbs]
 
 
-def create_campaign(campaign_name: str, campaign_type: str = 'cold_flow') -> str:
+def check_campaign_exists(campaign_name: str) -> bool:
+    """
+    Check if campaign database file exists.
+
+    Args:
+        campaign_name: Campaign name (without .db extension)
+
+    Returns:
+        True if campaign database exists, False otherwise
+    """
+    if not os.path.exists(CAMPAIGN_DIR):
+        return False
+
+    campaign_file = os.path.join(CAMPAIGN_DIR, f"{campaign_name}.db")
+    return os.path.exists(campaign_file)
+
+
+def suggest_campaign_name(test_id: str, test_type: str) -> Optional[str]:
+    """
+    Suggest database campaign name based on test_id and test_type.
+
+    This creates a suggested campaign name that links the folder-based campaign
+    (from test_id) to a database campaign name for time-series analysis.
+
+    Format: SYSTEM-TYPE-CAMPAIGN
+    Example: test_id="RCS-C01-CF-001", test_type="cold_flow" → "RCS-CF-C01"
+
+    Args:
+        test_id: Test identifier following SYSTEM-CAMPAIGN-TYPE-RUN format
+        test_type: Test type ('cold_flow' or 'hot_fire')
+
+    Returns:
+        Suggested campaign name or None if cannot parse test_id
+
+    Note:
+        This bridges the gap between folder-based campaigns (organizational)
+        and database campaigns (analytical). See CLAUDE.md for more details.
+    """
+    from .test_metadata import parse_campaign_from_test_id
+
+    parsed = parse_campaign_from_test_id(test_id)
+    if not parsed:
+        return None
+
+    # Map test_type to short code
+    type_map = {
+        'cold_flow': 'CF',
+        'hot_fire': 'HF',
+    }
+    type_code = type_map.get(test_type, parsed.get('type', 'TEST'))
+
+    return f"{parsed['system']}-{type_code}-{parsed['campaign']}"
+
+
+def create_campaign(campaign_name: str, campaign_type: str = 'cold_flow', description: str = '') -> str:
     """
     Create a new campaign database with v2 schema.
 
     Args:
         campaign_name: Name of campaign (e.g., "INJ_C1_Acceptance")
         campaign_type: 'cold_flow' or 'hot_fire'
+        description: Optional description of the campaign
 
     Returns:
         Path to created database
@@ -440,7 +495,7 @@ def create_campaign(campaign_name: str, campaign_type: str = 'cold_flow') -> str
 
     c.execute("""
         INSERT INTO campaign_info VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (campaign_name, campaign_type, datetime.now().isoformat(), "", "", "", SCHEMA_VERSION))
+    """, (campaign_name, campaign_type, datetime.now().isoformat(), description, "", "", SCHEMA_VERSION))
 
     # Create test results table with new schema
     if campaign_type == 'cold_flow':
@@ -557,8 +612,30 @@ def save_to_campaign(
     c.execute("PRAGMA table_info(test_results)")
     db_columns = [row[1] for row in c.fetchall()]
 
+    # Populate test_path if not already present (for traceability)
+    if 'test_path' not in data or data['test_path'] is None:
+        # Try to extract from test_folder in metadata
+        if 'test_folder' in data:
+            data['test_path'] = str(data['test_folder'])
+
     # Filter data to only include existing columns
     filtered_data = {k: v for k, v in data.items() if k in db_columns}
+
+    # Helper function to sanitize values for SQLite compatibility
+    def sanitize_for_sqlite(value):
+        """Convert value to SQLite-compatible type (handles NumPy types)."""
+        import numpy as np
+        if isinstance(value, (np.integer, np.floating)):
+            return float(value)
+        elif isinstance(value, np.ndarray):
+            return value.tolist()
+        elif isinstance(value, (list, tuple)):
+            return [sanitize_for_sqlite(v) for v in value]
+        else:
+            return value
+
+    # Sanitize all values to prevent NumPy type binding errors
+    filtered_data = {k: sanitize_for_sqlite(v) for k, v in filtered_data.items()}
 
     # Check if exists
     c.execute("SELECT 1 FROM test_results WHERE test_id = ?", (data.get('test_id'),))
