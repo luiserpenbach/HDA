@@ -559,6 +559,99 @@ class TestCampaignManager:
 
         print("[PASS] Null values saved correctly")
 
+    def test_save_with_numpy_bool(self):
+        """Test saving np.bool_ values (regression: unsupported type)."""
+        create_campaign('npbool_test', 'cold_flow')
+
+        data = {
+            'test_id': 'TEST-BOOL',
+            'avg_cd_CALC': np.float64(0.654),
+            'qc_passed': np.bool_(True),
+        }
+
+        result = save_to_campaign('npbool_test', data)
+        assert result == True
+
+        df = get_campaign_data('npbool_test')
+        assert df.iloc[0]['qc_passed'] == 1
+
+        print("[PASS] np.bool_ type saved correctly")
+
+    def test_save_with_dict_and_list_values(self):
+        """Test saving dict/list values (should be JSON-serialized)."""
+        create_campaign('dictlist_test', 'cold_flow')
+
+        data = {
+            'test_id': 'TEST-DICT',
+            'avg_cd_CALC': 0.654,
+            'qc_summary': {'total': 5, 'passed': 5, 'failed': 0},
+            'detection_parameters': {'threshold': 0.02, 'method': 'cv'},
+            'stability_channels': ['PT-01', 'FM-01'],
+        }
+
+        result = save_to_campaign('dictlist_test', data)
+        assert result == True
+
+        df = get_campaign_data('dictlist_test')
+        assert len(df) == 1
+
+        # Dict/list values should have been JSON-serialized
+        qc_raw = df.iloc[0]['qc_summary']
+        if isinstance(qc_raw, str):
+            parsed = json.loads(qc_raw)
+            assert parsed['total'] == 5
+
+        print("[PASS] Dict/list values saved correctly as JSON")
+
+    def test_save_full_analysis_result_types(self):
+        """Test saving a record with all types from a real analysis result."""
+        create_campaign('fulltype_test', 'cold_flow')
+
+        # Simulate what to_database_record + traceability produces
+        data = {
+            'test_id': 'CF-FULL-001',
+            'test_timestamp': datetime.now().isoformat(),
+            'qc_passed': np.bool_(True),
+            'qc_summary': json.dumps({'total': 5, 'passed': 5}),
+            # Metadata
+            'part': 'INJ-01',
+            'serial_num': 'SN-001',
+            'fluid': 'water',
+            'operator': 'test_user',
+            # Traceability
+            'raw_data_hash': 'sha256:abc123',
+            'config_hash': 'sha256:config456',
+            'config_snapshot': json.dumps({'name': 'test'}),
+            'analyst_username': 'tester',
+            'processing_version': '2.0.0',
+            # Processing record with numpy floats
+            'steady_window_start_ms': np.float64(1500.0),
+            'steady_window_end_ms': np.float64(5000.0),
+            'steady_window_duration_ms': np.float64(3500.0),
+            'resample_freq_ms': np.float64(10.0),
+            'detection_method': 'CV-based',
+            # Measurements with numpy floats
+            'avg_p_up_bar': np.float64(25.0),
+            'u_p_up_bar': np.float64(0.125),
+            'avg_mf_g_s': np.float64(12.5),
+            'u_mf_g_s': np.float64(0.125),
+            'avg_cd_CALC': np.float64(0.654),
+            'u_cd_CALC': np.float64(0.018),
+            'cd_rel_uncertainty_pct': np.float64(2.75),
+        }
+
+        # This should NOT raise "Error binding parameter" error
+        result = save_to_campaign('fulltype_test', data)
+        assert result == True
+
+        df = get_campaign_data('fulltype_test')
+        assert len(df) == 1
+        assert abs(df.iloc[0]['avg_cd_CALC'] - 0.654) < 0.001
+        assert df.iloc[0]['qc_passed'] == 1
+        assert df.iloc[0]['steady_window_start_ms'] == 1500.0
+
+        print("[PASS] Full analysis result with mixed types saved correctly")
+
     def test_concurrent_campaign_directory_creation(self):
         """Test that campaign directory is created if missing."""
         import core.campaign_manager_v2 as cm

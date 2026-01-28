@@ -625,14 +625,26 @@ def save_to_campaign(
     def sanitize_for_sqlite(value):
         """Convert value to SQLite-compatible type (handles NumPy types)."""
         import numpy as np
-        if isinstance(value, (np.integer, np.floating)):
+        if value is None:
+            return None
+        elif isinstance(value, (int, float, str)):
+            return value
+        elif isinstance(value, bool):
+            return int(value)
+        elif isinstance(value, np.bool_):
+            return int(value)
+        elif isinstance(value, (np.integer,)):
+            return int(value)
+        elif isinstance(value, (np.floating,)):
             return float(value)
         elif isinstance(value, np.ndarray):
-            return value.tolist()
+            return json.dumps(value.tolist())
+        elif isinstance(value, dict):
+            return json.dumps(value, default=str)
         elif isinstance(value, (list, tuple)):
-            return [sanitize_for_sqlite(v) for v in value]
+            return json.dumps(value, default=str)
         else:
-            return value
+            return str(value)
 
     # Sanitize all values to prevent NumPy type binding errors
     filtered_data = {k: sanitize_for_sqlite(v) for k, v in filtered_data.items()}
