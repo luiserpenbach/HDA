@@ -106,6 +106,43 @@ if selected_campaign:
         st.error(f"Error loading campaign: {e}")
         st.stop()
 
+    # Part/Serial filters (in sidebar, populated after data load)
+    part_filter = []
+    serial_filter = []
+
+    if df is not None and len(df) > 0:
+        with st.sidebar:
+            st.divider()
+            st.subheader("Filters")
+
+            # Part filter
+            if 'part' in df.columns:
+                available_parts = sorted([p for p in df['part'].dropna().unique().tolist() if p])
+                if available_parts:
+                    part_filter = st.multiselect(
+                        "Part",
+                        available_parts,
+                        default=[],
+                        key="camp_part_filter"
+                    )
+
+            # Serial number filter
+            if 'serial_num' in df.columns:
+                available_serials = sorted([s for s in df['serial_num'].dropna().unique().tolist() if s])
+                if available_serials:
+                    serial_filter = st.multiselect(
+                        "Serial Number",
+                        available_serials,
+                        default=[],
+                        key="camp_serial_filter"
+                    )
+
+        # Apply part/serial filters
+        if part_filter:
+            df = df[df['part'].isin(part_filter)].reset_index(drop=True)
+        if serial_filter:
+            df = df[df['serial_num'].isin(serial_filter)].reset_index(drop=True)
+
     # Header metrics
     col1, col2, col3, col4 = st.columns(4)
 
