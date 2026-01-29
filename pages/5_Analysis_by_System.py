@@ -169,6 +169,8 @@ def get_available_systems_from_db() -> List[str]:
 selected_system = None
 type_filter = "All"
 qc_filter = False
+part_filter = []
+serial_filter = []
 
 with st.sidebar:
     context = render_global_context()
@@ -263,6 +265,44 @@ if system_df.empty or len(loaded_campaigns) == 0:
         "Campaign database names must start with the system prefix "
         f"(e.g., `{selected_system}-CF-C1`)."
     )
+    st.stop()
+
+# Part/Serial filters (in sidebar, populated after data load)
+with st.sidebar:
+    st.divider()
+    st.subheader("Part/Serial Filter")
+
+    # Part filter
+    if 'part' in system_df.columns:
+        available_parts = sorted([p for p in system_df['part'].dropna().unique().tolist() if p])
+        if available_parts:
+            part_filter = st.multiselect(
+                "Part",
+                available_parts,
+                default=[],
+                key="sys_part_filter"
+            )
+
+    # Serial number filter
+    if 'serial_num' in system_df.columns:
+        available_serials = sorted([s for s in system_df['serial_num'].dropna().unique().tolist() if s])
+        if available_serials:
+            serial_filter = st.multiselect(
+                "Serial Number",
+                available_serials,
+                default=[],
+                key="sys_serial_filter"
+            )
+
+# Apply part/serial filters
+if part_filter:
+    system_df = system_df[system_df['part'].isin(part_filter)].reset_index(drop=True)
+if serial_filter:
+    system_df = system_df[system_df['serial_num'].isin(serial_filter)].reset_index(drop=True)
+
+# Check if filters resulted in empty data
+if system_df.empty:
+    st.warning("No tests match the selected filters. Adjust Part/Serial filters in the sidebar.")
     st.stop()
 
 # Gather campaign info
