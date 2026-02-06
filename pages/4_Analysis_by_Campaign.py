@@ -2,6 +2,7 @@
 Analysis by Campaign Page
 =========================
 Comprehensive campaign analysis with summary, plots, SPC, and reports.
+Includes I-MR, CUSUM, and EWMA control chart types.
 """
 
 import streamlit as st
@@ -26,24 +27,29 @@ from core.campaign_manager_v2 import (
 )
 from core.spc import (
     create_imr_chart,
+    create_cusum_chart,
+    create_ewma_chart,
     analyze_campaign_spc,
     format_spc_summary,
     calculate_capability,
     ViolationType,
+    ControlChartType,
 )
 from core.reporting import generate_campaign_report, generate_test_report
 from core.uncertainty import MeasurementWithUncertainty
+from pages._shared_styles import apply_custom_styles, render_page_header
+from pages._shared_sidebar import render_global_context
 
 st.set_page_config(page_title="Analysis by Campaign", page_icon="AC", layout="wide")
 
-st.title("Analysis by Campaign")
-st.markdown("Comprehensive campaign analysis with summary, plots, SPC analysis, and reports.")
+apply_custom_styles()
 
-# =============================================================================
-# SIDEBAR - Global Context & Campaign Selection
-# =============================================================================
-
-from pages._shared_sidebar import render_global_context
+render_page_header(
+    title="Analysis by Campaign",
+    description="Campaign analysis with SPC control charts, reports, and qualification export",
+    badge_text="P1",
+    badge_type="info"
+)
 
 with st.sidebar:
     # Global context at top
@@ -440,188 +446,513 @@ if selected_campaign:
             st.info("No test data in this campaign yet.")
 
     # =============================================================================
-    # TAB 2: Campaign Plots (New - placeholder for now)
+    # TAB 2: Campaign Plots
     # =============================================================================
 
     with tab2:
-        st.subheader("Campaign Plots")
-        st.info("Campaign plots coming soon. This section will include customizable visualizations for campaign data.")
-
         if df is not None and len(df) > 0:
-            # Simple placeholder plots
             numeric_cols = [c for c in df.columns if df[c].dtype in ['float64', 'int64']]
             metric_cols = [c for c in numeric_cols if c.startswith('avg_')]
+            plot_cols = metric_cols if metric_cols else numeric_cols
 
-            if metric_cols:
-                col1, col2 = st.columns(2)
+            plot_subtab1, plot_subtab2, plot_subtab3 = st.tabs([
+                "Trend Analysis", "Correlation Matrix", "Multi-Parameter"
+            ])
 
+            with plot_subtab1:
+                col1, col2, col3 = st.columns([1, 1, 1])
                 with col1:
-                    plot_param = st.selectbox("Select parameter to plot", metric_cols, key="plot_param")
-
+                    trend_param = st.selectbox("Parameter", plot_cols, key="trend_param")
                 with col2:
-                    plot_type = st.selectbox("Plot type", ["Line", "Bar", "Scatter"], key="plot_type")
+                    trend_type = st.selectbox("Chart Type", [
+                        "Trend Line", "Box Plot", "Violin", "Histogram"
+                    ], key="trend_type")
+                with col3:
+                    group_by = st.selectbox("Group By", ["None"] + [
+                        c for c in ['part', 'serial_num', 'operator'] if c in df.columns
+                    ], key="trend_group")
 
-                if plot_param:
-                    if plot_type == "Line":
-                        fig = px.line(df, y=plot_param, title=f"{plot_param} - Line Plot")
-                    elif plot_type == "Bar":
-                        fig = px.bar(df, y=plot_param, title=f"{plot_param} - Bar Plot")
-                    else:
-                        fig = px.scatter(df, y=plot_param, title=f"{plot_param} - Scatter Plot")
+                if trend_param:
+                    group_col = None if group_by == "None" else group_by
 
-                    st.plotly_chart(fig, use_container_width=True)
+                    if trend_type == "Trend Line":
+                        fig = go.Figure()
+                        x_vals = df['test_id'] if 'test_id' in df.columns else list(range(len(df)))
+                        y_vals = df[trend_param]
+
+                        fig.add_trace(go.Scatter(
+                            x=list(range(len(x_vals))), y=y_vals,
+                            mode='markers+lines',
+                            marker=dict(size=10, color='#3b82f6'),
+                            line=dict(color='#93c5fd', width=1),
+                            text=x_vals,
+                            hovertemplate='%{text}<br>Value: %{y:.4f}<extra></extra>',
+                            name=trend_param
+                        ))
+
+                        mean_val = y_vals.mean()
+                        std_val = y_vals.std()
+                        fig.add_hline(y=mean_val, line_dash="dash", line_color="#22c55e",
+                                      annotation_text=f"Mean: {mean_val:.4f}")
+                        fig.add_hrect(y0=mean_val - 2*std_val, y1=mean_val + 2*std_val,
+                                      fillcolor="rgba(59, 130, 246, 0.08)", line_width=0)
+
+                        # Add uncertainty bands if available
+                        u_col = trend_param.replace('avg_', 'u_')
+                        if u_col in df.columns:
+                            fig.add_trace(go.Scatter(
+                                x=list(range(len(x_vals))),
+                                y=y_vals + df[u_col],
+                                mode='lines', line=dict(width=0),
+                                showlegend=False, hoverinfo='skip'
+                            ))
+                            fig.add_trace(go.Scatter(
+                                x=list(range(len(x_vals))),
+                                y=y_vals - df[u_col],
+                                mode='lines', line=dict(width=0),
+                                fill='tonexty', fillcolor='rgba(59,130,246,0.15)',
+                                name='Uncertainty Band', hoverinfo='skip'
+                            ))
+
+                        fig.update_layout(
+                            title=f"{trend_param} Trend",
+                            xaxis_title="Test Number", yaxis_title=trend_param,
+                            height=450, plot_bgcolor='white',
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    elif trend_type == "Box Plot":
+                        if group_col:
+                            fig = px.box(df, x=group_col, y=trend_param,
+                                         title=f"{trend_param} by {group_col}",
+                                         color=group_col, points="all")
+                        else:
+                            fig = px.box(df, y=trend_param,
+                                         title=f"{trend_param} Distribution", points="all")
+                        fig.update_layout(height=450)
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    elif trend_type == "Violin":
+                        if group_col:
+                            fig = px.violin(df, x=group_col, y=trend_param,
+                                            title=f"{trend_param} by {group_col}",
+                                            color=group_col, box=True, points="all")
+                        else:
+                            fig = px.violin(df, y=trend_param,
+                                            title=f"{trend_param} Distribution",
+                                            box=True, points="all")
+                        fig.update_layout(height=450)
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    elif trend_type == "Histogram":
+                        fig = px.histogram(df, x=trend_param, nbins=20,
+                                           title=f"{trend_param} Distribution",
+                                           color=group_col if group_col else None,
+                                           marginal="rug")
+                        fig.add_vline(x=df[trend_param].mean(), line_dash="dash",
+                                      annotation_text=f"Mean: {df[trend_param].mean():.4f}")
+                        fig.update_layout(height=450)
+                        st.plotly_chart(fig, use_container_width=True)
+
+            with plot_subtab2:
+                if len(plot_cols) >= 2:
+                    corr_params = st.multiselect(
+                        "Parameters for correlation", plot_cols,
+                        default=plot_cols[:min(6, len(plot_cols))],
+                        key="corr_params"
+                    )
+
+                    if len(corr_params) >= 2:
+                        corr_df = df[corr_params].dropna()
+                        corr_matrix = corr_df.corr()
+
+                        fig = go.Figure(data=go.Heatmap(
+                            z=corr_matrix.values,
+                            x=corr_matrix.columns,
+                            y=corr_matrix.index,
+                            colorscale='RdBu_r', zmin=-1, zmax=1,
+                            text=np.round(corr_matrix.values, 3),
+                            texttemplate='%{text}', textfont=dict(size=11),
+                            hovertemplate='%{x} vs %{y}<br>r = %{z:.3f}<extra></extra>'
+                        ))
+                        fig.update_layout(
+                            title="Parameter Correlation Matrix",
+                            height=500, plot_bgcolor='white',
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+
+                        # Scatter plot for selected pair
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            scatter_x = st.selectbox("X axis", corr_params, key="scatter_x")
+                        with col2:
+                            scatter_y = st.selectbox("Y axis", corr_params,
+                                                     index=min(1, len(corr_params)-1), key="scatter_y")
+
+                        if scatter_x != scatter_y:
+                            fig = px.scatter(df, x=scatter_x, y=scatter_y,
+                                             title=f"{scatter_x} vs {scatter_y}",
+                                             trendline="ols",
+                                             hover_data=['test_id'] if 'test_id' in df.columns else None)
+                            fig.update_layout(height=400)
+                            st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Need at least 2 numeric columns for correlation analysis.")
+
+            with plot_subtab3:
+                if len(plot_cols) >= 2:
+                    multi_params = st.multiselect(
+                        "Parameters to overlay", plot_cols,
+                        default=plot_cols[:min(3, len(plot_cols))],
+                        key="multi_params"
+                    )
+
+                    if multi_params:
+                        normalize = st.checkbox("Normalize to z-scores", value=len(multi_params) > 1,
+                                                key="multi_normalize")
+
+                        fig = go.Figure()
+                        for param in multi_params:
+                            y = df[param].values
+                            if normalize and np.std(y) > 0:
+                                y = (y - np.mean(y)) / np.std(y)
+                                ylabel = "Z-Score"
+                            else:
+                                ylabel = "Value"
+
+                            fig.add_trace(go.Scatter(
+                                x=list(range(len(y))), y=y,
+                                mode='markers+lines', name=param,
+                                marker=dict(size=8),
+                                hovertemplate=f'{param}<br>Value: %{{y:.4f}}<extra></extra>'
+                            ))
+
+                        fig.update_layout(
+                            title="Multi-Parameter Overlay",
+                            xaxis_title="Test Number", yaxis_title=ylabel,
+                            height=450, plot_bgcolor='white',
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Need at least 2 numeric columns for multi-parameter plots.")
+        else:
+            st.info("No test data available for plots.")
 
     # =============================================================================
-    # TAB 3: SPC Analysis (from SPC Analysis page)
+    # TAB 3: SPC Analysis (I-MR, CUSUM, EWMA)
     # =============================================================================
 
     with tab3:
-        st.subheader("Statistical Process Control")
-
         if df is not None and len(df) > 0:
             # Get numeric columns
             numeric_cols = [c for c in df.columns if df[c].dtype in ['float64', 'int64']]
-
-            # Filter to likely metric columns
             metric_cols = [c for c in numeric_cols if c.startswith('avg_') or c in ['Cd', 'Isp']]
 
-            col1, col2 = st.columns([1, 2])
+            spc_subtab1, spc_subtab2, spc_subtab3 = st.tabs([
+                "I-MR Chart", "CUSUM Chart", "EWMA Chart"
+            ])
 
-            with col1:
-                if metric_cols:
-                    selected_parameter = st.selectbox("Parameter", metric_cols, key="spc_param")
-                else:
-                    selected_parameter = st.selectbox("Parameter", numeric_cols, key="spc_param")
+            # ---- I-MR Chart ----
+            with spc_subtab1:
+                col1, col2 = st.columns([1, 3])
 
-                st.divider()
+                with col1:
+                    imr_param = st.selectbox("Parameter", metric_cols if metric_cols else numeric_cols,
+                                             key="imr_param")
+                    st.divider()
+                    st.markdown("**Specification Limits**")
+                    imr_use_specs = st.checkbox("Use spec limits", key="imr_use_specs")
+                    imr_lsl, imr_usl, imr_target = None, None, None
+                    if imr_use_specs and imr_param:
+                        col_mean = float(df[imr_param].mean())
+                        col_range = float(df[imr_param].max() - df[imr_param].min())
+                        imr_lsl = st.number_input("LSL", value=col_mean - col_range, key="imr_lsl")
+                        imr_usl = st.number_input("USL", value=col_mean + col_range, key="imr_usl")
+                        imr_target = st.number_input("Target", value=col_mean, key="imr_target")
 
-                # Specification limits
-                st.markdown("**Specification Limits**")
+                with col2:
+                    if imr_param:
+                        try:
+                            analysis = create_imr_chart(
+                                df, parameter=imr_param,
+                                test_id_col='test_id' if 'test_id' in df.columns else df.columns[0],
+                                usl=imr_usl if imr_use_specs else None,
+                                lsl=imr_lsl if imr_use_specs else None,
+                                target=imr_target if imr_use_specs else None,
+                            )
 
-                use_specs = st.checkbox("Use specification limits", key="spc_use_specs")
+                            mcol1, mcol2, mcol3, mcol4 = st.columns(4)
+                            with mcol1:
+                                status = "In Control" if analysis.n_violations == 0 else "Out of Control"
+                                color = "green" if analysis.n_violations == 0 else "red"
+                                st.markdown(f"### :{color}[{status}]")
+                            with mcol2:
+                                st.metric("Points", analysis.n_points)
+                            with mcol3:
+                                st.metric("Violations", analysis.n_violations)
+                            with mcol4:
+                                if analysis.capability and analysis.capability.cpk is not None:
+                                    st.metric("Cpk", f"{analysis.capability.cpk:.2f}")
+                                else:
+                                    st.metric("Cpk", "N/A")
 
-                if use_specs and selected_parameter:
-                    col_min = float(df[selected_parameter].min())
-                    col_max = float(df[selected_parameter].max())
-                    col_mean = float(df[selected_parameter].mean())
-                    col_range = col_max - col_min
+                            fig = make_subplots(rows=2, cols=1, row_heights=[0.7, 0.3],
+                                                shared_xaxes=True, vertical_spacing=0.08,
+                                                subplot_titles=[f"Individual Chart: {imr_param}", "Moving Range"])
 
-                    lsl = st.number_input("LSL", value=col_mean - col_range, key="spc_lsl")
-                    usl = st.number_input("USL", value=col_mean + col_range, key="spc_usl")
-                    target = st.number_input("Target", value=col_mean, key="spc_target")
-                else:
-                    lsl, usl, target = None, None, None
+                            x = list(range(len(analysis.points)))
+                            y = [p.value for p in analysis.points]
+                            test_ids = [p.test_id for p in analysis.points]
+                            colors = ['#ef4444' if not p.in_control else '#3b82f6' for p in analysis.points]
 
-            with col2:
-                if selected_parameter:
-                    # Run SPC analysis
-                    try:
-                        analysis = create_imr_chart(
-                            df,
-                            parameter=selected_parameter,
-                            test_id_col='test_id' if 'test_id' in df.columns else df.columns[0],
-                            usl=usl if use_specs else None,
-                            lsl=lsl if use_specs else None,
-                            target=target if use_specs else None,
-                        )
-
-                        # Header metrics
-                        mcol1, mcol2, mcol3, mcol4 = st.columns(4)
-
-                        with mcol1:
-                            status_color = "green" if analysis.n_violations == 0 else "red"
-                            st.markdown(f"### :{status_color}[{'In Control' if analysis.n_violations == 0 else 'Out of Control'}]")
-
-                        with mcol2:
-                            st.metric("Points", analysis.n_points)
-
-                        with mcol3:
-                            st.metric("Violations", analysis.n_violations)
-
-                        with mcol4:
-                            if analysis.capability and analysis.capability.cpk is not None:
-                                cpk = analysis.capability.cpk
-                                st.metric("Cpk", f"{cpk:.2f}")
-                            else:
-                                st.metric("Cpk", "N/A")
-
-                        # Control chart
-                        fig = make_subplots(
-                            rows=2, cols=1,
-                            row_heights=[0.7, 0.3],
-                            shared_xaxes=True,
-                            vertical_spacing=0.1,
-                            subplot_titles=[f"Individual Chart: {analysis.parameter_name}", "Moving Range"]
-                        )
-
-                        # Extract data
-                        x = list(range(len(analysis.points)))
-                        y = [p.value for p in analysis.points]
-                        test_ids = [p.test_id for p in analysis.points]
-
-                        # Colors based on control status
-                        colors = ['red' if not p.in_control else 'blue' for p in analysis.points]
-
-                        # Individual chart
-                        fig.add_trace(
-                            go.Scatter(
-                                x=x, y=y,
-                                mode='markers+lines',
-                                marker=dict(color=colors, size=10),
-                                line=dict(color='lightblue', width=1),
+                            fig.add_trace(go.Scatter(
+                                x=x, y=y, mode='markers+lines',
+                                marker=dict(color=colors, size=9),
+                                line=dict(color='#93c5fd', width=1),
                                 text=test_ids,
                                 hovertemplate='%{text}<br>Value: %{y:.4f}<extra></extra>',
-                                name='Data'
-                            ),
-                            row=1, col=1
-                        )
+                                name='Data'), row=1, col=1)
 
-                        # Control limits
-                        fig.add_hline(y=analysis.limits.center_line, line_dash="solid",
-                                      line_color="green", row=1, col=1,
-                                      annotation_text=f"CL: {analysis.limits.center_line:.4f}")
-                        fig.add_hline(y=analysis.limits.ucl, line_dash="dash",
-                                      line_color="red", row=1, col=1,
-                                      annotation_text=f"UCL: {analysis.limits.ucl:.4f}")
-                        fig.add_hline(y=analysis.limits.lcl, line_dash="dash",
-                                      line_color="red", row=1, col=1,
-                                      annotation_text=f"LCL: {analysis.limits.lcl:.4f}")
+                            fig.add_hline(y=analysis.limits.center_line, line_dash="solid",
+                                          line_color="#22c55e", row=1, col=1,
+                                          annotation_text=f"CL: {analysis.limits.center_line:.4f}")
+                            fig.add_hline(y=analysis.limits.ucl, line_dash="dash",
+                                          line_color="#ef4444", row=1, col=1,
+                                          annotation_text=f"UCL: {analysis.limits.ucl:.4f}")
+                            fig.add_hline(y=analysis.limits.lcl, line_dash="dash",
+                                          line_color="#ef4444", row=1, col=1,
+                                          annotation_text=f"LCL: {analysis.limits.lcl:.4f}")
 
-                        # Moving range chart
-                        mr = np.abs(np.diff(y))
-                        mr_x = list(range(1, len(y)))
-
-                        fig.add_trace(
-                            go.Scatter(
-                                x=mr_x, y=mr,
+                            mr = np.abs(np.diff(y))
+                            fig.add_trace(go.Scatter(
+                                x=list(range(1, len(y))), y=mr,
                                 mode='markers+lines',
-                                marker=dict(color='blue', size=6),
-                                line=dict(color='lightblue', width=1),
-                                name='MR'
-                            ),
-                            row=2, col=1
-                        )
+                                marker=dict(color='#3b82f6', size=6),
+                                line=dict(color='#93c5fd', width=1),
+                                name='MR'), row=2, col=1)
 
-                        # MR limits
-                        mr_bar = np.mean(mr)
-                        mr_ucl = 3.267 * mr_bar
+                            mr_bar = np.mean(mr)
+                            fig.add_hline(y=mr_bar, line_dash="solid", line_color="#22c55e", row=2, col=1)
+                            fig.add_hline(y=3.267 * mr_bar, line_dash="dash", line_color="#ef4444", row=2, col=1)
 
-                        fig.add_hline(y=mr_bar, line_dash="solid", line_color="green", row=2, col=1)
-                        fig.add_hline(y=mr_ucl, line_dash="dash", line_color="red", row=2, col=1)
+                            fig.update_layout(height=500, showlegend=False, plot_bgcolor='white')
+                            st.plotly_chart(fig, use_container_width=True)
 
-                        fig.update_layout(
-                            height=500,
-                            showlegend=False,
-                        )
+                            with st.expander("SPC Summary"):
+                                st.markdown(format_spc_summary(analysis))
 
-                        st.plotly_chart(fig, use_container_width=True)
+                        except Exception as e:
+                            st.error(f"I-MR Analysis error: {e}")
 
-                        # Summary
-                        with st.expander("SPC Summary"):
-                            st.markdown(format_spc_summary(analysis))
+            # ---- CUSUM Chart ----
+            with spc_subtab2:
+                col1, col2 = st.columns([1, 3])
 
-                    except Exception as e:
-                        st.error(f"SPC Analysis error: {e}")
+                with col1:
+                    cusum_param = st.selectbox("Parameter", metric_cols if metric_cols else numeric_cols,
+                                               key="cusum_param")
+                    st.divider()
+                    st.markdown("**CUSUM Parameters**")
+                    st.caption("Tabular CUSUM (Page's procedure) detects small sustained shifts in the process mean.")
+                    cusum_k = st.number_input(
+                        "k (allowable slack)",
+                        value=0.5, min_value=0.1, max_value=2.0, step=0.1,
+                        help="Allowable slack in sigma units. Smaller k = more sensitive to small shifts.",
+                        key="cusum_k"
+                    )
+                    cusum_h = st.number_input(
+                        "h (decision interval)",
+                        value=5.0, min_value=1.0, max_value=20.0, step=0.5,
+                        help="Decision interval in sigma units. Larger h = fewer false alarms.",
+                        key="cusum_h"
+                    )
+
+                with col2:
+                    if cusum_param:
+                        try:
+                            values = df[cusum_param].dropna().values
+                            cusum_result = create_cusum_chart(
+                                values, k=cusum_k, h=cusum_h,
+                                parameter_name=cusum_param
+                            )
+
+                            mcol1, mcol2, mcol3, mcol4 = st.columns(4)
+                            with mcol1:
+                                status = "In Control" if cusum_result.n_signals == 0 else "Shift Detected"
+                                color = "green" if cusum_result.n_signals == 0 else "red"
+                                st.markdown(f"### :{color}[{status}]")
+                            with mcol2:
+                                st.metric("Points", len(values))
+                            with mcol3:
+                                st.metric("Signals", cusum_result.n_signals)
+                            with mcol4:
+                                st.metric("Target", f"{cusum_result.target:.4f}")
+
+                            fig = make_subplots(rows=2, cols=1, row_heights=[0.5, 0.5],
+                                                shared_xaxes=True, vertical_spacing=0.08,
+                                                subplot_titles=[f"Raw Data: {cusum_param}",
+                                                                "CUSUM Statistics (C+ and C-)"])
+
+                            x = list(range(len(values)))
+                            fig.add_trace(go.Scatter(
+                                x=x, y=values, mode='markers+lines',
+                                marker=dict(size=7, color='#3b82f6'),
+                                line=dict(color='#93c5fd', width=1),
+                                name='Data'), row=1, col=1)
+                            fig.add_hline(y=cusum_result.target, line_dash="dash",
+                                          line_color="#22c55e", row=1, col=1,
+                                          annotation_text=f"Target: {cusum_result.target:.4f}")
+
+                            # CUSUM C+ and C-
+                            x_cusum = list(range(len(cusum_result.c_plus)))
+                            fig.add_trace(go.Scatter(
+                                x=x_cusum, y=cusum_result.c_plus,
+                                mode='lines', name='C+',
+                                line=dict(color='#ef4444', width=2),
+                                hovertemplate='C+: %{y:.3f}<extra></extra>'
+                            ), row=2, col=1)
+                            fig.add_trace(go.Scatter(
+                                x=x_cusum, y=cusum_result.c_minus,
+                                mode='lines', name='C-',
+                                line=dict(color='#f97316', width=2),
+                                hovertemplate='C-: %{y:.3f}<extra></extra>'
+                            ), row=2, col=1)
+
+                            fig.add_hline(y=cusum_result.h, line_dash="dash",
+                                          line_color="#ef4444", row=2, col=1,
+                                          annotation_text=f"H = {cusum_result.h:.1f}")
+
+                            # Mark signal points
+                            for idx in cusum_result.signals_upper:
+                                fig.add_vline(x=idx, line_dash="dot", line_color="rgba(239,68,68,0.4)",
+                                              row=2, col=1)
+                            for idx in cusum_result.signals_lower:
+                                fig.add_vline(x=idx, line_dash="dot", line_color="rgba(249,115,22,0.4)",
+                                              row=2, col=1)
+
+                            fig.update_layout(height=550, plot_bgcolor='white',
+                                              legend=dict(orientation="h", yanchor="bottom", y=1.02))
+                            st.plotly_chart(fig, use_container_width=True)
+
+                            if cusum_result.n_signals > 0:
+                                st.warning(
+                                    f"CUSUM detected {cusum_result.n_signals} signal(s): "
+                                    f"{len(cusum_result.signals_upper)} upward shift(s), "
+                                    f"{len(cusum_result.signals_lower)} downward shift(s). "
+                                    f"First signal at observation {min(cusum_result.signals_upper + cusum_result.signals_lower)}."
+                                )
+                            else:
+                                st.success("No sustained shifts detected. Process appears stable.")
+
+                        except Exception as e:
+                            st.error(f"CUSUM Analysis error: {e}")
+
+            # ---- EWMA Chart ----
+            with spc_subtab3:
+                col1, col2 = st.columns([1, 3])
+
+                with col1:
+                    ewma_param = st.selectbox("Parameter", metric_cols if metric_cols else numeric_cols,
+                                              key="ewma_param")
+                    st.divider()
+                    st.markdown("**EWMA Parameters**")
+                    st.caption("EWMA smooths data to detect gradual drifts with time-varying control limits.")
+                    ewma_lambda = st.slider(
+                        "Lambda (smoothing)",
+                        min_value=0.05, max_value=1.0, value=0.2, step=0.05,
+                        help="Smoothing parameter. Smaller = more weight on history, better for small shifts.",
+                        key="ewma_lambda"
+                    )
+                    ewma_L = st.number_input(
+                        "L (control limit width)",
+                        value=3.0, min_value=1.0, max_value=5.0, step=0.1,
+                        help="Width of control limits in sigma units.",
+                        key="ewma_L"
+                    )
+
+                with col2:
+                    if ewma_param:
+                        try:
+                            values = df[ewma_param].dropna().values
+                            ewma_result = create_ewma_chart(
+                                values, lambda_param=ewma_lambda, L=ewma_L,
+                                parameter_name=ewma_param
+                            )
+
+                            mcol1, mcol2, mcol3, mcol4 = st.columns(4)
+                            with mcol1:
+                                status = "In Control" if ewma_result.n_signals == 0 else "Drift Detected"
+                                color = "green" if ewma_result.n_signals == 0 else "red"
+                                st.markdown(f"### :{color}[{status}]")
+                            with mcol2:
+                                st.metric("Points", len(values))
+                            with mcol3:
+                                st.metric("Signals", ewma_result.n_signals)
+                            with mcol4:
+                                st.metric("Center Line", f"{ewma_result.center_line:.4f}")
+
+                            fig = go.Figure()
+
+                            x = list(range(len(ewma_result.ewma_values)))
+
+                            # Control limit bands
+                            fig.add_trace(go.Scatter(
+                                x=x, y=ewma_result.ucl,
+                                mode='lines', line=dict(color='rgba(239,68,68,0.4)', dash='dash', width=1),
+                                name='UCL', hovertemplate='UCL: %{y:.4f}<extra></extra>'
+                            ))
+                            fig.add_trace(go.Scatter(
+                                x=x, y=ewma_result.lcl,
+                                mode='lines', line=dict(color='rgba(239,68,68,0.4)', dash='dash', width=1),
+                                name='LCL', fill='tonexty',
+                                fillcolor='rgba(239,68,68,0.06)',
+                                hovertemplate='LCL: %{y:.4f}<extra></extra>'
+                            ))
+
+                            # Raw data (faded)
+                            fig.add_trace(go.Scatter(
+                                x=x, y=values[:len(x)],
+                                mode='markers', name='Raw Data',
+                                marker=dict(size=5, color='rgba(156,163,175,0.5)'),
+                                hovertemplate='Raw: %{y:.4f}<extra></extra>'
+                            ))
+
+                            # EWMA line
+                            signal_colors = ['#ef4444' if i in ewma_result.signals else '#3b82f6'
+                                             for i in range(len(ewma_result.ewma_values))]
+                            fig.add_trace(go.Scatter(
+                                x=x, y=ewma_result.ewma_values,
+                                mode='markers+lines', name='EWMA',
+                                marker=dict(size=8, color=signal_colors),
+                                line=dict(color='#3b82f6', width=2),
+                                hovertemplate='EWMA: %{y:.4f}<extra></extra>'
+                            ))
+
+                            fig.add_hline(y=ewma_result.center_line, line_dash="solid",
+                                          line_color="#22c55e",
+                                          annotation_text=f"CL: {ewma_result.center_line:.4f}")
+
+                            fig.update_layout(
+                                title=f"EWMA Chart: {ewma_param} (lambda={ewma_lambda:.2f})",
+                                xaxis_title="Observation", yaxis_title=ewma_param,
+                                height=500, plot_bgcolor='white',
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+
+                            if ewma_result.n_signals > 0:
+                                first_signal = min(ewma_result.signals)
+                                st.warning(
+                                    f"EWMA detected {ewma_result.n_signals} out-of-control point(s). "
+                                    f"First signal at observation {first_signal}. "
+                                    f"This suggests a gradual drift in the process mean."
+                                )
+                            else:
+                                st.success("No drift detected. EWMA values remain within control limits.")
+
+                        except Exception as e:
+                            st.error(f"EWMA Analysis error: {e}")
         else:
             st.info("No test data available for SPC analysis.")
 
@@ -968,32 +1299,33 @@ if selected_campaign:
             st.info("No test data in selected campaign.")
 
 else:
-    st.info("Select or create a campaign in the sidebar")
+    st.info("Select or create a campaign in the sidebar to begin analysis.")
 
-    # Show SPC overview
     st.divider()
-    st.header("About Campaign Analysis")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         st.markdown("""
-        ### Campaign Summary
-
-        View test data organized by campaign with:
+        #### Campaign Summary
         - Overview metrics and statistics
         - Data tables with column filtering
         - Traceability information
-        - Export capabilities
+        - Export and qualification packages
         """)
 
     with col2:
         st.markdown("""
-        ### SPC Analysis
+        #### SPC Control Charts
+        - **I-MR**: Individual-Moving Range with Western Electric rules
+        - **CUSUM**: Tabular CUSUM for detecting small sustained shifts
+        - **EWMA**: Exponentially weighted moving average for gradual drifts
+        """)
 
-        Statistical Process Control features:
-        - I-MR Control Charts
-        - Western Electric Rules
-        - Process Capability (Cpk)
-        - Trend Detection
+    with col3:
+        st.markdown("""
+        #### Campaign Plots
+        - Trend analysis with uncertainty bands
+        - Correlation matrices and scatter plots
+        - Multi-parameter overlay with z-score normalization
         """)

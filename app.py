@@ -1,5 +1,5 @@
 """
-Hopper Data Studio v2.3
+Hopper Data Studio v2.5
 =======================
 Propulsion Test Data Analysis Platform with Engineering Integrity
 
@@ -34,7 +34,7 @@ apply_custom_styles()
 render_page_header(
     title="Hopper Data Studio",
     description="Professional propulsion test data analysis platform with built-in engineering integrity",
-    badge_text="v2.3",
+    badge_text="v2.5",
     badge_type="default"
 )
 
@@ -56,15 +56,15 @@ with col1:
 with col2:
     render_metric_card(
         title="Test Types",
-        value="Cold Flow & Hot Fire",
-        subtitle="Full analysis pipeline"
+        value="Plugin Architecture",
+        subtitle="Cold Flow • Hot Fire • Extensible"
     )
 
 with col3:
     render_metric_card(
         title="Campaign Tracking",
-        value="SQLite Database",
-        subtitle="Full traceability & SPC"
+        value="SPC + CUSUM + EWMA",
+        subtitle="Full traceability & process control"
     )
 
 st.markdown("<br><br>", unsafe_allow_html=True)
@@ -114,44 +114,63 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 st.markdown('<h2 style="margin-bottom: 1.5rem;">Features</h2>', unsafe_allow_html=True)
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
     render_feature_card(
         title="Single Test Analysis",
-        description="Analyze individual cold flow or hot fire tests with automatic steady-state detection, full uncertainty propagation, and pre-analysis QC checks.",
+        description="Analyze cold flow or hot fire tests with steady-state detection, uncertainty propagation, and QC checks.",
         icon="🔬"
     )
 
     render_feature_card(
-        title="Batch Processing",
-        description="Process multiple test files efficiently with consistent configuration, parallel execution, and aggregate reporting.",
-        icon="📦"
+        title="Transient Analysis",
+        description="Multi-phase test segmentation with startup/shutdown transient characterization — rise time, overshoot, settling.",
+        icon="⚡"
     )
 
     render_feature_card(
         title="Campaign Management",
-        description="Track test campaigns with full data traceability. Every result is linked to its source data via cryptographic hashes.",
+        description="Track test campaigns with full traceability. Results linked to source data via SHA-256 hashes.",
         icon="🗂️"
     )
 
 with col2:
     render_feature_card(
-        title="Statistical Process Control",
-        description="Monitor process stability with control charts, Western Electric rules, trend detection, and capability indices (Cpk).",
+        title="SPC Control Charts",
+        description="I-MR, CUSUM, and EWMA charts with Western Electric rules, trend detection, and capability indices (Cpk).",
         icon="📈"
     )
 
     render_feature_card(
-        title="Report Generation",
-        description="Generate professional HTML reports with full traceability records, uncertainty tables, and QC summaries.",
-        icon="📄"
+        title="Frequency Analysis",
+        description="PSD estimation, spectrogram visualization, harmonic detection, cross-spectrum coherence, and resonance Q-factor.",
+        icon="🔊"
     )
 
     render_feature_card(
-        title="Data Export",
-        description="Export campaign data with full metadata to CSV, Excel, JSON, or create qualification-ready documentation packages.",
-        icon="💾"
+        title="Report Generation",
+        description="Professional HTML reports with traceability records, uncertainty tables, and qualification packages.",
+        icon="📄"
+    )
+
+with col3:
+    render_feature_card(
+        title="Batch Processing",
+        description="Process multiple test files with consistent configuration, parallel execution, and aggregate reporting.",
+        icon="📦"
+    )
+
+    render_feature_card(
+        title="Operating Envelope",
+        description="Visualize O/F ratio vs chamber pressure operating space with safety margins and success/failure mapping.",
+        icon="🎯"
+    )
+
+    render_feature_card(
+        title="Anomaly Detection",
+        description="Multi-type anomaly detection with spike, drift, flatline, and correlation analysis across sensor channels.",
+        icon="🔍"
     )
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -225,7 +244,7 @@ with st.expander("📋 System Architecture & Priorities", expanded=False):
                 <strong>Advanced Features</strong>
             </div>
             <p style="margin: 0; font-size: 0.875rem; color: #71717a;">
-                Anomaly Detection, Comparison Tools, Saved Configurations
+                Anomaly Detection, Comparison Tools, Transient Analysis, Frequency Analysis, Operating Envelope
             </p>
         </div>
     </div>
@@ -260,7 +279,7 @@ with col1:
     st.caption("**Hopper Data Studio** — Engineering Integrity System")
 
 with col2:
-    st.caption("Version 2.3.0")
+    st.caption("Version 2.5.0")
 
 with col3:
     st.caption("© 2024-2026")

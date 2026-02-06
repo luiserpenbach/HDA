@@ -33,11 +33,18 @@ from core.steady_state_detection import (
     detect_steady_state_derivative,
     validate_steady_window
 )
+from pages._shared_styles import apply_custom_styles, render_page_header
 
 st.set_page_config(page_title="Single Test Analysis", page_icon="STA", layout="wide")
 
-st.title("Single Test Analysis")
-st.markdown("Analyze individual cold flow or hot fire tests with full engineering integrity.")
+apply_custom_styles()
+
+render_page_header(
+    title="Single Test Analysis",
+    description="Analyze individual cold flow or hot fire tests with full engineering integrity",
+    badge_text="P0",
+    badge_type="error"
+)
 
 # Initialize session state
 if 'analysis_result' not in st.session_state:

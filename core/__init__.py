@@ -136,12 +136,16 @@ from .spc import (
     ControlChartPoint,
     ProcessCapability,
     SPCAnalysis,
+    CUSUMResult,
+    EWMAResult,
     calculate_imr_limits,
     calculate_xbar_r_limits,
     check_western_electric_rules,
     calculate_capability,
     detect_trend,
     create_imr_chart,
+    create_cusum_chart,
+    create_ewma_chart,
     analyze_campaign_spc,
     format_spc_summary,
     CHART_CONSTANTS,
@@ -217,7 +221,38 @@ from .saved_configs import (
     create_config_from_template,  # Alias for load_saved_config
 )
 
+# P2 Advanced Features
+from .transient_analysis import (
+    TestPhase,
+    PhaseResult,
+    MultiPhaseResult,
+    segment_test_phases,
+    analyze_startup_transient,
+    analyze_shutdown_transient,
+    compute_phase_metrics,
+)
+
+from .frequency_analysis import (
+    SpectralResult,
+    HarmonicInfo,
+    CrossSpectralResult,
+    compute_power_spectral_density,
+    compute_spectrogram,
+    detect_harmonics,
+    compute_cross_spectrum,
+    detect_resonance,
+    compute_frequency_bands,
+)
+
+from .operating_envelope import (
+    OperatingEnvelope,
+    calculate_operating_envelope,
+    plot_operating_envelope,
+    create_envelope_report,
+)
+
 # Version history:
+# 2.5.0 - Tier 3 production readiness: Full UI integration, CUSUM/EWMA SPC, transient/frequency analysis
 # 2.4.0 - Plugin architecture (Phase 1): Modular test type support with backward compatibility
 # 2.3.0 - Configuration system v2 (active config + metadata separation)
-__version__ = "2.4.0"
+__version__ = "2.5.0"

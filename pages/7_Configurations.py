@@ -17,10 +17,18 @@ from core.saved_configs import (
     validate_config_against_template,
 )
 
+from pages._shared_styles import apply_custom_styles, render_page_header
+
 st.set_page_config(page_title="Configurations", page_icon="CF", layout="wide")
 
-st.title("Configurations")
-st.markdown("Manage configuration templates for consistent test analysis.")
+apply_custom_styles()
+
+render_page_header(
+    title="Configurations",
+    description="Manage configuration templates for consistent test analysis",
+    badge_text="Config",
+    badge_type="default"
+)
 
 # Initialize template manager
 manager = TemplateManager()
