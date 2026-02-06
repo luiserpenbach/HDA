@@ -17,13 +17,191 @@ from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 
 CAMPAIGN_DIR = "campaigns"
-SCHEMA_VERSION = 2  # Increment when schema changes
+SCHEMA_VERSION = 3  # Increment when schema changes
 
 
 # =============================================================================
-# SCHEMA DEFINITIONS
+# BASE SCHEMA (shared columns for all test types)
 # =============================================================================
 
+BASE_COLUMNS_SQL = """
+    test_id TEXT PRIMARY KEY,
+
+    -- Basic metadata
+    test_path TEXT,
+    part TEXT,
+    serial_num TEXT,
+    test_timestamp TEXT,
+    operator TEXT,
+
+    -- Traceability
+    raw_data_path TEXT,
+    raw_data_hash TEXT,
+    raw_data_filename TEXT,
+    config_name TEXT,
+    config_hash TEXT,
+    config_snapshot TEXT,
+
+    -- Analysis context
+    analyst_username TEXT,
+    analyst_hostname TEXT,
+    analysis_timestamp_utc TEXT,
+    processing_version TEXT,
+
+    -- Processing record
+    steady_window_start_ms REAL,
+    steady_window_end_ms REAL,
+    steady_window_duration_ms REAL,
+    detection_method TEXT,
+    detection_parameters TEXT,
+    resample_freq_ms REAL,
+    stability_channels TEXT,
+
+    -- QC results
+    qc_passed INTEGER,
+    qc_summary TEXT,
+
+    -- Additional
+    comments TEXT,
+    config_used TEXT
+"""
+
+# Plugin-specific columns that extend the base schema
+PLUGIN_COLUMNS = {
+    'cold_flow': """
+    -- Fluid
+    fluid TEXT,
+
+    -- Primary measurements with uncertainties
+    avg_p_up_bar REAL,
+    u_p_up_bar REAL,
+    avg_T_up_K REAL,
+    avg_p_down_bar REAL,
+    avg_mf_g_s REAL,
+    u_mf_g_s REAL,
+
+    -- Geometry
+    orifice_area_mm2 REAL,
+    u_orifice_area_mm2 REAL,
+    avg_rho_kg_m3 REAL,
+
+    -- Derived metrics with uncertainties
+    avg_cd_CALC REAL,
+    u_cd_CALC REAL,
+    cd_rel_uncertainty_pct REAL,
+    dp_bar REAL,
+    u_dp_bar REAL
+    """,
+
+    'hot_fire': """
+    -- Propellants
+    propellants TEXT,
+
+    -- Test conditions
+    duration_s REAL,
+    ambient_pressure_bar REAL,
+
+    -- Primary measurements with uncertainties
+    avg_pc_bar REAL,
+    u_pc_bar REAL,
+    avg_thrust_n REAL,
+    u_thrust_n REAL,
+    avg_mf_total_g_s REAL,
+    u_mf_total_g_s REAL,
+    avg_mf_ox_g_s REAL,
+    u_mf_ox_g_s REAL,
+    avg_mf_fuel_g_s REAL,
+    u_mf_fuel_g_s REAL,
+
+    -- Derived metrics with uncertainties
+    avg_of_ratio REAL,
+    u_of_ratio REAL,
+    avg_isp_s REAL,
+    u_isp_s REAL,
+    avg_c_star_m_s REAL,
+    u_c_star_m_s REAL,
+    avg_cf REAL,
+
+    -- Efficiency metrics
+    eta_c_star_pct REAL,
+    eta_isp_pct REAL,
+    total_impulse_ns REAL
+    """,
+}
+
+
+def build_schema_for_test_type(test_type: str) -> str:
+    """
+    Build CREATE TABLE SQL from base columns + plugin-specific columns.
+
+    Supports both built-in test types (cold_flow, hot_fire) and plugin-provided
+    database columns registered via PluginMetadata.database_columns.
+
+    Args:
+        test_type: Test type identifier (e.g., 'cold_flow', 'hot_fire')
+
+    Returns:
+        Complete CREATE TABLE SQL statement
+    """
+    parts = [BASE_COLUMNS_SQL.strip()]
+
+    # Add built-in plugin columns if available
+    if test_type in PLUGIN_COLUMNS:
+        parts.append(PLUGIN_COLUMNS[test_type].strip())
+
+    # Extract already-declared column names to avoid duplicates
+    import re
+    existing_names = set()
+    for part in parts:
+        # Match column names at start of lines (before SQL type keyword)
+        for match in re.finditer(r'^\s*(\w+)\s+(?:TEXT|REAL|INTEGER|BLOB)', part, re.MULTILINE):
+            existing_names.add(match.group(1))
+
+    # Try to get additional columns from plugin registry
+    try:
+        from .plugins import PluginRegistry
+        plugins = PluginRegistry.get_plugins_by_test_type(test_type)
+        for plugin in plugins:
+            if hasattr(plugin, 'metadata') and plugin.metadata.database_columns:
+                for col_spec in plugin.metadata.database_columns:
+                    if col_spec.name not in existing_names:
+                        sql_type = col_spec.type.upper()
+                        null_clause = "" if col_spec.nullable else " NOT NULL"
+                        parts.append(f"    {col_spec.name} {sql_type}{null_clause}")
+                        existing_names.add(col_spec.name)
+    except Exception:
+        pass  # Plugin system not available or not initialized
+
+    # Combine into CREATE TABLE
+    columns_sql = ",\n".join(parts)
+    return f"CREATE TABLE test_results (\n{columns_sql}\n)"
+
+
+def get_plugin_columns_for_migration(test_type: str) -> List[Tuple[str, str]]:
+    """
+    Get plugin-declared database columns not yet in the schema.
+
+    Returns list of (column_name, sql_type) tuples for ALTER TABLE.
+    """
+    result = []
+    try:
+        from .plugins import PluginRegistry
+        plugins = PluginRegistry.get_plugins_by_test_type(test_type)
+        for plugin in plugins:
+            if hasattr(plugin, 'metadata') and plugin.metadata.database_columns:
+                for col_spec in plugin.metadata.database_columns:
+                    null_clause = "" if col_spec.nullable else " NOT NULL"
+                    result.append((col_spec.name, f"{col_spec.type.upper()}{null_clause}"))
+    except Exception:
+        pass
+    return result
+
+
+# Backward-compatible schema aliases (generate from builder)
+COLD_FLOW_SCHEMA_V2 = build_schema_for_test_type('cold_flow')
+HOT_FIRE_SCHEMA_V2 = build_schema_for_test_type('hot_fire')
+
+# Campaign info schema
 CAMPAIGN_INFO_SCHEMA = """
     CREATE TABLE campaign_info (
         campaign_name TEXT PRIMARY KEY,
@@ -33,146 +211,6 @@ CAMPAIGN_INFO_SCHEMA = """
         part_family TEXT,
         test_article TEXT,
         schema_version INTEGER DEFAULT 1
-    )
-"""
-
-COLD_FLOW_SCHEMA_V2 = """
-    CREATE TABLE test_results (
-        test_id TEXT PRIMARY KEY,
-        
-        -- Basic metadata
-        test_path TEXT,
-        part TEXT,
-        serial_num TEXT,
-        test_timestamp TEXT,
-        operator TEXT,
-        fluid TEXT,
-        
-        -- Primary measurements with uncertainties
-        avg_p_up_bar REAL,
-        u_p_up_bar REAL,
-        avg_T_up_K REAL,
-        avg_p_down_bar REAL,
-        avg_mf_g_s REAL,
-        u_mf_g_s REAL,
-        
-        -- Geometry
-        orifice_area_mm2 REAL,
-        u_orifice_area_mm2 REAL,
-        avg_rho_kg_m3 REAL,
-        
-        -- Derived metrics with uncertainties
-        avg_cd_CALC REAL,
-        u_cd_CALC REAL,
-        cd_rel_uncertainty_pct REAL,
-        dp_bar REAL,
-        u_dp_bar REAL,
-        
-        -- Traceability
-        raw_data_path TEXT,
-        raw_data_hash TEXT,
-        raw_data_filename TEXT,
-        config_name TEXT,
-        config_hash TEXT,
-        config_snapshot TEXT,
-        
-        -- Analysis context
-        analyst_username TEXT,
-        analyst_hostname TEXT,
-        analysis_timestamp_utc TEXT,
-        processing_version TEXT,
-        
-        -- Processing record
-        steady_window_start_ms REAL,
-        steady_window_end_ms REAL,
-        steady_window_duration_ms REAL,
-        detection_method TEXT,
-        detection_parameters TEXT,
-        resample_freq_ms REAL,
-        stability_channels TEXT,
-        
-        -- QC results
-        qc_passed INTEGER,
-        qc_summary TEXT,
-        
-        -- Additional
-        comments TEXT,
-        config_used TEXT
-    )
-"""
-
-HOT_FIRE_SCHEMA_V2 = """
-    CREATE TABLE test_results (
-        test_id TEXT PRIMARY KEY,
-        
-        -- Basic metadata
-        test_path TEXT,
-        part TEXT,
-        serial_num TEXT,
-        test_timestamp TEXT,
-        operator TEXT,
-        propellants TEXT,
-        
-        -- Test conditions
-        duration_s REAL,
-        ambient_pressure_bar REAL,
-        
-        -- Primary measurements with uncertainties
-        avg_pc_bar REAL,
-        u_pc_bar REAL,
-        avg_thrust_n REAL,
-        u_thrust_n REAL,
-        avg_mf_total_g_s REAL,
-        u_mf_total_g_s REAL,
-        avg_mf_ox_g_s REAL,
-        u_mf_ox_g_s REAL,
-        avg_mf_fuel_g_s REAL,
-        u_mf_fuel_g_s REAL,
-        
-        -- Derived metrics with uncertainties
-        avg_of_ratio REAL,
-        u_of_ratio REAL,
-        avg_isp_s REAL,
-        u_isp_s REAL,
-        avg_c_star_m_s REAL,
-        u_c_star_m_s REAL,
-        avg_cf REAL,
-        
-        -- Efficiency metrics
-        eta_c_star_pct REAL,
-        eta_isp_pct REAL,
-        total_impulse_ns REAL,
-        
-        -- Traceability
-        raw_data_path TEXT,
-        raw_data_hash TEXT,
-        raw_data_filename TEXT,
-        config_name TEXT,
-        config_hash TEXT,
-        config_snapshot TEXT,
-        
-        -- Analysis context
-        analyst_username TEXT,
-        analyst_hostname TEXT,
-        analysis_timestamp_utc TEXT,
-        processing_version TEXT,
-        
-        -- Processing record
-        steady_window_start_ms REAL,
-        steady_window_end_ms REAL,
-        steady_window_duration_ms REAL,
-        detection_method TEXT,
-        detection_parameters TEXT,
-        resample_freq_ms REAL,
-        stability_channels TEXT,
-        
-        -- QC results
-        qc_passed INTEGER,
-        qc_summary TEXT,
-        
-        -- Additional
-        comments TEXT,
-        config_used TEXT
     )
 """
 
@@ -242,7 +280,13 @@ MIGRATIONS = {
             "ALTER TABLE test_results ADD COLUMN qc_passed INTEGER",
             "ALTER TABLE test_results ADD COLUMN qc_summary TEXT",
         ]
-    }
+    },
+    3: {
+        # v3 migration: auto-detect new plugin columns and add them
+        # Handled dynamically in migrate_database() via get_plugin_columns_for_migration()
+        'cold_flow': [],
+        'hot_fire': [],
+    },
 }
 
 
@@ -303,6 +347,10 @@ def migrate_database(db_path: str) -> Tuple[int, int]:
     result = c.fetchone()
     campaign_type = result[0] if result else 'cold_flow'
     
+    # Get existing columns for plugin migration
+    c.execute("PRAGMA table_info(test_results)")
+    existing_cols = {row[1] for row in c.fetchall()}
+
     # Apply migrations
     for version in range(current_version + 1, SCHEMA_VERSION + 1):
         if version in MIGRATIONS:
@@ -314,7 +362,17 @@ def migrate_database(db_path: str) -> Tuple[int, int]:
                     # Column might already exist
                     if "duplicate column" not in str(e).lower():
                         print(f"Migration warning: {e}")
-    
+
+    # v3+: Auto-add any plugin-declared columns not yet in schema
+    plugin_columns = get_plugin_columns_for_migration(campaign_type)
+    for col_name, col_type in plugin_columns:
+        if col_name not in existing_cols:
+            try:
+                c.execute(f"ALTER TABLE test_results ADD COLUMN {col_name} {col_type}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    print(f"Plugin migration warning: {e}")
+
     conn.commit()
     conn.close()
     
@@ -497,13 +555,10 @@ def create_campaign(campaign_name: str, campaign_type: str = 'cold_flow', descri
         INSERT INTO campaign_info VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (campaign_name, campaign_type, datetime.now().isoformat(), description, "", "", SCHEMA_VERSION))
 
-    # Create test results table with new schema
-    if campaign_type == 'cold_flow':
-        c.execute(COLD_FLOW_SCHEMA_V2)
-    elif campaign_type == 'hot_fire':
-        c.execute(HOT_FIRE_SCHEMA_V2)
-    else:
-        raise ValueError(f"Unknown campaign type: {campaign_type}")
+    # Create test results table using dynamic schema builder
+    # This supports both built-in types and plugin-registered test types
+    schema_sql = build_schema_for_test_type(campaign_type)
+    c.execute(schema_sql)
 
     conn.commit()
     conn.close()

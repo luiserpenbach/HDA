@@ -136,14 +136,26 @@ class TestCampaignManager:
             assert 'already exists' in str(e)
             print(f"[PASS] Duplicate campaign rejected: {e}")
 
-    def test_create_campaign_invalid_type_fails(self):
-        """Test that invalid campaign type raises error."""
-        try:
-            create_campaign('invalid_type', 'invalid_type')
-            assert False, "Should have raised ValueError"
-        except ValueError as e:
-            assert 'Unknown campaign type' in str(e)
-            print(f"[PASS] Invalid campaign type rejected: {e}")
+    def test_create_campaign_custom_type_uses_base_schema(self):
+        """Test that custom campaign type creates with base schema only."""
+        # Dynamic schema builder supports any test type (base columns always included)
+        db_path = create_campaign('custom_type_test', 'custom_type')
+        assert os.path.exists(db_path)
+
+        # Verify it has base columns but not cold_flow-specific ones
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        c.execute("PRAGMA table_info(test_results)")
+        columns = [row[1] for row in c.fetchall()]
+        conn.close()
+
+        assert 'test_id' in columns
+        assert 'raw_data_hash' in columns
+        assert 'qc_passed' in columns
+        # cold_flow-specific columns should NOT be present
+        assert 'avg_cd_CALC' not in columns
+
+        print("[PASS] Custom type uses base schema")
 
     # =========================================================================
     # Campaign Listing Tests
