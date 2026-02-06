@@ -247,22 +247,22 @@ from core.saved_configs import (
 )
 import shutil
 
-# Test built-in templates exist
-if len(BUILTIN_TEMPLATES) >= 4:
+# Test built-in templates exist (cold_flow_default and hot_fire_default)
+if len(BUILTIN_TEMPLATES) >= 2:
     test_pass(f"Built-in templates: {len(BUILTIN_TEMPLATES)} available")
 else:
-    test_fail(f"Built-in templates: Expected >=4, got {len(BUILTIN_TEMPLATES)}")
+    test_fail(f"Built-in templates: Expected >=2, got {len(BUILTIN_TEMPLATES)}")
 
-# Test template structure
-template = BUILTIN_TEMPLATES.get('cold_flow_n2')
+# Test template structure (actual keys are cold_flow_default, hot_fire_default)
+template = BUILTIN_TEMPLATES.get('cold_flow_default')
 if template and template.test_type == 'cold_flow':
     test_pass(f"Template structure: {template.name}")
 else:
-    test_fail("Template structure: cold_flow_n2 not found or invalid")
+    test_fail("Template structure: cold_flow_default not found or invalid")
 
-# Test config generation
+# Test config generation (SavedConfig.to_config() uses channel_config, uncertainties, settings)
 config = template.to_config()
-if 'columns' in config and 'geometry' in config and 'uncertainties' in config:
+if 'channel_config' in config and 'uncertainties' in config:
     test_pass("Config generation: All required sections present")
 else:
     test_fail("Config generation: Missing sections")
@@ -277,25 +277,25 @@ manager = TemplateManager(templates_dir=test_templates_dir)
 
 # List templates
 templates = manager.list_templates()
-if len(templates) >= 4:  # Built-in templates
+if len(templates) >= 2:  # Built-in templates
     test_pass(f"Template manager list: {len(templates)} templates")
 else:
-    test_fail(f"Template manager list: Expected >=4")
+    test_fail(f"Template manager list: Expected >=2")
 
 # Get template
-retrieved = manager.get_template('cold_flow_n2')
+retrieved = manager.get_template('cold_flow_default')
 if retrieved and retrieved.name == template.name:
     test_pass("Template manager get: Retrieved built-in template")
 else:
     test_fail("Template manager get: Failed")
 
-# Save custom template
+# Save custom template (using SavedConfig fields: channel_config, settings)
 custom = ConfigTemplate(
     name="Custom Test Template",
     version="1.0.0",
     test_type="cold_flow",
-    columns={'timestamp': 't', 'upstream_pressure': 'p1'},
-    geometry={'orifice_area_mm2': 2.0},
+    channel_config={'10001': 'PT-01', '10002': 'FM-01'},
+    settings={'orifice_area_mm2': 2.0},
 )
 
 saved_id = manager.save_template(custom, "custom_test")
@@ -306,14 +306,14 @@ else:
 
 # Retrieve custom template
 retrieved_custom = manager.get_template("custom_test")
-if retrieved_custom and retrieved_custom.geometry.get('orifice_area_mm2') == 2.0:
+if retrieved_custom and retrieved_custom.settings.get('orifice_area_mm2') == 2.0:
     test_pass("Template manager: Custom template retrieved correctly")
 else:
     test_fail("Template manager: Custom template retrieval failed")
 
 # Test create from parent
-child = manager.create_from_parent('cold_flow_n2', "Child Template", {'geometry': {'orifice_area_mm2': 3.0}})
-if child.parent_template == 'cold_flow_n2' and child.geometry.get('orifice_area_mm2') == 3.0:
+child = manager.create_from_parent('cold_flow_default', "Child Template", {'settings': {'orifice_area_mm2': 3.0}})
+if child.parent_config == 'cold_flow_default' and child.settings.get('orifice_area_mm2') == 3.0:
     test_pass("Create from parent: Inheritance works")
 else:
     test_fail("Create from parent: Inheritance failed")
@@ -328,9 +328,9 @@ if merged['a'] == 1 and merged['b']['x'] == 15 and merged['b']['y'] == 20 and me
 else:
     test_fail("Config merge: Merge failed")
 
-# Test create_config_from_template
-config = create_config_from_template('cold_flow_n2', {'geometry': {'orifice_area_mm2': 5.0}})
-if config['geometry']['orifice_area_mm2'] == 5.0:
+# Test create_config_from_template (load_saved_config)
+config = create_config_from_template('cold_flow_default', {'settings': {'orifice_area_mm2': 5.0}})
+if config['settings']['orifice_area_mm2'] == 5.0:
     test_pass("Create config from template: Overrides applied")
 else:
     test_fail("Create config from template: Override failed")

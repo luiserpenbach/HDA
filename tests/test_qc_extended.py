@@ -29,6 +29,9 @@ from core.qc_checks import (
     check_saturation,
     check_nan_ratio,
     check_pressure_flow_correlation,
+    check_combustion_stability,
+    check_ignition_detection,
+    check_propellant_lead_lag,
     run_qc_checks,
     run_quick_qc,
     assert_qc_passed,
@@ -582,6 +585,186 @@ class TestAssertQCPassed:
         print("[PASS] Assert returns False without raising")
 
 
+class TestCombustionStability:
+    """Tests for check_combustion_stability function."""
+
+    def test_stable_combustion(self):
+        """Test stable combustion passes."""
+        np.random.seed(42)
+        # Stable chamber pressure with small noise
+        pc = 30.0 + np.random.normal(0, 0.2, 1000)
+        df = pd.DataFrame({'PC-01': pc})
+
+        result = check_combustion_stability(df, 'PC-01', max_roughness_pct=10.0)
+
+        assert result.status == QCStatus.PASS
+        assert 'stable' in result.message.lower()
+
+        print(f"[PASS] Stable combustion: {result.message}")
+
+    def test_unstable_combustion(self):
+        """Test unstable combustion detected."""
+        np.random.seed(42)
+        # Highly oscillating chamber pressure
+        t = np.linspace(0, 10, 1000)
+        pc = 30.0 + 10.0 * np.sin(2 * np.pi * 5 * t)  # Large oscillation
+        df = pd.DataFrame({'PC-01': pc})
+
+        result = check_combustion_stability(df, 'PC-01', max_roughness_pct=10.0)
+
+        assert result.status in (QCStatus.WARN, QCStatus.FAIL)
+        assert 'roughness' in result.message.lower()
+
+        print(f"[PASS] Unstable combustion detected: {result.message}")
+
+    def test_missing_column(self):
+        """Test missing column handling."""
+        df = pd.DataFrame({'other': [1, 2, 3]})
+
+        result = check_combustion_stability(df, 'PC-01')
+
+        assert result.status == QCStatus.SKIP
+
+        print("[PASS] Missing column handled")
+
+    def test_zero_pressure(self):
+        """Test zero chamber pressure fails."""
+        df = pd.DataFrame({'PC-01': np.zeros(500)})
+
+        result = check_combustion_stability(df, 'PC-01')
+
+        assert result.status == QCStatus.FAIL
+
+        print("[PASS] Zero pressure fails correctly")
+
+
+class TestIgnitionDetection:
+    """Tests for check_ignition_detection function."""
+
+    def test_successful_ignition(self):
+        """Test successful ignition detection."""
+        # Simulate ignition: pressure rises from 0 to 30 bar
+        pc = np.concatenate([np.zeros(100), np.linspace(0, 30, 50), 30 * np.ones(350)])
+        timestamp = np.arange(500) * 10  # ms
+        df = pd.DataFrame({'PC-01': pc, 'timestamp': timestamp})
+
+        result = check_ignition_detection(df, 'PC-01', min_pc_bar=2.0)
+
+        assert result.status == QCStatus.PASS
+        assert 'confirmed' in result.message.lower()
+        assert result.details['max_pc_bar'] == 30.0
+
+        print(f"[PASS] Ignition detected: {result.message}")
+
+    def test_no_ignition(self):
+        """Test no ignition detected."""
+        # Low pressure - failed ignition
+        pc = np.random.normal(0.5, 0.1, 500)
+        df = pd.DataFrame({'PC-01': pc, 'timestamp': np.arange(500) * 10})
+
+        result = check_ignition_detection(df, 'PC-01', min_pc_bar=2.0)
+
+        assert result.status == QCStatus.FAIL
+        assert 'NOT detected' in result.message
+
+        print(f"[PASS] No ignition detected: {result.message}")
+
+    def test_missing_column(self):
+        """Test missing column handling."""
+        df = pd.DataFrame({'other': [1, 2, 3]})
+
+        result = check_ignition_detection(df, 'PC-01')
+
+        assert result.status == QCStatus.SKIP
+
+        print("[PASS] Missing column handled")
+
+
+class TestPropellantLeadLag:
+    """Tests for check_propellant_lead_lag function."""
+
+    def test_simultaneous_flow(self):
+        """Test simultaneous flow onset passes."""
+        n = 500
+        t = np.arange(n) * 10  # ms
+        # Both flows start at same time (index 100)
+        ox = np.concatenate([np.zeros(100), np.ones(400) * 10])
+        fuel = np.concatenate([np.zeros(100), np.ones(400) * 5])
+        df = pd.DataFrame({'OX-FM': ox, 'FU-FM': fuel, 'timestamp': t})
+
+        result = check_propellant_lead_lag(df, 'OX-FM', 'FU-FM', max_lead_lag_ms=500)
+
+        assert result.status == QCStatus.PASS
+
+        print(f"[PASS] Simultaneous flow: {result.message}")
+
+    def test_excessive_lead_lag(self):
+        """Test excessive lead/lag detected."""
+        n = 500
+        t = np.arange(n) * 10  # ms
+        # Ox starts 100 samples (1000ms) before fuel
+        ox = np.concatenate([np.zeros(50), np.ones(450) * 10])
+        fuel = np.concatenate([np.zeros(150), np.ones(350) * 5])
+        df = pd.DataFrame({'OX-FM': ox, 'FU-FM': fuel, 'timestamp': t})
+
+        result = check_propellant_lead_lag(df, 'OX-FM', 'FU-FM', max_lead_lag_ms=500)
+
+        assert result.status in (QCStatus.WARN, QCStatus.FAIL)
+        assert result.details['leader'] == 'oxidizer'
+
+        print(f"[PASS] Excessive lead/lag: {result.message}")
+
+    def test_missing_columns(self):
+        """Test missing columns handling."""
+        df = pd.DataFrame({'other': [1, 2, 3], 'timestamp': [0, 10, 20]})
+
+        result = check_propellant_lead_lag(df, 'OX-FM', 'FU-FM')
+
+        assert result.status == QCStatus.SKIP
+
+        print("[PASS] Missing columns handled")
+
+
+class TestSensorRangesAcceptsBothKeys:
+    """Test that sensor range checks accept both sensor_limits and sensor_ranges config keys."""
+
+    def test_sensor_ranges_key(self):
+        """Test that 'sensor_ranges' config key works."""
+        df = pd.DataFrame({
+            'PT-01': [10, 20, 30, 40, 50],
+        })
+
+        config = {
+            'sensor_ranges': {
+                'PT-01': {'min': 0, 'max': 100},
+            }
+        }
+
+        results = check_sensor_ranges_from_config(df, config)
+        assert len(results) == 1
+        assert results[0].status == QCStatus.PASS
+
+        print("[PASS] sensor_ranges config key works")
+
+    def test_sensor_limits_key(self):
+        """Test that 'sensor_limits' config key still works."""
+        df = pd.DataFrame({
+            'PT-01': [10, 20, 30, 40, 50],
+        })
+
+        config = {
+            'sensor_limits': {
+                'PT-01': {'min': 0, 'max': 100},
+            }
+        }
+
+        results = check_sensor_ranges_from_config(df, config)
+        assert len(results) == 1
+        assert results[0].status == QCStatus.PASS
+
+        print("[PASS] sensor_limits config key still works")
+
+
 def run_all_tests():
     """Run all extended QC tests."""
     print("=" * 60)
@@ -598,6 +781,10 @@ def run_all_tests():
         TestFormatQCForDisplay,
         TestQCReportClass,
         TestAssertQCPassed,
+        TestCombustionStability,
+        TestIgnitionDetection,
+        TestPropellantLeadLag,
+        TestSensorRangesAcceptsBothKeys,
     ]
 
     passed = 0

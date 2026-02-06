@@ -421,9 +421,9 @@ def check_sensor_ranges_from_config(
     """
     Check all sensor ranges defined in configuration.
     
-    Config format:
+    Config format (either key is accepted):
     {
-        "sensor_limits": {
+        "sensor_limits": {  // or "sensor_ranges"
             "PT-01": {"min": 0, "max": 100, "unit": "bar"},
             "FM-01": {"min": 0, "max": 500, "unit": "g/s"},
             ...
@@ -431,7 +431,7 @@ def check_sensor_ranges_from_config(
     }
     """
     results = []
-    sensor_limits = config.get('sensor_limits', {})
+    sensor_limits = config.get('sensor_limits', config.get('sensor_ranges', {}))
     
     for channel, limits in sensor_limits.items():
         if channel not in df.columns:
@@ -782,10 +782,11 @@ def run_qc_checks(
     
     # Determine critical channels from config if not specified
     if critical_channels is None:
-        cols = config.get('columns', {})
+        # Support both sensor_roles (v2.4.0+) and columns (legacy)
+        cols = config.get('sensor_roles', config.get('columns', {}))
         critical_channels = [
-            v for k, v in cols.items() 
-            if v and k in ('upstream_pressure', 'mass_flow', 'chamber_pressure', 
+            v for k, v in cols.items()
+            if v and k in ('upstream_pressure', 'mass_flow', 'chamber_pressure',
                           'thrust', 'mass_flow_ox', 'mass_flow_fuel')
         ]
     
@@ -799,7 +800,7 @@ def run_qc_checks(
     # -------------------------------------------------------------------------
     # 2. SENSOR RANGE CHECKS (from config)
     # -------------------------------------------------------------------------
-    if 'sensor_limits' in config:
+    if 'sensor_limits' in config or 'sensor_ranges' in config:
         range_results = check_sensor_ranges_from_config(df, config)
         for result in range_results:
             report.add_check(result)
@@ -823,15 +824,16 @@ def run_qc_checks(
     # -------------------------------------------------------------------------
     # 4. CROSS-CORRELATION CHECKS
     # -------------------------------------------------------------------------
-    cols = config.get('columns', {})
-    
+    # Support both sensor_roles (v2.4.0+) and columns (legacy)
+    cols = config.get('sensor_roles', config.get('columns', {}))
+
     # Cold flow: pressure-flow correlation
     p_col = cols.get('upstream_pressure') or cols.get('inlet_pressure')
     f_col = cols.get('mass_flow') or cols.get('mf')
-    
+
     if p_col and f_col:
         report.add_check(check_pressure_flow_correlation(df, p_col, f_col))
-    
+
     # Hot fire: thrust-pressure correlation
     pc_col = cols.get('chamber_pressure')
     thrust_col = cols.get('thrust')
@@ -896,6 +898,251 @@ def run_quick_qc(
             ))
     
     return report
+
+
+# =============================================================================
+# HOT FIRE SPECIFIC QC CHECKS
+# =============================================================================
+
+def check_combustion_stability(
+    df: pd.DataFrame,
+    pc_col: str,
+    max_roughness_pct: float = 10.0,
+    window_size: int = 50
+) -> QCCheckResult:
+    """
+    Check combustion stability via chamber pressure roughness.
+
+    Roughness is defined as (peak-to-peak oscillation / mean Pc) over rolling
+    windows. High roughness indicates combustion instability.
+
+    Args:
+        df: DataFrame with chamber pressure data
+        pc_col: Chamber pressure column name
+        max_roughness_pct: Maximum allowed roughness (%)
+        window_size: Rolling window size for roughness calculation
+    """
+    if pc_col not in df.columns:
+        return QCCheckResult(
+            name="combustion_stability",
+            status=QCStatus.SKIP,
+            message=f"Chamber pressure column '{pc_col}' not found",
+            blocking=False
+        )
+
+    data = df[pc_col].dropna()
+    if len(data) < window_size * 2:
+        return QCCheckResult(
+            name="combustion_stability",
+            status=QCStatus.SKIP,
+            message="Insufficient data for combustion stability check",
+            blocking=False
+        )
+
+    mean_pc = data.mean()
+    if mean_pc <= 0:
+        return QCCheckResult(
+            name="combustion_stability",
+            status=QCStatus.FAIL,
+            message=f"Chamber pressure non-positive (mean={mean_pc:.2f})",
+            blocking=True
+        )
+
+    # Rolling peak-to-peak roughness
+    rolling_max = data.rolling(window=window_size, center=True).max()
+    rolling_min = data.rolling(window=window_size, center=True).min()
+    roughness = ((rolling_max - rolling_min) / mean_pc * 100).dropna()
+
+    if len(roughness) == 0:
+        return QCCheckResult(
+            name="combustion_stability",
+            status=QCStatus.SKIP,
+            message="Could not compute roughness",
+            blocking=False
+        )
+
+    max_roughness = roughness.max()
+    mean_roughness = roughness.mean()
+
+    if max_roughness <= max_roughness_pct:
+        return QCCheckResult(
+            name="combustion_stability",
+            status=QCStatus.PASS,
+            message=f"Combustion stable: roughness={mean_roughness:.1f}% mean, {max_roughness:.1f}% peak",
+            details={
+                'mean_roughness_pct': float(mean_roughness),
+                'max_roughness_pct': float(max_roughness),
+                'mean_pc': float(mean_pc),
+            }
+        )
+
+    status = QCStatus.FAIL if max_roughness > max_roughness_pct * 2 else QCStatus.WARN
+    return QCCheckResult(
+        name="combustion_stability",
+        status=status,
+        message=f"Combustion roughness high: {max_roughness:.1f}% peak (limit: {max_roughness_pct}%)",
+        details={
+            'mean_roughness_pct': float(mean_roughness),
+            'max_roughness_pct': float(max_roughness),
+            'mean_pc': float(mean_pc),
+        },
+        blocking=(status == QCStatus.FAIL)
+    )
+
+
+def check_ignition_detection(
+    df: pd.DataFrame,
+    pc_col: str,
+    time_col: str = 'timestamp',
+    min_pc_bar: float = 2.0
+) -> QCCheckResult:
+    """
+    Check that ignition was detected (chamber pressure exceeds threshold).
+
+    For hot fire tests, chamber pressure must rise above a minimum threshold
+    to confirm successful ignition.
+
+    Args:
+        df: DataFrame with test data
+        pc_col: Chamber pressure column name
+        time_col: Timestamp column name
+        min_pc_bar: Minimum Pc (bar) to consider ignition successful
+    """
+    if pc_col not in df.columns:
+        return QCCheckResult(
+            name="ignition_detection",
+            status=QCStatus.SKIP,
+            message=f"Chamber pressure column '{pc_col}' not found",
+            blocking=False
+        )
+
+    data = df[pc_col].dropna()
+    if len(data) == 0:
+        return QCCheckResult(
+            name="ignition_detection",
+            status=QCStatus.FAIL,
+            message="No chamber pressure data",
+            blocking=True
+        )
+
+    max_pc = data.max()
+    if max_pc >= min_pc_bar:
+        # Find ignition time (first crossing of threshold)
+        above_threshold = data >= min_pc_bar
+        first_idx = above_threshold.idxmax() if above_threshold.any() else None
+        ignition_time = None
+        if first_idx is not None and time_col in df.columns:
+            ignition_time = float(df.loc[first_idx, time_col])
+
+        return QCCheckResult(
+            name="ignition_detection",
+            status=QCStatus.PASS,
+            message=f"Ignition confirmed: peak Pc={max_pc:.1f} bar",
+            details={
+                'max_pc_bar': float(max_pc),
+                'threshold_bar': min_pc_bar,
+                'ignition_time': ignition_time,
+            }
+        )
+
+    return QCCheckResult(
+        name="ignition_detection",
+        status=QCStatus.FAIL,
+        message=f"Ignition NOT detected: max Pc={max_pc:.2f} bar < threshold {min_pc_bar} bar",
+        details={
+            'max_pc_bar': float(max_pc),
+            'threshold_bar': min_pc_bar,
+        },
+        blocking=True
+    )
+
+
+def check_propellant_lead_lag(
+    df: pd.DataFrame,
+    ox_col: str,
+    fuel_col: str,
+    time_col: str = 'timestamp',
+    max_lead_lag_ms: float = 500.0
+) -> QCCheckResult:
+    """
+    Check propellant lead/lag timing.
+
+    Excessive lead/lag between oxidizer and fuel flow onset can indicate
+    valve sequencing issues and is a safety concern (hard start risk).
+
+    Args:
+        df: DataFrame with mass flow data
+        ox_col: Oxidizer mass flow column
+        fuel_col: Fuel mass flow column
+        time_col: Timestamp column
+        max_lead_lag_ms: Maximum allowed lead/lag (ms)
+    """
+    missing = [c for c in [ox_col, fuel_col, time_col] if c not in df.columns]
+    if missing:
+        return QCCheckResult(
+            name="propellant_lead_lag",
+            status=QCStatus.SKIP,
+            message=f"Missing columns: {missing}",
+            blocking=False
+        )
+
+    ox_data = df[ox_col].values
+    fuel_data = df[fuel_col].values
+    times = df[time_col].values
+
+    # Detect flow onset: first time signal exceeds 10% of max
+    ox_threshold = np.max(ox_data) * 0.10
+    fuel_threshold = np.max(fuel_data) * 0.10
+
+    ox_onset_idx = np.argmax(ox_data > ox_threshold) if np.any(ox_data > ox_threshold) else None
+    fuel_onset_idx = np.argmax(fuel_data > fuel_threshold) if np.any(fuel_data > fuel_threshold) else None
+
+    if ox_onset_idx is None or fuel_onset_idx is None:
+        return QCCheckResult(
+            name="propellant_lead_lag",
+            status=QCStatus.WARN,
+            message="Could not detect flow onset for lead/lag analysis",
+            blocking=False
+        )
+
+    ox_onset_time = times[ox_onset_idx]
+    fuel_onset_time = times[fuel_onset_idx]
+    lead_lag_ms = float(abs(ox_onset_time - fuel_onset_time))
+
+    # Determine which leads
+    if ox_onset_time < fuel_onset_time:
+        leader = "oxidizer"
+    elif fuel_onset_time < ox_onset_time:
+        leader = "fuel"
+    else:
+        leader = "simultaneous"
+
+    if lead_lag_ms <= max_lead_lag_ms:
+        return QCCheckResult(
+            name="propellant_lead_lag",
+            status=QCStatus.PASS,
+            message=f"Propellant lead/lag: {lead_lag_ms:.1f} ms ({leader} leads)",
+            details={
+                'lead_lag_ms': lead_lag_ms,
+                'leader': leader,
+                'ox_onset_time': float(ox_onset_time),
+                'fuel_onset_time': float(fuel_onset_time),
+            }
+        )
+
+    status = QCStatus.FAIL if lead_lag_ms > max_lead_lag_ms * 2 else QCStatus.WARN
+    return QCCheckResult(
+        name="propellant_lead_lag",
+        status=status,
+        message=f"Excessive propellant lead/lag: {lead_lag_ms:.1f} ms ({leader} leads, limit: {max_lead_lag_ms} ms)",
+        details={
+            'lead_lag_ms': lead_lag_ms,
+            'leader': leader,
+            'ox_onset_time': float(ox_onset_time),
+            'fuel_onset_time': float(fuel_onset_time),
+        },
+        blocking=(status == QCStatus.FAIL)
+    )
 
 
 # =============================================================================

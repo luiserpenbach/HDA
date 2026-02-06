@@ -155,15 +155,37 @@ class HotFirePlugin:
             ],
         )
 
+    @staticmethod
+    def _resolve_sensor_roles(config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Resolve sensor mappings from either sensor_roles (v2.4.0+) or columns (legacy).
+
+        Args:
+            config: Configuration dictionary (may be mutated)
+
+        Returns:
+            The config dict with sensor_roles guaranteed to be populated
+        """
+        sensor_roles = config.get('sensor_roles', {})
+        columns = config.get('columns', {})
+
+        if not sensor_roles and columns:
+            config['sensor_roles'] = dict(columns)
+
+        return config
+
     def validate_config(self, config: Dict[str, Any]) -> None:
         """
         Validate hot fire specific configuration.
 
         Checks:
         - Test type is 'hot_fire'
-        - Required sensors are mapped
+        - Required sensors are mapped (via sensor_roles or legacy columns)
         - Geometry parameters present (throat area for C*)
         - Uncertainty specifications present
+
+        Supports both v2.4.0+ (sensor_roles in metadata) and legacy
+        (columns in config) formats for backward compatibility.
 
         Args:
             config: Configuration dictionary (merged hardware + metadata)
@@ -174,27 +196,30 @@ class HotFirePlugin:
         # Use existing validation (already comprehensive)
         validated = validate_config_simple(config, 'hot_fire')
 
-        # Check sensor_roles in metadata (ALL sensor assignments should be in metadata, NOT config)
-        sensor_roles = config.get('sensor_roles', {})
+        # Resolve sensor_roles from legacy columns if needed
+        self._resolve_sensor_roles(config)
 
-        if not sensor_roles:
+        sensor_roles = config.get('sensor_roles', {})
+        columns = config.get('columns', {})
+
+        if not sensor_roles and not columns:
             raise ValueError(
-                "Hot fire analysis requires 'sensor_roles' in metadata. "
-                "Add to metadata.json: \"sensor_roles\": {\"chamber_pressure\": \"YOUR-PT\", \"thrust\": \"YOUR-LC\", ...}"
+                "Hot fire analysis requires sensor mappings. "
+                "Provide 'sensor_roles' in metadata or 'columns' in config."
             )
 
         # Check for required chamber pressure sensor
         if not sensor_roles.get('chamber_pressure'):
             raise ValueError(
-                "Hot fire analysis requires 'chamber_pressure' in metadata sensor_roles. "
-                "Add to metadata.json: \"sensor_roles\": {\"chamber_pressure\": \"YOUR-PT-SENSOR\"}"
+                "Hot fire analysis requires 'chamber_pressure' in "
+                "sensor_roles (metadata) or columns (config)."
             )
 
         # Check for required thrust sensor
         if not sensor_roles.get('thrust'):
             raise ValueError(
-                "Hot fire analysis requires 'thrust' in metadata sensor_roles. "
-                "Add to metadata.json: \"sensor_roles\": {\"thrust\": \"YOUR-LC-SENSOR\"}"
+                "Hot fire analysis requires 'thrust' in "
+                "sensor_roles (metadata) or columns (config)."
             )
 
         # Check for required mass flow sensors
@@ -203,15 +228,9 @@ class HotFirePlugin:
 
         if not (has_ox_flow and has_fuel_flow):
             raise ValueError(
-                "Hot fire analysis requires both 'mass_flow_ox' and 'mass_flow_fuel' in metadata sensor_roles. "
-                "Add: \"mass_flow_ox\": \"YOUR-OX-FM\", \"mass_flow_fuel\": \"YOUR-FUEL-FM\""
+                "Hot fire analysis requires both 'mass_flow_ox' and 'mass_flow_fuel' in "
+                "sensor_roles (metadata) or columns (config)."
             )
-
-        # Check geometry (needed for C* calculation) - should be in metadata
-        geom = config.get('geometry', {})
-        if not geom.get('throat_area_mm2'):
-            # Warning, not error - can still analyze without C*
-            pass
 
     def run_qc_checks(
         self,

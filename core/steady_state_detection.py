@@ -141,7 +141,7 @@ def detect_steady_state_ml(
 
         # Add rolling mean and std as features
         rolling_mean = pd.Series(signal).rolling(window=20, center=True).mean()
-        rolling_mean = rolling_mean.fillna(method='bfill').fillna(method='ffill')
+        rolling_mean = rolling_mean.bfill().ffill()
         rolling_std = pd.Series(signal).rolling(window=20, center=True).std().fillna(0)
         features.append(rolling_mean.values)
         features.append(rolling_std.values)

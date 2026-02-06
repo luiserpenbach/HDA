@@ -320,7 +320,7 @@ class SavedConfigManager:
         # Create copy
         new_template = copy.deepcopy(parent)
         new_template.name = new_name
-        new_template.parent_template = parent_id
+        new_template.parent_config = parent_id
         new_template.created_date = datetime.now().isoformat()
         
         # Apply overrides
