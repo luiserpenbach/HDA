@@ -125,43 +125,92 @@ class GeometryUncertainty:
 @dataclass
 class MeasurementWithUncertainty:
     """
-    A measurement value with its associated uncertainty.
-    
+    A measurement value with its associated uncertainty (GUM-aligned).
+
     Attributes:
         value: Central/mean value
-        uncertainty: Absolute uncertainty (1-sigma)
+        uncertainty: Standard uncertainty u(y) (1-sigma equivalent)
         unit: Physical unit
         name: Parameter name for display
-        
-    The uncertainty is assumed to be 1-sigma (68% confidence).
-    For 95% confidence, multiply by 1.96.
+        coverage_factor: k-factor for expanded uncertainty (default k=1)
+        confidence_level: Confidence level associated with coverage factor
+        degrees_of_freedom: Effective degrees of freedom (for Welch-Satterthwaite)
+
+    The `uncertainty` field stores the standard uncertainty u(y).
+    Expanded uncertainty U = k * u(y) is accessible via `expanded_uncertainty`.
     """
     value: float
     uncertainty: float
     unit: str = ""
     name: str = ""
-    
+    coverage_factor: float = 1.0
+    confidence_level: float = 0.6827
+    degrees_of_freedom: Optional[float] = None
+
     @property
     def relative_uncertainty(self) -> float:
-        """Relative uncertainty as fraction."""
+        """Relative standard uncertainty as fraction."""
         if abs(self.value) < 1e-10:
             return float('inf')
         return self.uncertainty / abs(self.value)
-    
+
     @property
     def relative_uncertainty_percent(self) -> float:
-        """Relative uncertainty as percentage."""
+        """Relative standard uncertainty as percentage."""
         return self.relative_uncertainty * 100
-    
+
+    @property
+    def expanded_uncertainty(self) -> float:
+        """Expanded uncertainty U = k * u(y)."""
+        return self.coverage_factor * self.uncertainty
+
+    def at_confidence(self, confidence: float = 0.95) -> 'MeasurementWithUncertainty':
+        """
+        Return a copy with expanded uncertainty at specified confidence level.
+
+        Uses normal distribution k-factors:
+        - 68.27%: k=1.0
+        - 90%:    k=1.645
+        - 95%:    k=1.96 (approximate, exact for large DoF)
+        - 95.45%: k=2.0
+        - 99%:    k=2.576
+        - 99.73%: k=3.0
+
+        For small degrees of freedom, uses t-distribution.
+        """
+        if self.degrees_of_freedom is not None and self.degrees_of_freedom < 30:
+            from scipy import stats
+            k = stats.t.ppf((1 + confidence) / 2, df=self.degrees_of_freedom)
+        else:
+            from scipy import stats
+            k = stats.norm.ppf((1 + confidence) / 2)
+
+        return MeasurementWithUncertainty(
+            value=self.value,
+            uncertainty=self.uncertainty,
+            unit=self.unit,
+            name=self.name,
+            coverage_factor=k,
+            confidence_level=confidence,
+            degrees_of_freedom=self.degrees_of_freedom,
+        )
+
     def __str__(self) -> str:
+        if self.coverage_factor != 1.0:
+            return (f"{self.value:.4g} ± {self.expanded_uncertainty:.4g} {self.unit} "
+                    f"(k={self.coverage_factor:.2f}, {self.confidence_level*100:.0f}%)")
         return f"{self.value:.4g} ± {self.uncertainty:.4g} {self.unit} ({self.relative_uncertainty_percent:.1f}%)"
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             f"{self.name}_value": self.value,
             f"{self.name}_uncertainty": self.uncertainty,
             f"{self.name}_rel_uncertainty_pct": self.relative_uncertainty_percent,
         }
+        if self.coverage_factor != 1.0:
+            d[f"{self.name}_coverage_factor"] = self.coverage_factor
+            d[f"{self.name}_expanded_uncertainty"] = self.expanded_uncertainty
+        return d
 
 
 def parse_uncertainty_config(config: Dict[str, Any]) -> Dict[str, SensorUncertainty]:
@@ -189,10 +238,12 @@ def parse_uncertainty_config(config: Dict[str, Any]) -> Dict[str, SensorUncertai
     for sensor_id, spec in u_config.items():
         u_type_str = spec.get('type', 'rel')
         
-        # Map string to enum
+        # Map string to enum (support both short and full names)
         type_map = {
             'abs': UncertaintyType.ABSOLUTE,
+            'absolute': UncertaintyType.ABSOLUTE,
             'rel': UncertaintyType.RELATIVE,
+            'relative': UncertaintyType.RELATIVE,
             'pct_fs': UncertaintyType.PERCENT_FS,
             'pct_rd': UncertaintyType.PERCENT_READING,
             'percent_fs': UncertaintyType.PERCENT_FS,
@@ -441,10 +492,13 @@ def calculate_cold_flow_uncertainties(
     geom_uncertainties = parse_geometry_uncertainties(config)
 
     # Get sensor role mappings (v2.4.0+ - sensor assignments moved to metadata)
+    # Fall back to legacy 'columns' if 'sensor_roles' not present
     sensor_roles = config.get('sensor_roles', {})
+    if not sensor_roles:
+        sensor_roles = config.get('columns', {})
     geom = config.get('geometry', {})
 
-    # Extract values and uncertainties (using sensor_roles, not columns)
+    # Extract values and uncertainties (using sensor_roles or legacy columns)
     p_up_col = sensor_roles.get('upstream_pressure') or sensor_roles.get('inlet_pressure')
     p_down_col = sensor_roles.get('downstream_pressure')
     mf_col = sensor_roles.get('mass_flow') or sensor_roles.get('mf')
@@ -662,10 +716,13 @@ def calculate_hot_fire_uncertainties(
     geom_uncertainties = parse_geometry_uncertainties(config)
 
     # Get sensor role mappings (v2.4.0+ - sensor assignments moved to metadata)
+    # Fall back to legacy 'columns' if 'sensor_roles' not present
     sensor_roles = config.get('sensor_roles', {})
+    if not sensor_roles:
+        sensor_roles = config.get('columns', {})
     geom = config.get('geometry', {})
 
-    # Extract values (using sensor_roles, not columns)
+    # Extract values (using sensor_roles or legacy columns)
     pc_col = sensor_roles.get('chamber_pressure')
     thrust_col = sensor_roles.get('thrust')
     mf_ox_col = sensor_roles.get('mass_flow_ox')
@@ -835,5 +892,212 @@ def format_with_uncertainty(
         u_decimals = -int(np.floor(np.log10(uncertainty))) + significant_figures - 1
     
     u_decimals = max(0, min(6, u_decimals))
-    
+
     return f"{value:.{u_decimals}f} ± {uncertainty:.{u_decimals}f}"
+
+
+# =============================================================================
+# CORRELATION-AWARE UNCERTAINTY PROPAGATION
+# =============================================================================
+
+@dataclass
+class CorrelationMatrix:
+    """
+    Correlation matrix for input quantities.
+
+    Used when input uncertainties are not independent (e.g., two pressure
+    sensors sharing the same calibration reference).
+    """
+    variables: List[str]
+    matrix: np.ndarray
+
+    def __post_init__(self):
+        n = len(self.variables)
+        if self.matrix.shape != (n, n):
+            raise ValueError(f"Matrix shape {self.matrix.shape} doesn't match {n} variables")
+
+    def get_correlation(self, var_a: str, var_b: str) -> float:
+        """Get correlation coefficient between two variables."""
+        i = self.variables.index(var_a)
+        j = self.variables.index(var_b)
+        return float(self.matrix[i, j])
+
+    @classmethod
+    def identity(cls, variables: List[str]) -> 'CorrelationMatrix':
+        """Create uncorrelated (identity) matrix."""
+        n = len(variables)
+        return cls(variables=variables, matrix=np.eye(n))
+
+
+def propagate_with_correlation(
+    partial_derivatives: Dict[str, float],
+    uncertainties: Dict[str, float],
+    correlation: Optional[CorrelationMatrix] = None,
+) -> float:
+    """
+    Propagate uncertainties with correlation using the GUM law of propagation.
+
+    u_c^2 = sum_i (df/dx_i)^2 * u(x_i)^2
+           + 2 * sum_{i<j} (df/dx_i)(df/dx_j) * u(x_i) * u(x_j) * r(x_i, x_j)
+
+    Args:
+        partial_derivatives: {variable_name: df/dx_i} sensitivity coefficients
+        uncertainties: {variable_name: u(x_i)} standard uncertainties
+        correlation: Optional correlation matrix between variables
+
+    Returns:
+        Combined standard uncertainty u_c
+    """
+    variables = list(partial_derivatives.keys())
+    n = len(variables)
+
+    # Build arrays
+    c = np.array([partial_derivatives[v] for v in variables])
+    u = np.array([uncertainties.get(v, 0.0) for v in variables])
+
+    # Uncorrelated terms
+    u_c_sq = np.sum((c * u) ** 2)
+
+    # Correlated terms (only if correlation matrix provided)
+    if correlation is not None:
+        for i in range(n):
+            for j in range(i + 1, n):
+                vi, vj = variables[i], variables[j]
+                if vi in correlation.variables and vj in correlation.variables:
+                    r_ij = correlation.get_correlation(vi, vj)
+                    u_c_sq += 2 * c[i] * c[j] * u[i] * u[j] * r_ij
+
+    return np.sqrt(max(0.0, u_c_sq))
+
+
+# =============================================================================
+# MONTE CARLO UNCERTAINTY ENGINE
+# =============================================================================
+
+@dataclass
+class MonteCarloResult:
+    """
+    Result of Monte Carlo uncertainty propagation.
+
+    Attributes:
+        mean: Mean of MC samples
+        std: Standard deviation of MC samples
+        percentiles: Dictionary of percentile values (e.g., {2.5: val, 97.5: val})
+        n_samples: Number of MC samples used
+        samples: Raw MC output samples (optional, for diagnostics)
+    """
+    mean: float
+    std: float
+    percentiles: Dict[float, float]
+    n_samples: int
+    samples: Optional[np.ndarray] = None
+
+    def to_measurement(self, unit: str = "", name: str = "",
+                       confidence: float = 0.95) -> MeasurementWithUncertainty:
+        """Convert to MeasurementWithUncertainty using MC statistics."""
+        # Estimate coverage factor from MC distribution
+        lower_p = (1 - confidence) / 2 * 100
+        upper_p = (1 + confidence) / 2 * 100
+        half_interval = (self.percentiles.get(upper_p, self.mean + 2 * self.std)
+                        - self.percentiles.get(lower_p, self.mean - 2 * self.std)) / 2
+        k = half_interval / self.std if self.std > 0 else 2.0
+
+        return MeasurementWithUncertainty(
+            value=self.mean,
+            uncertainty=self.std,
+            unit=unit,
+            name=name,
+            coverage_factor=k,
+            confidence_level=confidence,
+        )
+
+
+def monte_carlo_propagation(
+    func,
+    input_means: Dict[str, float],
+    input_uncertainties: Dict[str, float],
+    correlation: Optional[CorrelationMatrix] = None,
+    n_samples: int = 10000,
+    seed: Optional[int] = None,
+    return_samples: bool = False,
+) -> MonteCarloResult:
+    """
+    Monte Carlo uncertainty propagation for arbitrary functions.
+
+    Samples input distributions (assumed normal), evaluates the function,
+    and computes output statistics.
+
+    Args:
+        func: Callable that takes **kwargs of input variables and returns a float
+        input_means: {variable_name: mean_value}
+        input_uncertainties: {variable_name: standard_uncertainty}
+        correlation: Optional correlation matrix between inputs
+        n_samples: Number of Monte Carlo samples
+        seed: Random seed for reproducibility
+        return_samples: If True, include raw samples in result
+
+    Returns:
+        MonteCarloResult with output statistics
+    """
+    rng = np.random.default_rng(seed)
+    variables = list(input_means.keys())
+    n_vars = len(variables)
+
+    means = np.array([input_means[v] for v in variables])
+    stds = np.array([input_uncertainties.get(v, 0.0) for v in variables])
+
+    # Generate correlated or uncorrelated samples
+    if correlation is not None:
+        # Build covariance matrix from correlation and standard deviations
+        cov = np.outer(stds, stds) * correlation.matrix
+        samples = rng.multivariate_normal(means, cov, size=n_samples)
+    else:
+        # Independent normal samples
+        samples = rng.normal(
+            loc=means,
+            scale=stds,
+            size=(n_samples, n_vars)
+        )
+
+    # Evaluate function for each sample
+    outputs = np.zeros(n_samples)
+    for i in range(n_samples):
+        kwargs = {variables[j]: samples[i, j] for j in range(n_vars)}
+        try:
+            outputs[i] = func(**kwargs)
+        except (ValueError, ZeroDivisionError, FloatingPointError):
+            outputs[i] = np.nan
+
+    # Remove failed evaluations
+    valid = ~np.isnan(outputs) & ~np.isinf(outputs)
+    valid_outputs = outputs[valid]
+
+    if len(valid_outputs) < 100:
+        warnings.warn(
+            f"Monte Carlo: only {len(valid_outputs)}/{n_samples} valid samples. "
+            f"Results may be unreliable."
+        )
+
+    if len(valid_outputs) == 0:
+        return MonteCarloResult(
+            mean=0.0, std=float('inf'),
+            percentiles={}, n_samples=0,
+        )
+
+    # Compute statistics
+    mean = float(np.mean(valid_outputs))
+    std = float(np.std(valid_outputs, ddof=1))
+
+    percentile_levels = [0.5, 2.5, 5.0, 16.0, 25.0, 50.0, 75.0, 84.0, 95.0, 97.5, 99.5]
+    percentiles = {
+        p: float(np.percentile(valid_outputs, p))
+        for p in percentile_levels
+    }
+
+    return MonteCarloResult(
+        mean=mean,
+        std=std,
+        percentiles=percentiles,
+        n_samples=len(valid_outputs),
+        samples=valid_outputs if return_samples else None,
+    )

@@ -288,6 +288,9 @@ class PluginRegistry:
     2. Entry-point based discovery (via setuptools) - for pip-installable plugins
 
     Plugins are loaded lazily on first access and cached.
+
+    Note: Uses class-level state (singleton pattern). Call clear() between
+    tests to reset registry state.
     """
 
     _plugins: List[AnalysisPlugin] = []
@@ -299,22 +302,23 @@ class PluginRegistry:
         """
         Manually register a plugin instance.
 
+        If a plugin with the same slug is already registered, it will be
+        silently replaced (supports module re-imports during testing).
+
         Args:
             plugin: Plugin instance implementing AnalysisPlugin protocol
-
-        Raises:
-            ValueError: If plugin with same slug already registered
         """
         # Validate plugin implements protocol
         if not isinstance(plugin, AnalysisPlugin):
             raise TypeError(f"Plugin must implement AnalysisPlugin protocol, got {type(plugin)}")
 
-        # Check for duplicate slug
+        # Replace existing plugin with same slug (idempotent registration)
         if plugin.metadata.slug in cls._plugin_map:
             existing = cls._plugin_map[plugin.metadata.slug]
-            raise ValueError(
-                f"Plugin slug '{plugin.metadata.slug}' already registered "
-                f"(existing: {existing.metadata.name} v{existing.metadata.version})"
+            cls._plugins = [p for p in cls._plugins if p.metadata.slug != plugin.metadata.slug]
+            logger.info(
+                f"Replacing plugin: {existing.metadata.name} v{existing.metadata.version} "
+                f"-> {plugin.metadata.name} v{plugin.metadata.version}"
             )
 
         cls._plugins.append(plugin)

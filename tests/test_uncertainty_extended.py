@@ -30,6 +30,10 @@ from core.uncertainty import (
     calculate_statistical_uncertainty,
     combine_uncertainties,
     get_fluid_density_and_uncertainty,
+    CorrelationMatrix,
+    propagate_with_correlation,
+    monte_carlo_propagation,
+    MonteCarloResult,
 )
 
 
@@ -588,6 +592,262 @@ class TestGetFluidDensityAndUncertainty:
         print(f"[PASS] Default density: {density}")
 
 
+class TestCoverageFactor:
+    """Test GUM-aligned coverage factor support."""
+
+    def test_default_coverage_factor(self):
+        """Test default coverage factor is k=1."""
+        meas = MeasurementWithUncertainty(value=100.0, uncertainty=5.0)
+        assert meas.coverage_factor == 1.0
+        assert meas.expanded_uncertainty == 5.0
+
+        print("[PASS] Default coverage factor k=1")
+
+    def test_expanded_uncertainty(self):
+        """Test expanded uncertainty with k=2."""
+        meas = MeasurementWithUncertainty(
+            value=100.0, uncertainty=5.0, coverage_factor=2.0
+        )
+        assert meas.expanded_uncertainty == 10.0
+
+        print("[PASS] Expanded uncertainty U = k*u = 10.0")
+
+    def test_at_confidence_95(self):
+        """Test conversion to 95% confidence level."""
+        meas = MeasurementWithUncertainty(value=100.0, uncertainty=5.0)
+        meas_95 = meas.at_confidence(0.95)
+
+        # k should be approximately 1.96 for normal distribution
+        assert abs(meas_95.coverage_factor - 1.96) < 0.01
+        assert meas_95.confidence_level == 0.95
+        assert abs(meas_95.expanded_uncertainty - 5.0 * 1.96) < 0.1
+
+        print(f"[PASS] 95% confidence: k={meas_95.coverage_factor:.3f}, U={meas_95.expanded_uncertainty:.2f}")
+
+    def test_at_confidence_99(self):
+        """Test conversion to 99% confidence level."""
+        meas = MeasurementWithUncertainty(value=100.0, uncertainty=5.0)
+        meas_99 = meas.at_confidence(0.99)
+
+        # k should be approximately 2.576 for normal distribution
+        assert abs(meas_99.coverage_factor - 2.576) < 0.01
+        assert meas_99.expanded_uncertainty > meas.at_confidence(0.95).expanded_uncertainty
+
+        print(f"[PASS] 99% confidence: k={meas_99.coverage_factor:.3f}")
+
+    def test_at_confidence_with_dof(self):
+        """Test confidence with small degrees of freedom (t-distribution)."""
+        meas = MeasurementWithUncertainty(
+            value=100.0, uncertainty=5.0, degrees_of_freedom=5
+        )
+        meas_95 = meas.at_confidence(0.95)
+
+        # For DoF=5, t-distribution k should be ~2.571 (> 1.96)
+        assert meas_95.coverage_factor > 2.0
+        assert meas_95.coverage_factor > 1.96  # Wider than normal
+
+        print(f"[PASS] Small DoF (5): k={meas_95.coverage_factor:.3f} (> 1.96)")
+
+    def test_to_dict_with_coverage(self):
+        """Test serialization includes coverage factor when non-default."""
+        meas = MeasurementWithUncertainty(
+            value=100.0, uncertainty=5.0, name='test',
+            coverage_factor=2.0
+        )
+
+        d = meas.to_dict()
+        assert 'test_coverage_factor' in d
+        assert 'test_expanded_uncertainty' in d
+        assert d['test_coverage_factor'] == 2.0
+        assert d['test_expanded_uncertainty'] == 10.0
+
+        print("[PASS] Serialization includes coverage factor")
+
+
+class TestCorrelationMatrix:
+    """Test correlation-aware uncertainty propagation."""
+
+    def test_identity_correlation(self):
+        """Test identity (uncorrelated) matrix."""
+        corr = CorrelationMatrix.identity(['a', 'b', 'c'])
+        assert corr.get_correlation('a', 'a') == 1.0
+        assert corr.get_correlation('a', 'b') == 0.0
+
+        print("[PASS] Identity correlation matrix")
+
+    def test_propagation_uncorrelated(self):
+        """Test propagation matches RSS for uncorrelated inputs."""
+        # f = a + b, df/da = 1, df/db = 1
+        partials = {'a': 1.0, 'b': 1.0}
+        uncertainties = {'a': 3.0, 'b': 4.0}
+
+        u = propagate_with_correlation(partials, uncertainties)
+        expected = np.sqrt(3**2 + 4**2)  # 5.0
+
+        assert abs(u - expected) < 1e-10
+
+        print(f"[PASS] Uncorrelated propagation: {u:.4f} (expected {expected:.4f})")
+
+    def test_propagation_fully_correlated(self):
+        """Test propagation with fully correlated inputs."""
+        # f = a - b, df/da = 1, df/db = -1
+        # If a and b are perfectly correlated (r=1):
+        # u_c^2 = u_a^2 + u_b^2 + 2*1*(-1)*u_a*u_b*1 = u_a^2 + u_b^2 - 2*u_a*u_b = (u_a - u_b)^2
+        partials = {'a': 1.0, 'b': -1.0}
+        uncertainties = {'a': 3.0, 'b': 3.0}
+        corr = CorrelationMatrix(
+            variables=['a', 'b'],
+            matrix=np.array([[1.0, 1.0], [1.0, 1.0]])
+        )
+
+        u = propagate_with_correlation(partials, uncertainties, corr)
+        # (3)^2 + (3)^2 + 2*(1)*(-1)*(3)*(3)*(1) = 9 + 9 - 18 = 0
+        assert abs(u) < 1e-10
+
+        print(f"[PASS] Fully correlated cancellation: u={u:.6f}")
+
+    def test_propagation_partial_correlation(self):
+        """Test propagation with partial correlation."""
+        partials = {'a': 1.0, 'b': 1.0}
+        uncertainties = {'a': 1.0, 'b': 1.0}
+        corr = CorrelationMatrix(
+            variables=['a', 'b'],
+            matrix=np.array([[1.0, 0.5], [0.5, 1.0]])
+        )
+
+        u = propagate_with_correlation(partials, uncertainties, corr)
+
+        # u^2 = 1 + 1 + 2*1*1*1*1*0.5 = 3, u = sqrt(3)
+        expected = np.sqrt(3.0)
+        assert abs(u - expected) < 1e-10
+
+        # Should be larger than uncorrelated case
+        u_uncorr = propagate_with_correlation(partials, uncertainties)
+        assert u > u_uncorr
+
+        print(f"[PASS] Partial correlation: {u:.4f} > uncorrelated {u_uncorr:.4f}")
+
+
+class TestMonteCarloEngine:
+    """Test Monte Carlo uncertainty propagation."""
+
+    def test_mc_linear_function(self):
+        """Test MC on simple linear function f = 2*a + 3*b."""
+        def func(a, b):
+            return 2 * a + 3 * b
+
+        result = monte_carlo_propagation(
+            func=func,
+            input_means={'a': 10.0, 'b': 5.0},
+            input_uncertainties={'a': 1.0, 'b': 0.5},
+            n_samples=50000,
+            seed=42,
+        )
+
+        # Expected: mean = 2*10 + 3*5 = 35
+        # Expected std: sqrt((2*1)^2 + (3*0.5)^2) = sqrt(4+2.25) = sqrt(6.25) = 2.5
+        assert abs(result.mean - 35.0) < 0.1
+        assert abs(result.std - 2.5) < 0.1
+        assert result.n_samples > 49000
+
+        print(f"[PASS] MC linear: mean={result.mean:.2f}, std={result.std:.3f}")
+
+    def test_mc_nonlinear_function(self):
+        """Test MC on nonlinear function (Cd formula)."""
+        def cd_func(mass_flow, area, delta_p, density):
+            return mass_flow / (area * np.sqrt(2 * density * delta_p))
+
+        result = monte_carlo_propagation(
+            func=cd_func,
+            input_means={'mass_flow': 0.01, 'area': 1e-6, 'delta_p': 1e5, 'density': 1000},
+            input_uncertainties={'mass_flow': 1e-4, 'area': 1e-8, 'delta_p': 1e3, 'density': 5},
+            n_samples=20000,
+            seed=42,
+        )
+
+        assert result.mean > 0
+        assert result.std > 0
+        assert 2.5 in result.percentiles or 97.5 in result.percentiles
+
+        print(f"[PASS] MC nonlinear (Cd): {result.mean:.4f} ± {result.std:.4f}")
+
+    def test_mc_to_measurement(self):
+        """Test conversion from MC result to MeasurementWithUncertainty."""
+        def func(a):
+            return a * 2
+
+        result = monte_carlo_propagation(
+            func=func,
+            input_means={'a': 50.0},
+            input_uncertainties={'a': 5.0},
+            n_samples=10000,
+            seed=42,
+        )
+
+        meas = result.to_measurement(unit='bar', name='test', confidence=0.95)
+
+        assert meas.name == 'test'
+        assert meas.unit == 'bar'
+        assert abs(meas.value - 100.0) < 1.0
+        assert meas.uncertainty > 0
+        assert meas.confidence_level == 0.95
+
+        print(f"[PASS] MC to measurement: {meas}")
+
+    def test_mc_with_correlation(self):
+        """Test MC with correlated inputs."""
+        def func(a, b):
+            return a - b
+
+        # With perfect correlation, a-b should have very small spread
+        corr = CorrelationMatrix(
+            variables=['a', 'b'],
+            matrix=np.array([[1.0, 0.99], [0.99, 1.0]])
+        )
+
+        result_corr = monte_carlo_propagation(
+            func=func,
+            input_means={'a': 100.0, 'b': 100.0},
+            input_uncertainties={'a': 5.0, 'b': 5.0},
+            correlation=corr,
+            n_samples=20000,
+            seed=42,
+        )
+
+        result_uncorr = monte_carlo_propagation(
+            func=func,
+            input_means={'a': 100.0, 'b': 100.0},
+            input_uncertainties={'a': 5.0, 'b': 5.0},
+            n_samples=20000,
+            seed=42,
+        )
+
+        # Correlated case should have MUCH smaller spread
+        assert result_corr.std < result_uncorr.std * 0.3
+
+        print(f"[PASS] MC correlated std={result_corr.std:.3f} << uncorrelated std={result_uncorr.std:.3f}")
+
+    def test_mc_reproducible_with_seed(self):
+        """Test MC reproducibility with seed."""
+        def func(a):
+            return a ** 2
+
+        r1 = monte_carlo_propagation(
+            func=func, input_means={'a': 10.0},
+            input_uncertainties={'a': 1.0}, seed=123,
+        )
+
+        r2 = monte_carlo_propagation(
+            func=func, input_means={'a': 10.0},
+            input_uncertainties={'a': 1.0}, seed=123,
+        )
+
+        assert r1.mean == r2.mean
+        assert r1.std == r2.std
+
+        print("[PASS] MC reproducible with seed")
+
+
 def run_all_tests():
     """Run all extended uncertainty tests."""
     print("=" * 60)
@@ -603,6 +863,9 @@ def run_all_tests():
         TestSensorUncertaintyMethods,
         TestMeasurementWithUncertainty,
         TestGetFluidDensityAndUncertainty,
+        TestCoverageFactor,
+        TestCorrelationMatrix,
+        TestMonteCarloEngine,
     ]
 
     passed = 0

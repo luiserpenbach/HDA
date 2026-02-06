@@ -121,15 +121,42 @@ class ColdFlowPlugin:
             ],
         )
 
+    @staticmethod
+    def _resolve_sensor_roles(config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Resolve sensor mappings from either sensor_roles (v2.4.0+) or columns (legacy).
+
+        If sensor_roles is present, use it directly.
+        If only columns is present (legacy config), promote it to sensor_roles
+        so downstream code has a uniform interface.
+
+        Args:
+            config: Configuration dictionary (may be mutated)
+
+        Returns:
+            The config dict with sensor_roles guaranteed to be populated
+        """
+        sensor_roles = config.get('sensor_roles', {})
+        columns = config.get('columns', {})
+
+        if not sensor_roles and columns:
+            # Legacy config: promote columns to sensor_roles for uniform access
+            config['sensor_roles'] = dict(columns)
+
+        return config
+
     def validate_config(self, config: Dict[str, Any]) -> None:
         """
         Validate cold flow specific configuration.
 
         Checks:
         - Test type is 'cold_flow'
-        - Required sensors are mapped
+        - Required sensors are mapped (via sensor_roles or legacy columns)
         - Geometry parameters present
         - Uncertainty specifications present
+
+        Supports both v2.4.0+ (sensor_roles in metadata) and legacy
+        (columns in config) formats for backward compatibility.
 
         Args:
             config: Configuration dictionary
@@ -140,42 +167,41 @@ class ColdFlowPlugin:
         # Use existing validation (already comprehensive)
         validated = validate_config_simple(config, 'cold_flow')
 
-        # Check sensor_roles in metadata (ALL sensor assignments should be in metadata, NOT config)
-        sensor_roles = config.get('sensor_roles', {})
+        # Resolve sensor_roles from legacy columns if needed
+        self._resolve_sensor_roles(config)
 
-        if not sensor_roles:
+        sensor_roles = config.get('sensor_roles', {})
+        columns = config.get('columns', {})
+
+        # Accept either sensor_roles (v2.4.0+) or columns (legacy)
+        if not sensor_roles and not columns:
             raise ValueError(
-                "Cold flow analysis requires 'sensor_roles' in metadata. "
-                "Add to metadata.json: \"sensor_roles\": {\"upstream_pressure\": \"YOUR-PT-SENSOR\", \"mass_flow\": \"YOUR-FM-SENSOR\"}"
+                "Cold flow analysis requires sensor mappings. "
+                "Provide 'sensor_roles' in metadata or 'columns' in config. "
+                "Example: \"sensor_roles\": {\"upstream_pressure\": \"YOUR-PT-SENSOR\", \"mass_flow\": \"YOUR-FM-SENSOR\"}"
             )
 
-        # Check for required pressure sensor
+        # Check for required pressure sensor (in either source)
         has_pressure = (
             sensor_roles.get('upstream_pressure') is not None or
             sensor_roles.get('inlet_pressure') is not None
         )
         if not has_pressure:
             raise ValueError(
-                "Cold flow analysis requires 'upstream_pressure' or 'inlet_pressure' in metadata sensor_roles. "
-                "Add to metadata.json: \"sensor_roles\": {\"upstream_pressure\": \"YOUR-PT-SENSOR\"}"
+                "Cold flow analysis requires 'upstream_pressure' or 'inlet_pressure' in "
+                "sensor_roles (metadata) or columns (config)."
             )
 
-        # Check for required flow sensor
+        # Check for required flow sensor (in either source)
         has_flow = (
             sensor_roles.get('mass_flow') is not None or
             sensor_roles.get('mf') is not None
         )
         if not has_flow:
             raise ValueError(
-                "Cold flow analysis requires 'mass_flow' or 'mf' in metadata sensor_roles. "
-                "Add to metadata.json: \"sensor_roles\": {\"mass_flow\": \"YOUR-FM-SENSOR\"}"
+                "Cold flow analysis requires 'mass_flow' or 'mf' in "
+                "sensor_roles (metadata) or columns (config)."
             )
-
-        # Check geometry (needed for Cd calculation)
-        geom = config.get('geometry', {})
-        if not geom.get('orifice_area_mm2'):
-            # Warning, not error - can still analyze without Cd
-            pass
 
     def run_qc_checks(
         self,
