@@ -611,6 +611,146 @@ def success_with_next_steps(message: str, next_steps: List[str]):
         st.markdown("</div>", unsafe_allow_html=True)
 
 
+# =============================================================================
+# Phase 2 Feature Widgets
+# =============================================================================
+
+def data_upload_widget(
+    label: str = "Upload Test Data",
+    accept_types: List[str] = ['csv'],
+    key_suffix: str = "",
+    show_preview: bool = True,
+) -> Optional[pd.DataFrame]:
+    """
+    Reusable data upload widget with preview and column info.
+
+    Args:
+        label: Upload button label
+        accept_types: Accepted file types
+        key_suffix: Suffix for widget keys
+        show_preview: Whether to show data preview
+
+    Returns:
+        DataFrame or None
+    """
+    uploaded = st.file_uploader(label, type=accept_types,
+                                key=f"data_upload_{key_suffix}")
+    if uploaded is not None:
+        try:
+            df = pd.read_csv(uploaded)
+            if show_preview:
+                with st.expander(f"Data Preview ({len(df)} rows, {len(df.columns)} cols)", expanded=False):
+                    st.dataframe(df.head(10), use_container_width=True, hide_index=True)
+            return df
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
+            return None
+    return None
+
+
+def channel_selector_widget(
+    df: pd.DataFrame,
+    label: str = "Select Channel",
+    numeric_only: bool = True,
+    exclude_time: bool = True,
+    key_suffix: str = "",
+) -> Optional[str]:
+    """
+    Select a data channel/column from a DataFrame.
+
+    Args:
+        df: DataFrame with columns to select from
+        label: Widget label
+        numeric_only: Only show numeric columns
+        exclude_time: Exclude common time columns
+        key_suffix: Unique key suffix
+
+    Returns:
+        Selected column name or None
+    """
+    cols = list(df.columns)
+    if numeric_only:
+        cols = [c for c in cols if df[c].dtype in ['float64', 'float32', 'int64', 'int32']]
+    if exclude_time:
+        time_names = {'time', 'time_s', 'time_ms', 'timestamp', 'Time', 'TIME'}
+        cols = [c for c in cols if c not in time_names]
+
+    if not cols:
+        st.warning("No suitable columns found in data.")
+        return None
+
+    return st.selectbox(label, cols, key=f"channel_{key_suffix}")
+
+
+def time_column_selector_widget(
+    df: pd.DataFrame,
+    key_suffix: str = "",
+) -> str:
+    """
+    Select the time column from a DataFrame, with auto-detection.
+
+    Returns:
+        Selected time column name
+    """
+    time_candidates = [c for c in df.columns if c.lower() in
+                       {'time', 'time_s', 'time_ms', 'timestamp', 't'}]
+
+    if time_candidates:
+        default_idx = 0
+    else:
+        time_candidates = list(df.columns)
+        default_idx = 0
+
+    return st.selectbox("Time Column", time_candidates, index=default_idx,
+                        key=f"time_col_{key_suffix}")
+
+
+def render_phase_timeline(phases: list):
+    """
+    Render a visual phase timeline using HTML/CSS.
+
+    Args:
+        phases: List of PhaseResult objects
+    """
+    if not phases:
+        return
+
+    total_duration = sum(getattr(p, 'duration_s', p.get('duration_s', 0))
+                         if isinstance(p, dict) else p.duration_s for p in phases)
+    if total_duration <= 0:
+        return
+
+    phase_colors = {
+        'pretest': '#94a3b8', 'startup': '#f59e0b', 'transient': '#f97316',
+        'steady_state': '#22c55e', 'shutdown': '#ef4444', 'cooldown': '#6366f1',
+    }
+
+    bars = []
+    for p in phases:
+        if hasattr(p, 'phase'):
+            name = p.phase.value if hasattr(p.phase, 'value') else str(p.phase)
+            dur = p.duration_s
+        else:
+            name = p.get('phase', 'unknown')
+            dur = p.get('duration_s', 0)
+
+        pct = (dur / total_duration * 100) if total_duration > 0 else 0
+        color = phase_colors.get(name, '#71717a')
+        bars.append(
+            f'<div style="width:{pct:.1f}%; background:{color}; height:36px; '
+            f'display:flex; align-items:center; justify-content:center; '
+            f'color:white; font-size:0.7rem; font-weight:600; '
+            f'border-radius:3px; min-width:40px;" '
+            f'title="{name}: {dur:.3f}s">{name.replace("_"," ").title()}</div>'
+        )
+
+    st.markdown(
+        '<div style="display:flex; gap:2px; margin:0.5rem 0 1rem 0; border-radius:6px; overflow:hidden;">'
+        + ''.join(bars) + '</div>',
+        unsafe_allow_html=True
+    )
+
+
 def error_with_troubleshooting(error_message: str, suggestions: List[str]):
     """
     Display error message with troubleshooting suggestions.

@@ -810,3 +810,251 @@ def generate_control_chart_html(analysis: 'SPCAnalysis') -> str:
     )
     
     return fig.to_html(full_html=False, include_plotlyjs='cdn')
+
+
+# =============================================================================
+# PHASE 2 REPORT SECTIONS
+# =============================================================================
+
+def generate_transient_section(phases: list, startup_metrics: Optional[Dict] = None,
+                                shutdown_metrics: Optional[Dict] = None) -> str:
+    """
+    Generate HTML section for transient analysis results.
+
+    Args:
+        phases: List of PhaseResult objects or dicts
+        startup_metrics: Dict from analyze_startup_transient()
+        shutdown_metrics: Dict from analyze_shutdown_transient()
+
+    Returns:
+        HTML string for transient analysis section
+    """
+    html_parts = ['<div class="section"><h2>Transient Analysis</h2>']
+
+    # Phase timeline table
+    html_parts.append('<h3>Test Phase Segmentation</h3>')
+    html_parts.append('''
+    <table>
+        <thead>
+            <tr><th>Phase</th><th>Start (ms)</th><th>End (ms)</th><th>Duration (s)</th><th>Quality</th></tr>
+        </thead>
+        <tbody>
+    ''')
+
+    for phase in phases:
+        if hasattr(phase, 'phase'):
+            name = phase.phase.value if hasattr(phase.phase, 'value') else str(phase.phase)
+            start = phase.start_ms
+            end = phase.end_ms
+            dur = phase.duration_s
+            quality = getattr(phase, 'quality', 'N/A')
+        else:
+            name = phase.get('phase', 'unknown')
+            start = phase.get('start_ms', 0)
+            end = phase.get('end_ms', 0)
+            dur = phase.get('duration_s', 0)
+            quality = phase.get('quality', 'N/A')
+
+        badge_class = 'status-pass' if quality in ('good', 'N/A') else 'status-warn'
+        html_parts.append(f'''
+            <tr>
+                <td><strong>{name}</strong></td>
+                <td>{start:.0f}</td>
+                <td>{end:.0f}</td>
+                <td>{dur:.3f}</td>
+                <td><span class="status-badge {badge_class}">{quality}</span></td>
+            </tr>
+        ''')
+
+    html_parts.append('</tbody></table>')
+
+    # Startup transient metrics
+    if startup_metrics:
+        html_parts.append('<h3>Startup Transient Characterization</h3>')
+        html_parts.append('<div class="card-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 15px 0;">')
+        metric_labels = {
+            'rise_time_s': ('Rise Time', 's'),
+            'rise_time_10_90_s': ('Rise Time (10-90%)', 's'),
+            'time_to_peak_s': ('Time to Peak', 's'),
+            'overshoot_pct': ('Overshoot', '%'),
+            'settling_time_s': ('Settling Time', 's'),
+        }
+        for key, (label, unit) in metric_labels.items():
+            if key in startup_metrics and startup_metrics[key] is not None:
+                val = startup_metrics[key]
+                html_parts.append(f'''
+                    <div class="summary-card">
+                        <div class="summary-label">{label}</div>
+                        <div class="summary-value">{val:.4f} {unit}</div>
+                    </div>
+                ''')
+        html_parts.append('</div>')
+
+    # Shutdown transient metrics
+    if shutdown_metrics:
+        html_parts.append('<h3>Shutdown Transient Characterization</h3>')
+        html_parts.append('<div class="card-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 15px 0;">')
+        metric_labels = {
+            'decay_time_s': ('Decay Time', 's'),
+            'decay_time_90_10_s': ('Decay Time (90-10%)', 's'),
+            'tail_off_impulse': ('Tail-off Impulse', 'N*s'),
+            'residual_pct': ('Residual', '%'),
+        }
+        for key, (label, unit) in metric_labels.items():
+            if key in shutdown_metrics and shutdown_metrics[key] is not None:
+                val = shutdown_metrics[key]
+                html_parts.append(f'''
+                    <div class="summary-card">
+                        <div class="summary-label">{label}</div>
+                        <div class="summary-value">{val:.4f} {unit}</div>
+                    </div>
+                ''')
+        html_parts.append('</div>')
+
+    html_parts.append('</div>')
+    return ''.join(html_parts)
+
+
+def generate_frequency_section(spectral_result=None, harmonics: Optional[list] = None,
+                                resonances: Optional[list] = None,
+                                band_powers: Optional[Dict] = None) -> str:
+    """
+    Generate HTML section for frequency analysis results.
+
+    Args:
+        spectral_result: SpectralResult object
+        harmonics: List of HarmonicInfo objects
+        resonances: List of resonance dicts
+        band_powers: Dict of frequency band powers
+
+    Returns:
+        HTML string for frequency analysis section
+    """
+    html_parts = ['<div class="section"><h2>Frequency Analysis</h2>']
+
+    # Spectral summary
+    if spectral_result is not None:
+        html_parts.append('<h3>Spectral Summary</h3>')
+        html_parts.append('<div class="card-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 15px 0;">')
+        html_parts.append(f'''
+            <div class="summary-card">
+                <div class="summary-label">Dominant Frequency</div>
+                <div class="summary-value">{spectral_result.dominant_frequency:.2f} Hz</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-label">Dominant Power</div>
+                <div class="summary-value">{spectral_result.dominant_power:.4e}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-label">Total Power</div>
+                <div class="summary-value">{spectral_result.total_power:.4e}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-label">Bandwidth</div>
+                <div class="summary-value">{spectral_result.bandwidth:.2f} Hz</div>
+            </div>
+        ''')
+        html_parts.append('</div>')
+
+    # Harmonics table
+    if harmonics:
+        html_parts.append('<h3>Detected Harmonics</h3>')
+        html_parts.append('''
+        <table>
+            <thead>
+                <tr><th>#</th><th>Frequency (Hz)</th><th>Power</th><th>Relative Power (%)</th></tr>
+            </thead>
+            <tbody>
+        ''')
+        for h in harmonics:
+            freq = h.frequency if hasattr(h, 'frequency') else h.get('frequency', 0)
+            power = h.power if hasattr(h, 'power') else h.get('power', 0)
+            num = h.harmonic_number if hasattr(h, 'harmonic_number') else h.get('harmonic_number', 0)
+            rel = h.relative_power if hasattr(h, 'relative_power') else h.get('relative_power', 0)
+            html_parts.append(f'''
+                <tr>
+                    <td>{num}</td><td>{freq:.2f}</td>
+                    <td>{power:.4e}</td><td>{rel*100:.1f}%</td>
+                </tr>
+            ''')
+        html_parts.append('</tbody></table>')
+
+    # Resonances
+    if resonances:
+        html_parts.append('<h3>Detected Resonances</h3>')
+        html_parts.append('''
+        <table>
+            <thead>
+                <tr><th>Frequency (Hz)</th><th>Q-Factor</th><th>Bandwidth (Hz)</th><th>Peak Power</th></tr>
+            </thead>
+            <tbody>
+        ''')
+        for r in resonances:
+            html_parts.append(f'''
+                <tr>
+                    <td>{r.get("frequency", 0):.2f}</td>
+                    <td>{r.get("q_factor", 0):.1f}</td>
+                    <td>{r.get("bandwidth", 0):.2f}</td>
+                    <td>{r.get("peak_power", 0):.4e}</td>
+                </tr>
+            ''')
+        html_parts.append('</tbody></table>')
+
+    # Band powers
+    if band_powers:
+        html_parts.append('<h3>Frequency Band Power Distribution</h3>')
+        total = sum(band_powers.values()) if band_powers.values() else 1
+        html_parts.append('''
+        <table>
+            <thead><tr><th>Band</th><th>Power</th><th>% of Total</th></tr></thead>
+            <tbody>
+        ''')
+        for band, power in band_powers.items():
+            pct = (power / total * 100) if total > 0 else 0
+            html_parts.append(f'<tr><td>{band}</td><td>{power:.4e}</td><td>{pct:.1f}%</td></tr>')
+        html_parts.append('</tbody></table>')
+
+    html_parts.append('</div>')
+    return ''.join(html_parts)
+
+
+def generate_cusum_ewma_section(cusum_result=None, ewma_result=None) -> str:
+    """
+    Generate HTML section for CUSUM and EWMA control chart results.
+
+    Args:
+        cusum_result: CUSUMResult object
+        ewma_result: EWMAResult object
+
+    Returns:
+        HTML string for advanced SPC section
+    """
+    html_parts = ['<div class="section"><h2>Advanced SPC Analysis</h2>']
+
+    if cusum_result is not None:
+        html_parts.append('<h3>CUSUM Chart Analysis</h3>')
+        status = 'PASS' if cusum_result.n_signals == 0 else 'FAIL'
+        badge = 'status-pass' if cusum_result.n_signals == 0 else 'status-fail'
+        html_parts.append(f'''
+        <p>Parameter: <strong>{cusum_result.parameter_name}</strong> |
+           Target: {cusum_result.target:.4f} |
+           k = {cusum_result.k:.2f}, h = {cusum_result.h:.2f}</p>
+        <p>Status: <span class="status-badge {badge}">{status}</span> |
+           Signals: {cusum_result.n_signals}
+           ({len(cusum_result.signals_upper)} upper, {len(cusum_result.signals_lower)} lower)</p>
+        ''')
+
+    if ewma_result is not None:
+        html_parts.append('<h3>EWMA Chart Analysis</h3>')
+        status = 'PASS' if ewma_result.n_signals == 0 else 'FAIL'
+        badge = 'status-pass' if ewma_result.n_signals == 0 else 'status-fail'
+        html_parts.append(f'''
+        <p>Parameter: <strong>{ewma_result.parameter_name}</strong> |
+           Center Line: {ewma_result.center_line:.4f} |
+           Lambda = {ewma_result.lambda_param:.2f}</p>
+        <p>Status: <span class="status-badge {badge}">{status}</span> |
+           Signals: {ewma_result.n_signals}</p>
+        ''')
+
+    html_parts.append('</div>')
+    return ''.join(html_parts)

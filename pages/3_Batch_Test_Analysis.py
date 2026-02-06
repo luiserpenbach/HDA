@@ -26,11 +26,18 @@ from core.campaign_manager_v2 import get_available_campaigns, save_to_campaign
 from core.integrated_analysis import analyze_cold_flow_test, analyze_hot_fire_test
 from core.config_manager import ConfigManager
 from core.steady_state_detection import detect_steady_state_simple, detect_steady_state_auto
+from pages._shared_styles import apply_custom_styles, render_page_header
 
 st.set_page_config(page_title="Batch Test Analysis", page_icon="BT", layout="wide")
 
-st.title("Batch Test Analysis")
-st.markdown("Process multiple test files efficiently with consistent configuration.")
+apply_custom_styles()
+
+render_page_header(
+    title="Batch Test Analysis",
+    description="Process multiple test files efficiently with consistent configuration",
+    badge_text="P1",
+    badge_type="warning"
+)
 
 # Initialize session state
 if 'batch_report' not in st.session_state:
