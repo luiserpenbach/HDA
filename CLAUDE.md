@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for Hopper Data Studio
 
-**Version**: 2.3.0
-**Last Updated**: 2026-01-16
+**Version**: 2.4.0
+**Last Updated**: 2026-02-05
 **Purpose**: Comprehensive guide for AI assistants working with the HDA codebase
 
 ---
@@ -11,14 +11,15 @@
 1. [Project Overview](#project-overview)
 2. [Technology Stack](#technology-stack)
 3. [Codebase Architecture](#codebase-architecture)
-4. [Development Workflows](#development-workflows)
-5. [Key Conventions](#key-conventions)
-6. [Common Tasks](#common-tasks)
-7. [Testing Guidelines](#testing-guidelines)
-8. [Configuration Management](#configuration-management)
-9. [Data Flow](#data-flow)
-10. [Safety and Integrity Rules](#safety-and-integrity-rules)
-11. [Troubleshooting](#troubleshooting)
+4. [Plugin Architecture](#plugin-architecture)
+5. [Development Workflows](#development-workflows)
+6. [Key Conventions](#key-conventions)
+7. [Common Tasks](#common-tasks)
+8. [Testing Guidelines](#testing-guidelines)
+9. [Configuration Management](#configuration-management)
+10. [Data Flow](#data-flow)
+11. [Safety and Integrity Rules](#safety-and-integrity-rules)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -40,11 +41,19 @@ The system is built on three **non-negotiable principles**:
 
 The codebase uses a P0/P1/P2 priority system:
 
-- **P0 (Core/Foundation)**: Traceability, Uncertainty, QC, Config Validation, Campaign Manager
+- **P0 (Core/Foundation)**: Traceability, Uncertainty, QC, Config Validation, Campaign Manager, Integrated Analysis
 - **P1 (High Priority)**: SPC, Reporting, Batch Analysis, Export
-- **P2 (Advanced)**: Anomaly Detection, Comparison, Saved Configurations
+- **P2 (Advanced)**: Anomaly Detection, Comparison, Operating Envelope
 
 **IMPORTANT**: When making changes, P0 components require extra scrutiny. Breaking P0 breaks the entire integrity system.
+
+### Version History
+
+| Version | Highlights |
+|---------|-----------|
+| 2.0.0-2.2 | Original config system (mixed hardware + test article) |
+| 2.3.0 | Configuration system v2 (active config + metadata separation) |
+| 2.4.0 | Plugin architecture Phase 1 (modular test type support) |
 
 ---
 
@@ -85,42 +94,84 @@ This is a **Python-only project**. There is no Node.js, npm, or package.json. Al
 
 ```
 HDA/
-├── app.py                      # Main Streamlit entry point (landing page)
-├── requirements.txt            # Python dependencies
+├── app.py                          # Main Streamlit entry point (landing page)
+├── requirements.txt                # Python dependencies
+├── CLAUDE.md                       # This file - AI assistant guide
+├── DESIGN_SYSTEM.md                # UI design system documentation
+├── PLUGIN_ARCHITECTURE.md          # Plugin architecture documentation
+├── README.md                       # Project overview
+├── sample_cold_flow_config.json    # Example cold flow config
+├── sample_hot_fire_test.py         # Example hot fire test script
+├── sample_test_metadata.json       # Example metadata template
 ├── .streamlit/
-│   └── config.toml            # Streamlit config (max upload 1GB)
-├── core/                       # Business logic (NO UI code here)
-│   ├── [P0] traceability.py       # SHA-256, audit trails
-│   ├── [P0] uncertainty.py        # Error propagation
-│   ├── [P0] qc_checks.py          # Quality control
-│   ├── [P0] config_validation.py  # Schema validation
-│   ├── [P0] campaign_manager_v2.py # SQLite database
-│   ├── [P0] integrated_analysis.py # High-level API
-│   ├── [P1] spc.py                # Statistical Process Control
-│   ├── [P1] reporting.py          # HTML reports
-│   ├── [P1] batch_analysis.py     # Multi-file processing
-│   ├── [P1] export.py             # Data export
-│   ├── [P2] advanced_anomaly.py   # Anomaly detection
-│   ├── [P2] comparison.py         # Test comparison
-│   └── [P2] saved_configs.py      # Config management
-├── pages/                      # Streamlit pages (UI only)
-│   ├── 1_Test_Explorer.py
-│   ├── 2_Single_Test_Analysis.py  # Most complex (85k lines)
-│   ├── 3_Batch_Test_Analysis.py
-│   ├── 4_Analysis_by_Campaign.py
-│   ├── 5_Analysis_by_System.py
-│   ├── 6_Analysis_Tools.py
-│   ├── 7_Configurations.py
-│   ├── _shared_sidebar.py         # Global context selector
-│   └── _shared_widgets.py         # Reusable UI components
-├── tests/                      # Test suite
-│   ├── test_p0_components.py      # Core integrity tests
-│   ├── test_p1_components.py      # Analysis/reporting tests
-│   ├── test_p2_components.py      # Advanced features
-│   └── test_fluid_properties.py
-├── saved_configs/              # Testbench hardware configs
-├── campaigns/                  # SQLite campaign databases
-└── scripts/                    # Utility scripts
+│   └── config.toml                 # Streamlit config (max upload 1GB, theme)
+├── core/                           # Business logic (NO UI code here)
+│   ├── __init__.py                     # Module exports, __version__ = "2.4.0"
+│   │
+│   ├── [P0] traceability.py           # SHA-256 hashing, audit trails
+│   ├── [P0] uncertainty.py            # Error propagation (analytical + Monte Carlo)
+│   ├── [P0] qc_checks.py             # Quality control (7 check categories)
+│   ├── [P0] config_validation.py      # Schema validation (dataclass-based)
+│   ├── [P0] campaign_manager_v2.py    # SQLite database, SCHEMA_VERSION = 2
+│   ├── [P0] integrated_analysis.py    # High-level API (AnalysisResult)
+│   │
+│   ├── [P1] spc.py                    # Statistical Process Control
+│   ├── [P1] reporting.py             # HTML report generation
+│   ├── [P1] batch_analysis.py        # Multi-file parallel processing
+│   ├── [P1] export.py                # CSV, Excel, JSON, Parquet export
+│   │
+│   ├── [P2] advanced_anomaly.py      # Multi-type anomaly detection
+│   ├── [P2] comparison.py            # Test-to-test comparison
+│   ├── [P2] operating_envelope.py    # Hot fire operating envelope analysis
+│   │
+│   ├── [Shared] config_manager.py        # Unified config management
+│   ├── [Shared] steady_state_detection.py # 4 detection methods (CV, ML, derivative, simple)
+│   ├── [Shared] metadata_manager.py      # Test metadata loading/validation (v2.3.0+)
+│   ├── [Shared] saved_configs.py         # Reusable testbench configs
+│   ├── [Shared] fluid_properties.py      # CoolProp wrapper with fallbacks
+│   ├── [Shared] test_metadata.py         # Test folder structure management
+│   │
+│   ├── [Plugin] plugins.py              # PluginRegistry, AnalysisPlugin protocol
+│   └── [Plugin] plugin_modules/          # Plugin implementations
+│       ├── __init__.py
+│       ├── cold_flow.py                  # ColdFlowPlugin
+│       └── hot_fire.py                   # HotFirePlugin
+│
+├── pages/                          # Streamlit pages (UI only)
+│   ├── 1_Test_Explorer.py              # Browse test folders, ingest new tests
+│   ├── 2_Single_Test_Analysis.py       # Main analysis page (97KB, most complex)
+│   ├── 3_Batch_Test_Analysis.py        # Multi-file batch processing
+│   ├── 4_Analysis_by_Campaign.py       # SPC analysis and control charts
+│   ├── 5_Analysis_by_System.py         # System-level analysis
+│   ├── 6_Analysis_Tools.py             # Advanced analysis tools
+│   ├── 7_Configurations.py             # Config management UI
+│   ├── _shared_sidebar.py              # Global context selector
+│   ├── _shared_styles.py               # shadcn-inspired design system (Zinc palette)
+│   └── _shared_widgets.py              # Reusable UI components
+│
+├── tests/                          # Comprehensive test suite (10 files)
+│   ├── test_p0_components.py           # Core integrity tests
+│   ├── test_p1_components.py           # Analysis/reporting tests
+│   ├── test_p2_components.py           # Advanced features tests
+│   ├── test_plugins.py                 # Plugin system tests
+│   ├── test_integrated_analysis.py     # End-to-end analysis tests
+│   ├── test_campaign_manager.py        # Database tests
+│   ├── test_steady_state_detection.py  # Detection method tests
+│   ├── test_fluid_properties.py        # Fluid calculation tests
+│   ├── test_uncertainty_extended.py    # Extended uncertainty tests
+│   └── test_qc_extended.py            # Extended QC tests
+│
+├── saved_configs/                  # Testbench hardware configs (JSON)
+│   ├── MTB_Injector_CF_Config.json     # Cold flow injector config
+│   └── MTB_IGN_HF_Config.json         # Hot fire igniter config
+│
+├── campaigns/                      # SQLite campaign databases
+│   ├── IGN-HF-C1-DEMO.db
+│   ├── INJ-CF-C1-Var2_Characterization.db
+│   └── INJ-CF-C1.db
+│
+└── scripts/                        # Utility scripts
+    └── migrate_configs_v2.3.py         # Config migration from v2.0-2.2 to v2.3.0
 ```
 
 ### Key Architectural Patterns
@@ -135,7 +186,7 @@ HDA/
 ```python
 # In core/integrated_analysis.py - DON'T DO THIS
 import streamlit as st
-st.write("Processing...")  # ❌ Never import streamlit in core/
+st.write("Processing...")  # Never import streamlit in core/
 ```
 
 **Good Example**:
@@ -143,8 +194,8 @@ st.write("Processing...")  # ❌ Never import streamlit in core/
 # In pages/2_Single_Test_Analysis.py
 from core.integrated_analysis import analyze_cold_flow_test
 
-result = analyze_cold_flow_test(df, config, ...)  # ✅ Core does work
-st.write(result.measurements)  # ✅ Page displays results
+result = analyze_cold_flow_test(df, config, ...)  # Core does work
+st.write(result.measurements)  # Page displays results
 ```
 
 #### 2. Dataclass-Heavy Design
@@ -170,18 +221,20 @@ class AnalysisResult:
 
 **Key Classes**:
 - `AnalysisResult`: Complete analysis output
-- `MeasurementWithUncertainty`: Metric with error bars
+- `MeasurementWithUncertainty`: Metric with error bars (value + uncertainty + unit)
 - `QCReport`: Quality control results
 - `DataTraceability`: SHA-256 hashes and audit trail
 - `SPCAnalysis`: Control chart results
 - `TestMetadata`: Test article properties
+- `PluginMetadata`: Plugin info, schema, requirements
+- `BatchAnalysisReport`: Batch processing results
 
 #### 3. High-Level API Pattern
 
 `integrated_analysis.py` provides a clean facade:
 
 ```python
-# Single function call does: QC → analysis → uncertainty → traceability
+# Single function call does: QC -> analysis -> uncertainty -> traceability
 result = analyze_cold_flow_test(
     df=df,
     config=config,
@@ -198,7 +251,67 @@ print(result.measurements['Cd'])  # MeasurementWithUncertainty object
 
 **When to use**:
 - Use `analyze_cold_flow_test()` or `analyze_hot_fire_test()` for standard workflows
+- Use `analyze_test()` for plugin-based generic analysis (Phase 1)
+- Use `quick_analyze()` for rapid analysis without full QC
 - Only call lower-level functions (`calculate_cd_uncertainty()`, etc.) for custom workflows
+
+#### 4. Protocol-Based Plugin System (v2.4.0)
+
+Test type analysis is modular via the plugin system:
+
+```python
+from core.plugins import PluginRegistry
+
+# Auto-discovers plugins from core/plugin_modules/
+registry = PluginRegistry()
+registry.auto_discover()
+
+# List available test types
+for name, plugin in registry.plugins.items():
+    print(f"{name}: {plugin.metadata.description}")
+
+# Use plugin-based analysis
+from core.integrated_analysis import analyze_test
+result = analyze_test(df, config, test_type="cold_flow", ...)
+```
+
+---
+
+## Plugin Architecture
+
+### Overview (Phase 1 - v2.4.0)
+
+The plugin system allows HDA to support multiple test types without hardcoding test-specific logic in core modules. It uses Python's `Protocol` (structural typing) rather than forced inheritance.
+
+### Key Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `AnalysisPlugin` | `core/plugins.py` | Protocol defining the plugin interface |
+| `PluginRegistry` | `core/plugins.py` | Auto-discovery and management of plugins |
+| `PluginMetadata` | `core/plugins.py` | Plugin info, schema, requirements |
+| `ColdFlowPlugin` | `core/plugin_modules/cold_flow.py` | Cold flow test analysis |
+| `HotFirePlugin` | `core/plugin_modules/hot_fire.py` | Hot fire test analysis |
+
+### Plugin Protocol
+
+Any class implementing the `AnalysisPlugin` protocol must provide:
+- `metadata` property returning `PluginMetadata`
+- `analyze()` method performing the actual analysis
+- `get_uncertainty_specs()` for declaring uncertainty sources
+- `get_column_specs()` for declaring required/output columns
+- `get_input_specs()` for declaring required UI inputs
+
+### Adding a New Test Type
+
+1. Create `core/plugin_modules/my_test_type.py`
+2. Implement the `AnalysisPlugin` protocol
+3. Register with `PluginRegistry` (auto-discovery handles this)
+4. Core P0 guarantees (traceability, uncertainty, QC) are enforced by wrapper
+
+### Backward Compatibility
+
+The existing `analyze_cold_flow_test()` and `analyze_hot_fire_test()` functions continue to work. The new `analyze_test()` routes through the plugin system internally.
 
 ---
 
@@ -207,14 +320,16 @@ print(result.measurements['Cd'])  # MeasurementWithUncertainty object
 ### Workflow 1: Single Test Analysis (Most Common)
 
 ```
-1. Upload CSV → pd.read_csv()
+1. Upload CSV -> pd.read_csv()
 2. Load config (from saved_configs/ or manual)
 3. Preprocess data:
-   - Convert timestamps (ms → s)
+   - Convert timestamps (ms -> s)
+   - Shift time to zero
+   - Sort & deduplicate
    - Resample to uniform rate (typically 100 Hz)
    - Handle NaN values
 4. Detect steady state window (auto or manual)
-5. Run QC checks → assert_qc_passed() or display warnings
+5. Run QC checks -> assert_qc_passed() or display warnings
 6. Calculate metrics + uncertainties
 7. Create traceability record (SHA-256 hashes)
 8. Package as AnalysisResult
@@ -223,12 +338,12 @@ print(result.measurements['Cd'])  # MeasurementWithUncertainty object
 ```
 
 **Entry point**: `pages/2_Single_Test_Analysis.py`
-**Core function**: `core.integrated_analysis.analyze_cold_flow_test()`
+**Core function**: `core.integrated_analysis.analyze_cold_flow_test()` or `analyze_hot_fire_test()`
 
 ### Workflow 2: Campaign Analysis & SPC
 
 ```
-1. Load campaign → get_campaign_data(campaign_name)
+1. Load campaign -> get_campaign_data(campaign_name)
 2. Filter tests (by part, date, etc.)
 3. Create control charts:
    - I-MR charts for individual measurements
@@ -301,8 +416,9 @@ streamlit run app.py
 #### Files
 - Core modules: `snake_case.py` (e.g., `steady_state_detection.py`)
 - Pages: `#_Title_Case.py` (e.g., `2_Single_Test_Analysis.py`)
-- Private/shared pages: `_prefix.py` (e.g., `_shared_sidebar.py`)
+- Private/shared pages: `_prefix.py` (e.g., `_shared_sidebar.py`, `_shared_styles.py`)
 - Tests: `test_*.py` (e.g., `test_p0_components.py`)
+- Plugin modules: `snake_case.py` in `core/plugin_modules/`
 
 #### Variables
 - General: `snake_case` (`steady_window`, `test_id`, `qc_report`)
@@ -313,6 +429,7 @@ streamlit run app.py
 #### Classes
 - PascalCase: `AnalysisResult`, `QCReport`, `MeasurementWithUncertainty`
 - Enums: `QCStatus`, `UncertaintyType`, `ViolationType`, `ControlChartType`
+- Protocols: `AnalysisPlugin`
 
 #### Functions
 - Verbs first: `calculate_cd_uncertainty()`, `detect_steady_state_auto()`, `create_campaign()`
@@ -434,11 +551,11 @@ def create_imr_chart(
 
 **Three separate version numbers**:
 
-1. **Application Version**: `__version__ = "2.3.0"` in `core/__init__.py`
+1. **Application Version**: `__version__ = "2.4.0"` in `core/__init__.py`
    - Semantic versioning (major.minor.patch)
    - Update when adding features or fixing bugs
 
-2. **Processing Version**: `PROCESSING_VERSION = "2.0.0"` in `core/traceability.py`
+2. **Processing Version**: `PROCESSING_VERSION = "2.1.0"` in `core/traceability.py`
    - Stored in traceability records
    - Update when analysis algorithms change
    - Ensures results can be traced to calculation method
@@ -519,7 +636,7 @@ def test_pressure_drop_uncertainty():
 5. **Update PROCESSING_VERSION** if algorithm changed:
 ```python
 # core/traceability.py
-PROCESSING_VERSION = "2.1.0"  # Increment minor version
+PROCESSING_VERSION = "2.2.0"  # Increment minor version
 ```
 
 ### Task 2: Adding a New Streamlit Page
@@ -532,14 +649,17 @@ PROCESSING_VERSION = "2.1.0"  # Increment minor version
 ```python
 import streamlit as st
 from pages._shared_sidebar import render_global_context
+from pages._shared_styles import apply_styles  # Design system
 from core.campaign_manager_v2 import get_campaign_data
 
 # Page config
 st.set_page_config(
     page_title="Advanced Filtering",
-    page_icon="🔍",
     layout="wide"
 )
+
+# Apply design system
+apply_styles()
 
 # Session state
 if 'filter_params' not in st.session_state:
@@ -572,7 +692,48 @@ streamlit run app.py
 # Navigate to new page in sidebar
 ```
 
-### Task 3: Fixing a QC Check Issue
+### Task 3: Adding a New Test Type via Plugin
+
+1. **Create plugin file**: `core/plugin_modules/valve_timing.py`
+
+2. **Implement AnalysisPlugin protocol**:
+```python
+from core.plugins import AnalysisPlugin, PluginMetadata, UncertaintySpec, ColumnSpec
+
+class ValveTimingPlugin:
+    """Plugin for valve timing test analysis."""
+
+    @property
+    def metadata(self) -> PluginMetadata:
+        return PluginMetadata(
+            name="valve_timing",
+            version="1.0.0",
+            description="Valve timing characterization",
+            # ... schema, requirements
+        )
+
+    def analyze(self, df, config, steady_window, **kwargs):
+        # Perform valve-timing-specific calculations
+        # Return measurements dict
+        ...
+
+    def get_uncertainty_specs(self) -> List[UncertaintySpec]:
+        ...
+
+    def get_column_specs(self) -> List[ColumnSpec]:
+        ...
+
+    def get_input_specs(self) -> List[InputSpec]:
+        ...
+```
+
+3. **Auto-discovery** handles registration (no manual wiring needed)
+
+4. **Add database schema** for new test type if needed (increment `SCHEMA_VERSION`)
+
+5. **Add tests**: `tests/test_plugins.py` (add test cases for new plugin)
+
+### Task 4: Fixing a QC Check Issue
 
 **Example**: QC falsely flagging good data as flatline
 
@@ -605,20 +766,7 @@ def test_flatline_detection():
     assert result.passed, "Known-good data should pass"
 ```
 
-5. **Document the change**:
-```python
-def check_flatline(...):
-    """
-    Check for flatline (constant value) in sensor data.
-
-    Uses rolling standard deviation. Threshold of 0.01 chosen to
-    avoid false positives on steady-state data while catching
-    true sensor failures.
-
-    Updated 2026-01-16: Increased threshold from 0.001 to 0.01
-    to reduce false positives on low-noise sensors.
-    """
-```
+5. **Document the change** in the function docstring.
 
 ---
 
@@ -628,10 +776,16 @@ def check_flatline(...):
 
 ```
 tests/
-├── test_p0_components.py      # Core integrity (CRITICAL)
-├── test_p1_components.py      # Analysis & reporting
-├── test_p2_components.py      # Advanced features
-└── test_fluid_properties.py   # Fluid calculations
+├── test_p0_components.py           # Core integrity (CRITICAL)
+├── test_p1_components.py           # Analysis & reporting
+├── test_p2_components.py           # Advanced features
+├── test_plugins.py                 # Plugin system
+├── test_integrated_analysis.py     # End-to-end analysis pipelines
+├── test_campaign_manager.py        # Database, migrations, integrity
+├── test_steady_state_detection.py  # Detection methods
+├── test_fluid_properties.py        # Fluid calculations (CoolProp)
+├── test_uncertainty_extended.py    # Extended uncertainty propagation
+└── test_qc_extended.py            # Extended QC check scenarios
 ```
 
 ### Running Tests
@@ -645,6 +799,9 @@ python tests/test_p0_components.py
 
 # Single test
 pytest tests/test_p0_components.py::TestTraceability::test_file_hash
+
+# Plugin tests
+pytest tests/test_plugins.py -v
 
 # With coverage
 pytest tests/ --cov=core --cov-report=html
@@ -680,7 +837,7 @@ def create_test_config() -> Dict[str, Any]:
 3. **Assertions with messages**:
 ```python
 assert result.passed_qc, f"Expected QC to pass, got: {result.qc_report}"
-assert abs(cd - 0.65) < 0.01, f"Expected Cd ≈ 0.65, got {cd}"
+assert abs(cd - 0.65) < 0.01, f"Expected Cd ~ 0.65, got {cd}"
 ```
 
 4. **Test both happy path and error cases**:
@@ -700,7 +857,7 @@ def test_qc_fails_bad_data():
 ### What to Test
 
 **P0 (Must test thoroughly)**:
-- Hash reproducibility (same data → same hash)
+- Hash reproducibility (same data -> same hash)
 - Uncertainty propagation (correct formulas)
 - QC check sensitivity (catches real issues)
 - Config validation (rejects invalid configs)
@@ -715,6 +872,12 @@ def test_qc_fails_bad_data():
 **P2 (Test major features)**:
 - Anomaly detection (catches known anomalies)
 - Comparison logic (correct deviations)
+- Operating envelope analysis
+
+**Plugin System**:
+- Plugin discovery and registration
+- Protocol compliance
+- Backward compatibility with direct function calls
 
 ---
 
@@ -818,6 +981,21 @@ merged_config = merge_config_and_metadata(active_config, metadata)
 result = analyze_cold_flow_test(df, merged_config, ...)
 ```
 
+### Config Format Detection and Migration
+
+The system auto-detects old (v2.0-2.2) vs new (v2.3+) config formats:
+
+```python
+from core.config_validation import detect_config_format, split_old_config
+
+format_version = detect_config_format(config)  # "legacy" or "v2.3"
+
+if format_version == "legacy":
+    active_config, metadata = split_old_config(config)
+```
+
+Migration script: `scripts/migrate_configs_v2.3.py`
+
 ---
 
 ## Data Flow
@@ -826,62 +1004,70 @@ result = analyze_cold_flow_test(df, merged_config, ...)
 
 ```
 CSV File (raw data)
-  ↓
+  |
 1. UPLOAD & PARSE
-  pd.read_csv() → raw DataFrame
-  ↓
+  pd.read_csv() -> raw DataFrame
+  |
 2. PREPROCESSING
-  - Convert timestamps (ms → s)
+  - Convert timestamps (ms -> s)
   - Shift time to zero
   - Sort & deduplicate
   - Resample to uniform rate (100 Hz)
   - Interpolate/drop NaN values
-  → processed DataFrame
-  ↓
-3. STEADY STATE DETECTION
-  - Auto detection (CV-based, ML, derivative)
+  -> processed DataFrame
+  |
+3. STEADY STATE DETECTION (core/steady_state_detection.py)
+  - Auto detection: CV-based, ML (Isolation Forest), derivative, simple
   - Manual adjustment (via UI)
-  → steady_window (start_ms, end_ms)
-  → steady_df (subset of processed DataFrame)
-  ↓
-4. QUALITY CONTROL
+  -> steady_window (start_ms, end_ms)
+  -> steady_df (subset of processed DataFrame)
+  |
+4. QUALITY CONTROL (core/qc_checks.py)
   - check_timestamp_monotonic()
-  - check_sampling_rate()
+  - check_timestamp_gaps()
+  - check_sampling_rate_stability()
   - check_sensor_range()
   - check_flatline()
+  - check_saturation()
   - check_nan_ratio()
-  → QCReport (passed: True/False)
-  ↓
+  - check_pressure_flow_correlation()
+  -> QCReport (passed: True/False)
+  |
 5. ANALYSIS (if QC passed)
-  - Calculate base metrics (Cd, mass flow, etc.)
+  - Calculate base metrics (Cd, mass flow, Isp, c*, O/F, etc.)
   - Parse uncertainty config
   - Propagate uncertainties (analytical + Monte Carlo)
-  → measurements: Dict[str, MeasurementWithUncertainty]
-  ↓
-6. TRACEABILITY
+  -> measurements: Dict[str, MeasurementWithUncertainty]
+  |
+6. TRACEABILITY (core/traceability.py)
   - compute_file_hash() or compute_dataframe_hash()
   - compute_config_hash()
   - AnalysisContext (analyst, timestamp, version)
   - ProcessingRecord (steady window, method)
-  → DataTraceability
-  ↓
+  -> DataTraceability
+  |
 7. PACKAGING
-  → AnalysisResult(
+  -> AnalysisResult(
       test_id, measurements, qc_report,
       traceability, passed_qc
     )
-  ↓
-8. STORAGE
+  |
+8. STORAGE (core/campaign_manager_v2.py)
   - result.to_database_record()
   - save_to_campaign(campaign_name, record)
-  → SQLite database (campaigns/*.db)
-  ↓
-9. REPORTING (optional)
+  -> SQLite database (campaigns/*.db)
+  |
+9. REPORTING (optional, core/reporting.py)
   - generate_test_report(result)
-  → HTML report with full traceability
+  -> HTML report with full traceability
 ```
 
 ### Database Schema
+
+**Tables per campaign database**:
+
+1. **campaign_info** - Campaign metadata (name, type, dates, schema version)
+2. **test_results** - Per-test records (schema varies by test type)
 
 **Cold Flow Test Record** (25+ fields):
 
@@ -927,6 +1113,22 @@ CSV File (raw data)
 }
 ```
 
+**Hot Fire Test Record** extends with engine-specific metrics: `pc` (chamber pressure), `thrust`, `of_ratio`, `isp`, `c_star`.
+
+### Test Folder Structure
+
+Managed by `core/test_metadata.py`:
+
+```
+TEST_PROGRAM/
+  SYSTEM/
+    SYSTEM-CAMPAIGN_ID/
+      SYSTEM-CAMPAIGN_ID-TEST_TYPE/
+        TEST_ID/
+          data.csv
+          metadata.json
+```
+
 ---
 
 ## Safety and Integrity Rules
@@ -946,7 +1148,7 @@ CSV File (raw data)
 - Include `processing_version` to track algorithm changes
 
 ```python
-# ✅ CORRECT
+# CORRECT
 traceability = create_full_traceability_record(
     file_path=file_path,
     config=config,
@@ -954,7 +1156,7 @@ traceability = create_full_traceability_record(
 )
 result = AnalysisResult(..., traceability=traceability)
 
-# ❌ WRONG - No traceability
+# WRONG - No traceability
 result = AnalysisResult(test_id, measurements, None, None, True)
 ```
 
@@ -971,7 +1173,7 @@ result = AnalysisResult(test_id, measurements, None, None, True)
 - Include both absolute uncertainty and relative percentage
 
 ```python
-# ✅ CORRECT
+# CORRECT
 cd = MeasurementWithUncertainty(
     value=0.654,
     uncertainty=0.018,
@@ -979,7 +1181,7 @@ cd = MeasurementWithUncertainty(
     rel_uncertainty_pct=2.8
 )
 
-# ❌ WRONG - Naked number
+# WRONG - Naked number
 cd = 0.654  # Where are the error bars?
 ```
 
@@ -996,12 +1198,12 @@ cd = 0.654  # Where are the error bars?
 - Display QC warnings even if passed overall
 
 ```python
-# ✅ CORRECT
+# CORRECT
 qc_report = run_qc_checks(df, config, sensors)
 if not qc_report.passed:
     raise ValueError(f"QC failed: {qc_report.blocking_failures}")
 
-# ❌ WRONG - Bypassing QC
+# WRONG - Bypassing QC
 result = analyze_cold_flow_test(df, config, ...)  # Hope it's good data
 ```
 
@@ -1018,12 +1220,12 @@ result = analyze_cold_flow_test(df, config, ...)  # Hope it's good data
 - Write unit tests for core modules (can't unit test Streamlit)
 
 ```python
-# ✅ CORRECT
+# CORRECT
 # pages/2_Single_Test_Analysis.py
 result = analyze_cold_flow_test(df, config, ...)  # Core does work
 st.write(result)  # Page displays
 
-# ❌ WRONG
+# WRONG
 # pages/2_Single_Test_Analysis.py
 cd = calculate_cd(p_up, p_down, mf, area)  # Business logic in page
 st.write(cd)
@@ -1046,17 +1248,17 @@ st.write(cd)
 #### Pitfall 1: Forgetting to Update Schema Version
 
 ```python
-# ❌ WRONG
+# WRONG
 # Added new column to database but forgot to:
 # 1. Increment SCHEMA_VERSION
 # 2. Write migration function
 # 3. Update existing databases
 
-# ✅ CORRECT
+# CORRECT
 SCHEMA_VERSION = 3  # Incremented
 
 def migrate_v2_to_v3(conn):
-    """Add p_drop column - 2026-01-16."""
+    """Add p_drop column."""
     conn.execute("ALTER TABLE test_results ADD COLUMN avg_p_drop_bar REAL")
 ```
 
@@ -1067,13 +1269,13 @@ def migrate_v2_to_v3(conn):
 - Mass flow: `g/s` (not kg/s, lb/hr)
 - Temperature: `K` (not C, F)
 - Time: `s` (not ms) - except for window specifications
-- Area: `mm²` (not m², in²)
+- Area: `mm^2` (not m^2, in^2)
 
 ```python
-# ✅ CORRECT
+# CORRECT
 p_up_bar = df['IG-PT-01'].mean()  # Already in bar
 
-# ❌ WRONG
+# WRONG
 p_up_psi = df['IG-PT-01'].mean() * 14.5038  # Don't convert
 ```
 
@@ -1082,13 +1284,17 @@ p_up_psi = df['IG-PT-01'].mean() * 14.5038  # Don't convert
 **NEVER** hardcode sensor names, thresholds, or test-specific values:
 
 ```python
-# ❌ WRONG
+# WRONG
 if df['IG-PT-01'].mean() > 10:  # Hardcoded sensor name
 
-# ✅ CORRECT
+# CORRECT
 p_up_sensor = config['sensors']['p_upstream']
 if df[p_up_sensor].mean() > config['settings']['p_max_bar']:
 ```
+
+#### Pitfall 4: Breaking Plugin Backward Compatibility
+
+When modifying the plugin interface or core analysis functions, ensure the existing `analyze_cold_flow_test()` and `analyze_hot_fire_test()` wrappers continue to work. The plugin system is additive, not a replacement.
 
 ---
 
@@ -1108,10 +1314,10 @@ print(qc_report.warnings)           # What warnings?
 ```
 
 **Solutions**:
-- **Flatline**: Sensor disconnected or saturated → Check hardware
-- **NaN ratio too high**: Missing data → Interpolate or trim
-- **Sensor out of range**: Pressure spike → Check test conditions
-- **Sampling rate inconsistent**: Data acquisition issue → Resample
+- **Flatline**: Sensor disconnected or saturated -> Check hardware
+- **NaN ratio too high**: Missing data -> Interpolate or trim
+- **Sensor out of range**: Pressure spike -> Check test conditions
+- **Sampling rate inconsistent**: Data acquisition issue -> Resample
 
 #### Issue 2: Uncertainty Too Large
 
@@ -1128,7 +1334,7 @@ print(config['uncertainties'])
 
 **Solutions**:
 - **Calibration uncertainty too high**: Recalibrate sensors
-- **Measurement near zero**: Relative uncertainty explodes → Use absolute
+- **Measurement near zero**: Relative uncertainty explodes -> Use absolute
 - **Error propagation amplification**: Check correlation terms
 
 #### Issue 3: Streamlit App Won't Start
@@ -1177,23 +1383,42 @@ sqlite3 campaigns/campaign_name.db "PRAGMA user_version;"
 
 **Diagnosis**:
 ```python
+from core.steady_state_detection import (
+    detect_steady_state_cv,
+    detect_steady_state_ml,
+    detect_steady_state_derivative,
+    detect_steady_state_simple,
+)
+
 # Try different methods
 window_cv = detect_steady_state_cv(df, sensor, threshold=0.02)
 window_ml = detect_steady_state_ml(df, sensor)
 window_deriv = detect_steady_state_derivative(df, sensor)
-
-# Plot to visualize
-import plotly.graph_objects as go
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=df['time_s'], y=df[sensor], mode='lines'))
-fig.add_vrect(x0=window_cv[0]/1000, x1=window_cv[1]/1000, fillcolor="green", opacity=0.2)
-fig.show()
+window_simple = detect_steady_state_simple(df, sensor)  # Fallback: middle 50%
 ```
 
 **Solutions**:
 - **CV threshold too strict**: Increase from 0.01 to 0.02 or 0.05
 - **Short test**: Reduce `min_duration_s` requirement
-- **No steady state**: Test may be purely transient → Manual window
+- **No steady state**: Test may be purely transient -> Manual window
+
+#### Issue 6: Plugin Not Found
+
+**Symptom**: `KeyError` when using `analyze_test()` with a test type
+
+**Diagnosis**:
+```python
+from core.plugins import PluginRegistry
+
+registry = PluginRegistry()
+registry.auto_discover()
+print(list(registry.plugins.keys()))  # Available plugins
+```
+
+**Solutions**:
+- Check plugin file exists in `core/plugin_modules/`
+- Verify plugin implements `AnalysisPlugin` protocol correctly
+- Run `pytest tests/test_plugins.py -v` for validation
 
 ---
 
@@ -1208,9 +1433,16 @@ fig.show()
 | `core/qc_checks.py` | Quality control | Tuning thresholds, new checks |
 | `core/campaign_manager_v2.py` | SQLite database | Schema changes |
 | `core/traceability.py` | SHA-256 hashing | Never (unless fixing bug) |
+| `core/plugins.py` | Plugin system | Adding plugin capabilities |
+| `core/plugin_modules/*.py` | Test type plugins | Adding/modifying test types |
+| `core/steady_state_detection.py` | Steady state detection | Adding detection methods |
+| `core/fluid_properties.py` | Fluid property lookup | Adding fluids, fixing calcs |
+| `core/config_manager.py` | Unified config management | Config workflow changes |
 | `pages/2_Single_Test_Analysis.py` | Main analysis UI | UI improvements |
 | `pages/_shared_sidebar.py` | Global context | Adding global settings |
+| `pages/_shared_styles.py` | Design system | Theming, layout changes |
 | `tests/test_p0_components.py` | Core tests | After modifying P0 |
+| `tests/test_plugins.py` | Plugin tests | After modifying plugins |
 
 ### Essential Commands
 
@@ -1224,6 +1456,9 @@ pytest tests/ -v
 # Run specific test file
 python tests/test_p0_components.py
 
+# Run plugin tests
+pytest tests/test_plugins.py -v
+
 # Clear Streamlit cache
 streamlit cache clear
 
@@ -1232,36 +1467,70 @@ sqlite3 campaigns/campaign.db "SELECT sql FROM sqlite_master WHERE type='table';
 
 # List campaigns
 ls -lh campaigns/*.db
+
+# Migrate old configs to v2.3 format
+python scripts/migrate_configs_v2.3.py
 ```
 
 ### Key Functions
 
 ```python
-# Analysis
+# Analysis (standard)
 from core.integrated_analysis import analyze_cold_flow_test, analyze_hot_fire_test
+# Analysis (plugin-based)
+from core.integrated_analysis import analyze_test, quick_analyze
 
 # Campaign
 from core.campaign_manager_v2 import create_campaign, save_to_campaign, get_campaign_data
+from core.campaign_manager_v2 import save_cold_flow_result, save_hot_fire_result
 
 # QC
-from core.qc_checks import run_qc_checks, assert_qc_passed
+from core.qc_checks import run_qc_checks, run_quick_qc, assert_qc_passed
 
 # Uncertainty
-from core.uncertainty import calculate_cold_flow_uncertainties
+from core.uncertainty import calculate_cold_flow_uncertainties, calculate_hot_fire_uncertainties
 
 # Traceability
 from core.traceability import create_full_traceability_record, compute_file_hash
 
 # SPC
-from core.spc import create_imr_chart, create_xbar_r_chart
+from core.spc import create_imr_chart, analyze_campaign_spc, calculate_capability
 
 # Reporting
 from core.reporting import generate_test_report, generate_campaign_report
 
+# Export
+from core.export import export_campaign_csv, export_campaign_excel, export_campaign_json
+
+# Steady State
+from core.steady_state_detection import detect_steady_state_auto, detect_steady_state_cv
+
 # Config
 from core.saved_configs import SavedConfigManager
 from core.metadata_manager import MetadataManager
+from core.config_manager import ConfigManager
+from core.config_validation import merge_config_and_metadata, detect_config_format
+
+# Plugins
+from core.plugins import PluginRegistry
+
+# Fluid Properties
+from core.fluid_properties import FluidProperties, FluidState
 ```
+
+### UI Design System
+
+The application uses a **shadcn-inspired design system** with a Zinc color palette defined in `pages/_shared_styles.py` and `.streamlit/config.toml`:
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| `primaryColor` | `#18181b` (zinc-900) | Primary actions, buttons |
+| `backgroundColor` | `#ffffff` | Main background |
+| `secondaryBackgroundColor` | `#f4f4f5` (zinc-100) | Cards, containers |
+| `textColor` | `#09090b` (zinc-950) | Primary text |
+| `base` | `light` | Theme base |
+
+All pages should call `apply_styles()` from `_shared_styles.py` for consistent look.
 
 ---
 
@@ -1272,11 +1541,13 @@ from core.metadata_manager import MetadataManager
 3. **Preserve integrity**: When unsure, favor stricter QC and more traceability
 4. **Ask before changing P0**: Any change to traceability, uncertainty, or QC needs careful review
 5. **Document decisions**: Add comments explaining "why" for future developers
+6. **Check plugin tests**: `tests/test_plugins.py` shows correct plugin implementation patterns
+7. **Refer to companion docs**: `DESIGN_SYSTEM.md` for UI, `PLUGIN_ARCHITECTURE.md` for plugins
 
 ---
 
-**Last Updated**: 2026-01-16
-**Codebase Version**: 2.3.0
+**Last Updated**: 2026-02-05
+**Codebase Version**: 2.4.0
 **Maintained by**: AI assistants working with HDA
 
 For questions or issues, refer to recent git commits and test files for examples.
