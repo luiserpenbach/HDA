@@ -33,6 +33,8 @@ class ControlChartType(Enum):
     I_MR = "Individual and Moving Range"
     P_CHART = "P Chart (proportion)"
     C_CHART = "C Chart (count)"
+    CUSUM = "Cumulative Sum"
+    EWMA = "Exponentially Weighted Moving Average"
 
 
 class ViolationType(Enum):
@@ -556,6 +558,255 @@ def detect_trend(
         direction = 'increasing' if slope > 0 else 'decreasing'
     
     return has_trend, direction, slope
+
+
+# =============================================================================
+# CUSUM AND EWMA CONTROL CHARTS
+# =============================================================================
+
+@dataclass
+class CUSUMResult:
+    """CUSUM control chart results."""
+    parameter_name: str
+    target: float
+    k: float  # Allowable slack (typically 0.5 * shift_to_detect)
+    h: float  # Decision interval
+    c_plus: np.ndarray  # Upper CUSUM
+    c_minus: np.ndarray  # Lower CUSUM
+    signals_upper: List[int]  # Indices where C+ > h
+    signals_lower: List[int]  # Indices where C- > h
+    n_signals: int = 0
+
+    def __post_init__(self):
+        self.n_signals = len(self.signals_upper) + len(self.signals_lower)
+
+
+@dataclass
+class EWMAResult:
+    """EWMA control chart results."""
+    parameter_name: str
+    lambda_param: float  # Smoothing parameter (0 < lambda <= 1)
+    ewma_values: np.ndarray
+    center_line: float
+    ucl: np.ndarray  # Time-varying UCL
+    lcl: np.ndarray  # Time-varying LCL
+    signals: List[int]  # Indices where EWMA exceeds limits
+    n_signals: int = 0
+
+    def __post_init__(self):
+        self.n_signals = len(self.signals)
+
+
+def create_cusum_chart(
+    values: np.ndarray,
+    target: Optional[float] = None,
+    sigma: Optional[float] = None,
+    k: Optional[float] = None,
+    h: Optional[float] = None,
+    parameter_name: str = '',
+) -> CUSUMResult:
+    """
+    Create a tabular CUSUM (Page's procedure) control chart.
+
+    The CUSUM chart accumulates deviations from a target value and is
+    particularly effective at detecting small, sustained shifts in the
+    process mean that Shewhart charts may miss.
+
+    Two one-sided statistics are maintained:
+        C_plus[i]  = max(0, C_plus[i-1]  + (x[i] - target - k))
+        C_minus[i] = max(0, C_minus[i-1] + (target - k - x[i]))
+
+    A signal is generated when C_plus > h (upward shift) or
+    C_minus > h (downward shift).
+
+    Args:
+        values: Array of individual measurements (chronological order).
+        target: Process target value. Defaults to the mean of values.
+        sigma: Process standard deviation estimate. Defaults to
+            mean(moving_range) / d2 (d2 = 1.128 for n=2).
+        k: Allowable slack (reference value). Defaults to 0.5 * sigma,
+            which is optimal for detecting a 1-sigma shift.
+        h: Decision interval. Defaults to 5 * sigma, giving an
+            in-control ARL of approximately 465.
+        parameter_name: Name of the parameter being charted.
+
+    Returns:
+        CUSUMResult with upper/lower cumulative sums and signal indices.
+
+    Raises:
+        ValueError: If fewer than 2 data points are provided.
+
+    Example:
+        >>> vals = np.array([10.1, 10.0, 10.3, 10.2, 11.0, 11.1, 11.2])
+        >>> result = create_cusum_chart(vals, target=10.0, parameter_name='pressure')
+        >>> print(f"Signals detected: {result.n_signals}")
+    """
+    values = np.asarray(values, dtype=float)
+    n = len(values)
+
+    if n < 2:
+        raise ValueError("Need at least 2 data points for CUSUM chart")
+
+    # Default target: process mean
+    if target is None:
+        target = float(np.mean(values))
+
+    # Default sigma: estimated from moving range
+    if sigma is None:
+        mr = np.abs(np.diff(values))
+        mr_bar = np.mean(mr)
+        d2 = CHART_CONSTANTS[2]['d2']
+        sigma = mr_bar / d2
+
+    # Protect against zero sigma (constant data)
+    if sigma <= 0:
+        sigma = 1.0
+
+    # Default CUSUM parameters
+    if k is None:
+        k = 0.5 * sigma
+    if h is None:
+        h = 5.0 * sigma
+
+    # Compute tabular CUSUM
+    c_plus = np.zeros(n)
+    c_minus = np.zeros(n)
+
+    for i in range(n):
+        if i == 0:
+            c_plus[i] = max(0.0, values[i] - target - k)
+            c_minus[i] = max(0.0, target - k - values[i])
+        else:
+            c_plus[i] = max(0.0, c_plus[i - 1] + (values[i] - target - k))
+            c_minus[i] = max(0.0, c_minus[i - 1] + (target - k - values[i]))
+
+    # Identify signal points
+    signals_upper = [i for i in range(n) if c_plus[i] > h]
+    signals_lower = [i for i in range(n) if c_minus[i] > h]
+
+    return CUSUMResult(
+        parameter_name=parameter_name,
+        target=target,
+        k=k,
+        h=h,
+        c_plus=c_plus,
+        c_minus=c_minus,
+        signals_upper=signals_upper,
+        signals_lower=signals_lower,
+    )
+
+
+def create_ewma_chart(
+    values: np.ndarray,
+    target: Optional[float] = None,
+    sigma: Optional[float] = None,
+    lambda_param: float = 0.2,
+    L: float = 3.0,
+    parameter_name: str = '',
+) -> EWMAResult:
+    """
+    Create an Exponentially Weighted Moving Average (EWMA) control chart.
+
+    The EWMA chart applies geometrically decaying weights to past
+    observations, making it sensitive to small and moderate shifts
+    in the process mean while remaining robust to non-normality.
+
+    The EWMA statistic is:
+        z[i] = lambda * x[i] + (1 - lambda) * z[i-1],  z[0] = target
+
+    Time-varying control limits are:
+        UCL[i] = target + L * sigma * sqrt(lambda/(2-lambda) * (1-(1-lambda)^(2*i)))
+        LCL[i] = target - L * sigma * sqrt(lambda/(2-lambda) * (1-(1-lambda)^(2*i)))
+
+    As i -> infinity, the limits converge to steady-state values.
+
+    Args:
+        values: Array of individual measurements (chronological order).
+        target: Process target value. Defaults to the mean of values.
+        sigma: Process standard deviation estimate. Defaults to
+            mean(moving_range) / d2 (d2 = 1.128 for n=2).
+        lambda_param: Smoothing parameter (0 < lambda <= 1). Smaller values
+            give more weight to historical data and detect smaller shifts.
+            Default 0.2 is a common choice.
+        L: Width of control limits in sigma units. Default 3.0.
+        parameter_name: Name of the parameter being charted.
+
+    Returns:
+        EWMAResult with EWMA values, time-varying control limits, and
+        signal indices.
+
+    Raises:
+        ValueError: If fewer than 2 data points are provided, or if
+            lambda_param is not in (0, 1].
+
+    Example:
+        >>> vals = np.array([10.1, 10.0, 10.3, 10.2, 11.0, 11.1, 11.2])
+        >>> result = create_ewma_chart(vals, target=10.0, parameter_name='pressure')
+        >>> print(f"Signals detected: {result.n_signals}")
+    """
+    values = np.asarray(values, dtype=float)
+    n = len(values)
+
+    if n < 2:
+        raise ValueError("Need at least 2 data points for EWMA chart")
+
+    if not (0.0 < lambda_param <= 1.0):
+        raise ValueError(
+            f"lambda_param must be in (0, 1], got {lambda_param}"
+        )
+
+    # Default target: process mean
+    if target is None:
+        target = float(np.mean(values))
+
+    # Default sigma: estimated from moving range
+    if sigma is None:
+        mr = np.abs(np.diff(values))
+        mr_bar = np.mean(mr)
+        d2 = CHART_CONSTANTS[2]['d2']
+        sigma = mr_bar / d2
+
+    # Protect against zero sigma (constant data)
+    if sigma <= 0:
+        sigma = 1.0
+
+    # Compute EWMA statistic
+    ewma_values = np.zeros(n)
+    ewma_values[0] = lambda_param * values[0] + (1.0 - lambda_param) * target
+
+    for i in range(1, n):
+        ewma_values[i] = (
+            lambda_param * values[i]
+            + (1.0 - lambda_param) * ewma_values[i - 1]
+        )
+
+    # Compute time-varying control limits
+    # Factor that grows with i: lambda/(2-lambda) * (1 - (1-lambda)^(2*i))
+    i_indices = np.arange(1, n + 1)  # 1-based for the formula
+    variance_factor = (
+        (lambda_param / (2.0 - lambda_param))
+        * (1.0 - (1.0 - lambda_param) ** (2 * i_indices))
+    )
+    limit_width = L * sigma * np.sqrt(variance_factor)
+
+    ucl = target + limit_width
+    lcl = target - limit_width
+
+    # Identify signal points (EWMA outside control limits)
+    signals = [
+        i for i in range(n)
+        if ewma_values[i] > ucl[i] or ewma_values[i] < lcl[i]
+    ]
+
+    return EWMAResult(
+        parameter_name=parameter_name,
+        lambda_param=lambda_param,
+        ewma_values=ewma_values,
+        center_line=target,
+        ucl=ucl,
+        lcl=lcl,
+        signals=signals,
+    )
 
 
 # =============================================================================

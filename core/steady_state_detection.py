@@ -329,7 +329,8 @@ def detect_steady_state_auto(
         >>> print(f"Detected using {method}: {start:.2f} - {end:.2f}")
     """
     # Get appropriate signal column for detection
-    columns = config.get('columns', {})
+    # Support both sensor_roles (v2.4.0+) and columns (legacy)
+    columns = config.get('sensor_roles', config.get('columns', {}))
     signal_col = (
         columns.get('upstream_pressure') or
         columns.get('chamber_pressure') or
