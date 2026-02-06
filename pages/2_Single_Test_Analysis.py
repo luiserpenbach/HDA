@@ -601,7 +601,7 @@ with tab_setup:
 
         # ── Main column ──────────────────────────────────────────────────
         with setup_main:
-            df_display = st.session_state.df_processed or st.session_state.df
+            df_display = st.session_state.df_processed if st.session_state.df_processed is not None else st.session_state.df
 
             if df_display is not None:
                 # Summary cards
@@ -689,7 +689,7 @@ with tab_steady:
         st.subheader("Steady-State Detection")
         st.caption("Identify the steady-state region for analysis using automatic or manual methods.")
 
-        df = st.session_state.df_processed or st.session_state.df
+        df = st.session_state.df_processed if st.session_state.df_processed is not None else st.session_state.df
         config = st.session_state.active_config or ConfigManager.get_default_config(test_type)
 
         if df is None:
@@ -952,7 +952,7 @@ with tab_analyze:
         st.subheader("Analysis & Quality Control")
         st.caption("Configure metadata, run QC checks, and execute the analysis pipeline.")
 
-        df = st.session_state.df_processed or st.session_state.df
+        df = st.session_state.df_processed if st.session_state.df_processed is not None else st.session_state.df
         config = st.session_state.active_config or ConfigManager.get_default_config(test_type)
 
         if df is None:
@@ -1305,7 +1305,7 @@ with tab_results:
         st.subheader("Analysis Results")
 
         result = st.session_state.analysis_result
-        df = st.session_state.df_processed or st.session_state.df
+        df = st.session_state.df_processed if st.session_state.df_processed is not None else st.session_state.df
         config = st.session_state.active_config or ConfigManager.get_default_config(test_type)
 
         if result is None:
