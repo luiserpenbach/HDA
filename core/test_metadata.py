@@ -340,6 +340,147 @@ def load_test_metadata(folder_path: Union[str, Path]) -> Optional[TestMetadata]:
         return None
 
 
+def load_raw_metadata(folder_path: Union[str, Path]) -> Optional[Dict[str, Any]]:
+    """
+    Load raw metadata JSON from a test folder without dataclass filtering.
+
+    Unlike TestMetadata.load(), this preserves ALL fields including
+    nested sections (geometry, test_article, sensor_roles, etc.)
+    that are not part of the TestMetadata dataclass.
+
+    Args:
+        folder_path: Path to test folder containing metadata.json
+
+    Returns:
+        Raw metadata dict if file exists, None otherwise
+
+    Raises:
+        ValueError: If file exists but contains invalid JSON
+    """
+    folder_path = Path(folder_path)
+    metadata_file = folder_path / "metadata.json"
+
+    if not metadata_file.exists():
+        return None
+
+    try:
+        with open(metadata_file, 'r') as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {metadata_file}: {e}")
+
+
+def save_raw_metadata(folder_path: Union[str, Path], data: Dict[str, Any]) -> Path:
+    """
+    Save raw metadata dict to JSON, preserving all fields.
+
+    This is the counterpart to load_raw_metadata(). It writes the
+    dict as-is without filtering through the dataclass, so nested
+    sections and extra fields are preserved.
+
+    Args:
+        folder_path: Path to test folder
+        data: Metadata dictionary to save
+
+    Returns:
+        Path to saved metadata.json file
+
+    Raises:
+        TypeError: If data is not JSON-serializable
+    """
+    folder_path = Path(folder_path)
+    metadata_file = folder_path / "metadata.json"
+
+    with open(metadata_file, 'w') as f:
+        json.dump(data, f, indent=2, default=str)
+
+    return metadata_file
+
+
+def validate_raw_metadata(data: Dict[str, Any]) -> tuple:
+    """
+    Validate raw metadata dict for common issues.
+
+    Performs lightweight validation on known fields without requiring
+    all fields to be present. Returns warnings (non-blocking) rather
+    than raising exceptions.
+
+    Args:
+        data: Raw metadata dictionary
+
+    Returns:
+        Tuple of (is_valid: bool, warnings: List[str])
+    """
+    warnings = []
+
+    if not isinstance(data, dict):
+        return False, ["Metadata must be a dictionary"]
+
+    if not data:
+        return False, ["Metadata is empty"]
+
+    # Check known string fields
+    str_fields = ['test_id', 'program', 'system', 'test_type', 'part_number',
+                  'serial_number', 'operator', 'status']
+    for field_name in str_fields:
+        val = data.get(field_name)
+        if val is not None and not isinstance(val, str):
+            warnings.append(f"'{field_name}' should be a string, got {type(val).__name__}")
+
+    # Check status value
+    status = data.get('status')
+    valid_statuses = {'pending', 'analyzed', 'approved', 'rejected'}
+    if status is not None and status not in valid_statuses:
+        warnings.append(f"'status' should be one of {valid_statuses}, got '{status}'")
+
+    # Check known numeric fields for valid ranges
+    temp_fields = {
+        'fluid_temperature_K': (0, 10000),
+        'ambient_temperature_K': (0, 10000),
+        'ox_temperature_K': (0, 10000),
+        'fuel_temperature_K': (0, 10000),
+    }
+    for field_name, (lo, hi) in temp_fields.items():
+        val = data.get(field_name)
+        if val is not None:
+            if not isinstance(val, (int, float)):
+                warnings.append(f"'{field_name}' should be numeric, got {type(val).__name__}")
+            elif val <= lo or val > hi:
+                warnings.append(f"'{field_name}' = {val} is outside expected range ({lo}, {hi}]")
+
+    pressure_fields = {
+        'fluid_pressure_Pa': (0, 1e9),
+        'ambient_pressure_Pa': (0, 1e9),
+        'ox_pressure_Pa': (0, 1e9),
+        'fuel_pressure_Pa': (0, 1e9),
+    }
+    for field_name, (lo, hi) in pressure_fields.items():
+        val = data.get(field_name)
+        if val is not None:
+            if not isinstance(val, (int, float)):
+                warnings.append(f"'{field_name}' should be numeric, got {type(val).__name__}")
+            elif val <= lo or val > hi:
+                warnings.append(f"'{field_name}' = {val} is outside expected range ({lo}, {hi}]")
+
+    # Check nested geometry section if present
+    geometry = data.get('geometry')
+    if geometry is not None and isinstance(geometry, dict):
+        for key, val in geometry.items():
+            if 'area' in key or 'diameter' in key or 'length' in key:
+                if val is not None and isinstance(val, (int, float)) and val < 0:
+                    warnings.append(f"geometry.{key} = {val} should not be negative")
+
+    # Check test_date format if present
+    test_date = data.get('test_date')
+    if test_date and isinstance(test_date, str):
+        try:
+            datetime.fromisoformat(test_date)
+        except ValueError:
+            warnings.append(f"'test_date' = '{test_date}' is not valid ISO format")
+
+    return len(warnings) == 0, warnings
+
+
 def find_raw_data_file(folder_path: Union[str, Path]) -> Optional[Path]:
     """
     Find the raw data CSV file in a test folder.
