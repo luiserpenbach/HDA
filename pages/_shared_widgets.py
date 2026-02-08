@@ -751,6 +751,406 @@ def render_phase_timeline(phases: list):
     )
 
 
+def metadata_editor_widget(
+    raw_metadata: Dict[str, Any],
+    test_type: str = "",
+    key_suffix: str = "",
+    readonly: bool = False,
+) -> Dict[str, Any]:
+    """
+    Structured metadata editor with form and raw JSON views.
+
+    Operates on raw metadata dicts (not the TestMetadata dataclass) to
+    preserve nested sections and unknown fields during editing.
+
+    Args:
+        raw_metadata: The raw metadata dict loaded from JSON
+        test_type: "CF", "HF", etc. (controls which fluid fields to show)
+        key_suffix: Suffix for widget keys to avoid collisions
+        readonly: If True, display only (no editing)
+
+    Returns:
+        Modified metadata dict with edits applied
+    """
+    import copy
+    data = copy.deepcopy(raw_metadata)
+
+    # Track which top-level keys are handled by form groups
+    handled_keys = set()
+
+    # Determine edit mode
+    edit_mode = st.radio(
+        "Edit Mode",
+        ["Form", "JSON"],
+        horizontal=True,
+        key=f"meta_edit_mode_{key_suffix}",
+        disabled=readonly,
+    )
+
+    if edit_mode == "JSON":
+        return _metadata_json_editor(data, key_suffix, readonly)
+
+    # ── Form View ────────────────────────────────────────────────────
+
+    # Group 1: Test Identity
+    with st.expander("Test Identity", expanded=True):
+        id_cols = st.columns(3)
+        with id_cols[0]:
+            data['test_id'] = st.text_input(
+                "Test ID", value=data.get('test_id', ''),
+                key=f"me_test_id_{key_suffix}", disabled=True)
+        with id_cols[1]:
+            data['system'] = st.text_input(
+                "System", value=data.get('system', ''),
+                key=f"me_system_{key_suffix}", disabled=True)
+        with id_cols[2]:
+            status_options = ['pending', 'analyzed', 'approved', 'rejected']
+            current_status = data.get('status', 'pending')
+            idx = status_options.index(current_status) if current_status in status_options else 0
+            data['status'] = st.selectbox(
+                "Status", status_options, index=idx,
+                key=f"me_status_{key_suffix}", disabled=readonly)
+
+        id_cols2 = st.columns(3)
+        with id_cols2[0]:
+            data['program'] = st.text_input(
+                "Program", value=data.get('program', ''),
+                key=f"me_program_{key_suffix}", disabled=True)
+        with id_cols2[1]:
+            data['campaign_id'] = st.text_input(
+                "Campaign ID", value=data.get('campaign_id', ''),
+                key=f"me_campaign_id_{key_suffix}", disabled=True)
+        with id_cols2[2]:
+            data['test_type'] = st.text_input(
+                "Test Type", value=data.get('test_type', ''),
+                key=f"me_test_type_{key_suffix}", disabled=True)
+
+    handled_keys.update(['test_id', 'system', 'status', 'program',
+                         'campaign_id', 'test_type', 'run_id'])
+
+    # Group 2: Test Article
+    with st.expander("Test Article"):
+        # Handle both flat fields and nested test_article section
+        test_article = data.get('test_article', {})
+        has_nested_article = isinstance(test_article, dict) and test_article
+
+        art_cols = st.columns(3)
+        with art_cols[0]:
+            data['part_name'] = st.text_input(
+                "Part Name", value=data.get('part_name', ''),
+                key=f"me_part_name_{key_suffix}", disabled=readonly)
+        with art_cols[1]:
+            pn_val = data.get('part_number', '') or test_article.get('part_number', '')
+            data['part_number'] = st.text_input(
+                "Part Number", value=pn_val,
+                key=f"me_part_number_{key_suffix}", disabled=readonly)
+        with art_cols[2]:
+            sn_val = data.get('serial_number', '') or test_article.get('serial_number', '')
+            data['serial_number'] = st.text_input(
+                "Serial Number", value=sn_val,
+                key=f"me_serial_number_{key_suffix}", disabled=readonly)
+
+        if has_nested_article:
+            st.caption("Additional test article fields")
+            nested_art_cols = st.columns(2)
+            extra_article_keys = [k for k in test_article if k not in ('part_number', 'serial_number')]
+            for i, key in enumerate(extra_article_keys):
+                with nested_art_cols[i % 2]:
+                    label = key.replace('_', ' ').title()
+                    if isinstance(test_article[key], (int, float)):
+                        test_article[key] = st.number_input(
+                            label, value=float(test_article[key]),
+                            key=f"me_art_{key}_{key_suffix}", disabled=readonly)
+                    else:
+                        test_article[key] = st.text_input(
+                            label, value=str(test_article[key] or ''),
+                            key=f"me_art_{key}_{key_suffix}", disabled=readonly)
+            # Write back nested updates
+            if has_nested_article:
+                test_article['part_number'] = data['part_number']
+                test_article['serial_number'] = data['serial_number']
+                data['test_article'] = test_article
+
+    handled_keys.update(['part_name', 'part_number', 'serial_number', 'test_article'])
+
+    # Group 3: Test Info
+    with st.expander("Test Info"):
+        info_cols = st.columns(3)
+        with info_cols[0]:
+            data['test_date'] = st.text_input(
+                "Test Date (ISO)", value=data.get('test_date', ''),
+                placeholder="2026-01-15",
+                key=f"me_test_date_{key_suffix}", disabled=readonly)
+        with info_cols[1]:
+            data['operator'] = st.text_input(
+                "Operator", value=data.get('operator', ''),
+                key=f"me_operator_{key_suffix}", disabled=readonly)
+        with info_cols[2]:
+            data['facility'] = st.text_input(
+                "Facility", value=data.get('facility', ''),
+                key=f"me_facility_{key_suffix}", disabled=readonly)
+
+        info_cols2 = st.columns(2)
+        with info_cols2[0]:
+            data['test_time'] = st.text_input(
+                "Test Time", value=data.get('test_time', ''),
+                key=f"me_test_time_{key_suffix}", disabled=readonly)
+        with info_cols2[1]:
+            data['test_stand'] = st.text_input(
+                "Test Stand", value=data.get('test_stand', ''),
+                key=f"me_test_stand_{key_suffix}", disabled=readonly)
+
+    handled_keys.update(['test_date', 'test_time', 'operator', 'facility', 'test_stand'])
+
+    # Group 4: Fluid Properties
+    detected_type = test_type or data.get('test_type', '')
+    is_hot_fire = detected_type.upper() in ('HF', 'HOT_FIRE', 'HOTFIRE')
+
+    with st.expander("Fluid Properties"):
+        if is_hot_fire:
+            fl_cols = st.columns(2)
+            with fl_cols[0]:
+                data['oxidizer'] = st.text_input(
+                    "Oxidizer", value=data.get('oxidizer', ''),
+                    placeholder="e.g., Oxygen, NitrousOxide",
+                    key=f"me_oxidizer_{key_suffix}", disabled=readonly)
+                data['ox_temperature_K'] = st.number_input(
+                    "Ox Temperature [K]", value=float(data.get('ox_temperature_K', 90.0)),
+                    format="%.2f", key=f"me_ox_temp_{key_suffix}", disabled=readonly)
+                data['ox_pressure_Pa'] = st.number_input(
+                    "Ox Pressure [Pa]", value=float(data.get('ox_pressure_Pa', 101325.0)),
+                    format="%.1f", key=f"me_ox_press_{key_suffix}", disabled=readonly)
+            with fl_cols[1]:
+                data['fuel'] = st.text_input(
+                    "Fuel", value=data.get('fuel', ''),
+                    placeholder="e.g., n-Dodecane, Ethanol, Methane",
+                    key=f"me_fuel_{key_suffix}", disabled=readonly)
+                data['fuel_temperature_K'] = st.number_input(
+                    "Fuel Temperature [K]", value=float(data.get('fuel_temperature_K', 293.15)),
+                    format="%.2f", key=f"me_fuel_temp_{key_suffix}", disabled=readonly)
+                data['fuel_pressure_Pa'] = st.number_input(
+                    "Fuel Pressure [Pa]", value=float(data.get('fuel_pressure_Pa', 101325.0)),
+                    format="%.1f", key=f"me_fuel_press_{key_suffix}", disabled=readonly)
+        else:
+            fl_cols = st.columns(3)
+            with fl_cols[0]:
+                data['test_fluid'] = st.text_input(
+                    "Test Fluid", value=data.get('test_fluid', ''),
+                    placeholder="e.g., Water, Nitrogen, Ethanol",
+                    key=f"me_test_fluid_{key_suffix}", disabled=readonly)
+            with fl_cols[1]:
+                data['fluid_temperature_K'] = st.number_input(
+                    "Fluid Temperature [K]", value=float(data.get('fluid_temperature_K', 293.15)),
+                    format="%.2f", key=f"me_fluid_temp_{key_suffix}", disabled=readonly)
+            with fl_cols[2]:
+                data['fluid_pressure_Pa'] = st.number_input(
+                    "Fluid Pressure [Pa]", value=float(data.get('fluid_pressure_Pa', 101325.0)),
+                    format="%.1f", key=f"me_fluid_press_{key_suffix}", disabled=readonly)
+
+        # Handle nested fluid_properties section
+        fluid_props = data.get('fluid_properties')
+        if isinstance(fluid_props, dict) and fluid_props:
+            st.caption("Additional fluid properties (from file)")
+            st.json(fluid_props)
+
+    handled_keys.update(['test_fluid', 'fluid_temperature_K', 'fluid_pressure_Pa',
+                         'oxidizer', 'fuel', 'ox_temperature_K', 'fuel_temperature_K',
+                         'ox_pressure_Pa', 'fuel_pressure_Pa', 'fluid_properties'])
+
+    # Group 5: Geometry (only if nested section exists or user wants to add one)
+    geometry = data.get('geometry')
+    if isinstance(geometry, dict) and geometry:
+        with st.expander("Geometry"):
+            geo_keys = sorted(geometry.keys())
+            geo_cols = st.columns(2)
+            for i, key in enumerate(geo_keys):
+                with geo_cols[i % 2]:
+                    label = key.replace('_', ' ').title()
+                    val = geometry[key]
+                    if isinstance(val, (int, float)):
+                        geometry[key] = st.number_input(
+                            label, value=float(val), format="%.6g",
+                            key=f"me_geo_{key}_{key_suffix}", disabled=readonly)
+                    elif isinstance(val, str):
+                        geometry[key] = st.text_input(
+                            label, value=val,
+                            key=f"me_geo_{key}_{key_suffix}", disabled=readonly)
+                    else:
+                        st.text_input(label, value=str(val),
+                                      key=f"me_geo_{key}_{key_suffix}", disabled=True)
+            data['geometry'] = geometry
+    handled_keys.add('geometry')
+
+    # Group 6: Test Conditions & Environment
+    with st.expander("Environment & Conditions"):
+        env_cols = st.columns(2)
+        with env_cols[0]:
+            data['ambient_temperature_K'] = st.number_input(
+                "Ambient Temperature [K]",
+                value=float(data.get('ambient_temperature_K', 293.15)),
+                format="%.2f", key=f"me_amb_temp_{key_suffix}", disabled=readonly)
+        with env_cols[1]:
+            data['ambient_pressure_Pa'] = st.number_input(
+                "Ambient Pressure [Pa]",
+                value=float(data.get('ambient_pressure_Pa', 101325.0)),
+                format="%.1f", key=f"me_amb_press_{key_suffix}", disabled=readonly)
+
+        # Handle nested test_conditions section
+        test_conditions = data.get('test_conditions')
+        if isinstance(test_conditions, dict) and test_conditions:
+            st.caption("Test conditions")
+            tc_keys = sorted(test_conditions.keys())
+            tc_cols = st.columns(2)
+            for i, key in enumerate(tc_keys):
+                with tc_cols[i % 2]:
+                    label = key.replace('_', ' ').title()
+                    val = test_conditions[key]
+                    if isinstance(val, (int, float)):
+                        test_conditions[key] = st.number_input(
+                            label, value=float(val), format="%.6g",
+                            key=f"me_tc_{key}_{key_suffix}", disabled=readonly)
+                    elif isinstance(val, str):
+                        test_conditions[key] = st.text_input(
+                            label, value=val,
+                            key=f"me_tc_{key}_{key_suffix}", disabled=readonly)
+                    else:
+                        st.text_input(label, value=str(val),
+                                      key=f"me_tc_{key}_{key_suffix}", disabled=True)
+            data['test_conditions'] = test_conditions
+
+        # Handle nested nominal_conditions dict
+        nom = data.get('nominal_conditions')
+        if isinstance(nom, dict) and nom:
+            st.caption("Nominal conditions")
+            st.json(nom)
+
+    handled_keys.update(['ambient_temperature_K', 'ambient_pressure_Pa',
+                         'test_conditions', 'nominal_conditions'])
+
+    # Group 7: Configuration Reference
+    config_file = data.get('config_file', '')
+    config_name = data.get('config_name', '')
+    if config_file or config_name:
+        with st.expander("Configuration Reference"):
+            cfg_cols = st.columns(2)
+            with cfg_cols[0]:
+                data['config_file'] = st.text_input(
+                    "Config File", value=config_file,
+                    key=f"me_config_file_{key_suffix}", disabled=readonly)
+            with cfg_cols[1]:
+                data['config_name'] = st.text_input(
+                    "Config Name", value=config_name,
+                    key=f"me_config_name_{key_suffix}", disabled=readonly)
+    handled_keys.update(['config_file', 'config_name', 'raw_data_files'])
+
+    # Group 8: Notes
+    with st.expander("Notes & Observations"):
+        data['notes'] = st.text_area(
+            "Notes", value=data.get('notes', ''), height=100,
+            key=f"me_notes_{key_suffix}", disabled=readonly)
+        data['anomalies'] = st.text_area(
+            "Anomalies", value=data.get('anomalies', ''), height=80,
+            key=f"me_anomalies_{key_suffix}", disabled=readonly)
+
+    handled_keys.update(['notes', 'anomalies'])
+
+    # Group 9: Analysis info (read-only display)
+    analysis_date = data.get('analysis_date', '')
+    analysis_version = data.get('analysis_version', '')
+    if analysis_date or analysis_version:
+        with st.expander("Analysis Info"):
+            a_cols = st.columns(2)
+            with a_cols[0]:
+                st.text_input("Analysis Date", value=analysis_date,
+                              key=f"me_analysis_date_{key_suffix}", disabled=True)
+            with a_cols[1]:
+                st.text_input("Analysis Version", value=analysis_version,
+                              key=f"me_analysis_version_{key_suffix}", disabled=True)
+    handled_keys.update(['analysis_date', 'analysis_version'])
+
+    # Group 10: Additional / unhandled fields
+    extra_keys = [k for k in data.keys() if k not in handled_keys]
+    if extra_keys:
+        with st.expander(f"Additional Fields ({len(extra_keys)})"):
+            for key in sorted(extra_keys):
+                val = data[key]
+                label = key.replace('_', ' ').title()
+                if isinstance(val, dict):
+                    st.caption(f"**{label}**")
+                    if readonly:
+                        st.json(val)
+                    else:
+                        edited = st.text_area(
+                            f"{label} (JSON)", value=json.dumps(val, indent=2),
+                            height=150, key=f"me_extra_{key}_{key_suffix}",
+                            disabled=readonly)
+                        try:
+                            data[key] = json.loads(edited)
+                        except json.JSONDecodeError:
+                            st.warning(f"Invalid JSON for '{key}' - keeping original")
+                elif isinstance(val, list):
+                    st.caption(f"**{label}**")
+                    if readonly:
+                        st.json(val)
+                    else:
+                        edited = st.text_area(
+                            f"{label} (JSON)", value=json.dumps(val, indent=2),
+                            height=100, key=f"me_extra_{key}_{key_suffix}",
+                            disabled=readonly)
+                        try:
+                            data[key] = json.loads(edited)
+                        except json.JSONDecodeError:
+                            st.warning(f"Invalid JSON for '{key}' - keeping original")
+                elif isinstance(val, (int, float)):
+                    data[key] = st.number_input(
+                        label, value=float(val), format="%.6g",
+                        key=f"me_extra_{key}_{key_suffix}", disabled=readonly)
+                else:
+                    data[key] = st.text_input(
+                        label, value=str(val or ''),
+                        key=f"me_extra_{key}_{key_suffix}", disabled=readonly)
+
+    return data
+
+
+def _metadata_json_editor(
+    data: Dict[str, Any],
+    key_suffix: str = "",
+    readonly: bool = False,
+) -> Dict[str, Any]:
+    """
+    Raw JSON editor for metadata. Internal helper for metadata_editor_widget.
+
+    Args:
+        data: Current metadata dict
+        key_suffix: Suffix for widget keys
+        readonly: If True, display only
+
+    Returns:
+        Parsed metadata dict (or original if parse fails)
+    """
+    json_str = st.text_area(
+        "Metadata JSON",
+        value=json.dumps(data, indent=2, default=str),
+        height=500,
+        key=f"me_json_editor_{key_suffix}",
+        disabled=readonly,
+    )
+
+    if readonly:
+        return data
+
+    try:
+        parsed = json.loads(json_str)
+        if not isinstance(parsed, dict):
+            st.error("JSON must be an object (dict)")
+            return data
+        return parsed
+    except json.JSONDecodeError as e:
+        st.error(f"Invalid JSON: {e}")
+        return data
+
+
 def error_with_troubleshooting(error_message: str, suggestions: List[str]):
     """
     Display error message with troubleshooting suggestions.

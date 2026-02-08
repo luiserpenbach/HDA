@@ -481,17 +481,166 @@ class TestConfigValidation:
         print(f"[PASS] Auto-detected config type: cold_flow")
 
 
+class TestRawMetadata:
+    """Test raw metadata load/save/validate functions."""
+
+    def test_load_raw_metadata_preserves_all_fields(self):
+        """Verify load_raw_metadata keeps nested sections intact."""
+        from core.test_metadata import load_raw_metadata
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            metadata = {
+                "test_id": "RCS-C01-CF-001",
+                "status": "pending",
+                "geometry": {
+                    "orifice_area_mm2": 3.14,
+                    "throat_area_mm2": 12.566,
+                },
+                "test_article": {
+                    "part_number": "INJ-B1-03",
+                    "revision": "C",
+                    "material": "316L",
+                },
+                "fluid_properties": {
+                    "oxidizer": {"name": "nitrogen", "gamma": 1.4}
+                },
+                "sensor_roles": {"upstream_pressure": "PT-01"},
+                "acceptance_criteria": {"cd_min": 0.6, "cd_max": 0.7},
+                "references": {"test_procedure": "TP-001"},
+            }
+
+            with open(os.path.join(tmpdir, "metadata.json"), 'w') as f:
+                json.dump(metadata, f)
+
+            loaded = load_raw_metadata(tmpdir)
+
+            assert loaded is not None
+            assert loaded['test_id'] == "RCS-C01-CF-001"
+            assert loaded['geometry']['orifice_area_mm2'] == 3.14
+            assert loaded['test_article']['material'] == "316L"
+            assert loaded['fluid_properties']['oxidizer']['gamma'] == 1.4
+            assert loaded['sensor_roles']['upstream_pressure'] == "PT-01"
+            assert loaded['acceptance_criteria']['cd_min'] == 0.6
+            assert loaded['references']['test_procedure'] == "TP-001"
+
+            print("[PASS] load_raw_metadata preserves all nested fields")
+
+    def test_load_raw_metadata_returns_none_for_missing(self):
+        """Verify load_raw_metadata returns None when no file exists."""
+        from core.test_metadata import load_raw_metadata
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = load_raw_metadata(tmpdir)
+            assert result is None
+            print("[PASS] load_raw_metadata returns None for missing file")
+
+    def test_save_raw_metadata_roundtrip(self):
+        """Verify save then load round-trips correctly."""
+        from core.test_metadata import load_raw_metadata, save_raw_metadata
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original = {
+                "test_id": "TEST-001",
+                "geometry": {"area": 3.14, "notes": "test geometry"},
+                "custom_section": {"key1": "value1", "nested": {"deep": True}},
+                "tags": ["tag1", "tag2"],
+                "count": 42,
+            }
+
+            save_raw_metadata(tmpdir, original)
+            loaded = load_raw_metadata(tmpdir)
+
+            assert loaded == original
+            print("[PASS] save_raw_metadata round-trips correctly")
+
+    def test_validate_raw_metadata_valid(self):
+        """Verify validation passes for valid metadata."""
+        from core.test_metadata import validate_raw_metadata
+
+        data = {
+            "test_id": "RCS-C01-CF-001",
+            "status": "pending",
+            "fluid_temperature_K": 293.15,
+            "ambient_pressure_Pa": 101325.0,
+            "test_date": "2026-01-15",
+        }
+
+        is_valid, warnings = validate_raw_metadata(data)
+        assert is_valid, f"Expected valid, got warnings: {warnings}"
+        assert len(warnings) == 0
+        print("[PASS] validate_raw_metadata passes for valid data")
+
+    def test_validate_raw_metadata_catches_bad_values(self):
+        """Verify validation catches invalid values."""
+        from core.test_metadata import validate_raw_metadata
+
+        data = {
+            "status": "invalid_status",
+            "fluid_temperature_K": -50,
+            "test_date": "not-a-date",
+            "geometry": {"orifice_area_mm2": -1.0},
+        }
+
+        is_valid, warnings = validate_raw_metadata(data)
+        assert not is_valid, "Expected validation to fail"
+        assert any("status" in w for w in warnings), "Should warn about invalid status"
+        assert any("fluid_temperature_K" in w for w in warnings), "Should warn about bad temperature"
+        assert any("test_date" in w for w in warnings), "Should warn about bad date"
+        assert any("geometry" in w for w in warnings), "Should warn about negative geometry"
+        print(f"[PASS] validate_raw_metadata catches bad values ({len(warnings)} warnings)")
+
+    def test_load_save_does_not_drop_unknown_fields(self):
+        """Regression: editing known fields must not drop unknown ones."""
+        from core.test_metadata import load_raw_metadata, save_raw_metadata
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original = {
+                "test_id": "TEST-001",
+                "status": "pending",
+                "geometry": {"orifice_area_mm2": 3.14},
+                "custom_unknown_section": {"data": [1, 2, 3]},
+                "another_field": "should persist",
+            }
+
+            # Save original
+            save_raw_metadata(tmpdir, original)
+
+            # Load, modify a known field, save again
+            loaded = load_raw_metadata(tmpdir)
+            loaded["status"] = "analyzed"
+            save_raw_metadata(tmpdir, loaded)
+
+            # Reload and verify unknown sections survived
+            reloaded = load_raw_metadata(tmpdir)
+            assert reloaded["status"] == "analyzed"
+            assert reloaded["custom_unknown_section"]["data"] == [1, 2, 3]
+            assert reloaded["another_field"] == "should persist"
+            assert reloaded["geometry"]["orifice_area_mm2"] == 3.14
+
+            print("[PASS] load/save does not drop unknown fields")
+
+    def test_validate_empty_metadata(self):
+        """Verify validation rejects empty metadata."""
+        from core.test_metadata import validate_raw_metadata
+
+        is_valid, warnings = validate_raw_metadata({})
+        assert not is_valid
+        assert any("empty" in w.lower() for w in warnings)
+        print("[PASS] validate_raw_metadata rejects empty dict")
+
+
 def run_all_tests():
     """Run all tests and report results."""
     print("=" * 60)
     print("P0 Component Tests")
     print("=" * 60)
-    
+
     test_classes = [
         TestTraceability,
         TestUncertainty,
         TestQCChecks,
         TestConfigValidation,
+        TestRawMetadata,
     ]
     
     passed = 0
