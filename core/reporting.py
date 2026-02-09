@@ -14,7 +14,7 @@ Features:
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List, Tuple, Union
 from datetime import datetime
 from pathlib import Path
 import json
@@ -29,6 +29,43 @@ try:
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
+
+
+# =============================================================================
+# CHART CONSTANTS
+# =============================================================================
+
+_REPORT_COLORS = {
+    'primary': '#18181b',
+    'accent': '#2563eb',
+    'success': '#16a34a',
+    'muted': '#71717a',
+    'steady_fill': 'rgba(22, 163, 106, 0.12)',
+}
+
+_REPORT_LAYOUT = dict(
+    template='plotly_white',
+    margin=dict(t=40, b=40, l=50, r=20),
+    height=280,
+    showlegend=False,
+)
+
+# Key chart definitions per test type
+_KEY_CHARTS = {
+    'cold_flow': [
+        {'role': 'upstream_pressure', 'title': 'Upstream Pressure', 'y_label': 'Pressure (bar)', 'color': '#2563eb'},
+        {'role': 'mass_flow', 'title': 'Mass Flow Rate', 'y_label': 'Flow (g/s)', 'color': '#18181b'},
+        {'role': 'downstream_pressure', 'title': 'Downstream Pressure', 'y_label': 'Pressure (bar)', 'color': '#71717a'},
+        {'type': 'bar', 'metrics': ['Cd', 'delta_p'], 'title': 'Key Metrics'},
+    ],
+    'hot_fire': [
+        {'role': 'chamber_pressure', 'title': 'Chamber Pressure', 'y_label': 'Pressure (bar)', 'color': '#2563eb'},
+        {'role': 'thrust', 'title': 'Thrust', 'y_label': 'Thrust (N)', 'color': '#18181b'},
+        {'role': 'mass_flow_ox', 'title': 'Mass Flow', 'y_label': 'Flow (g/s)', 'color': '#71717a',
+         'fallbacks': ['mass_flow_total', 'mass_flow_fuel', 'mass_flow']},
+        {'type': 'bar', 'metrics': ['Isp', 'c_star', 'of_ratio'], 'title': 'Performance Metrics'},
+    ],
+}
 
 
 # =============================================================================
@@ -220,7 +257,31 @@ HTML_HEAD = """
             background: var(--light-bg);
             border-radius: 8px;
         }}
-        
+
+        .chart-grid {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }}
+
+        .chart-grid .chart-cell {{
+            background: var(--light-bg);
+            border-radius: 8px;
+            padding: 10px;
+            min-height: 300px;
+        }}
+
+        .chart-grid .chart-cell h4 {{
+            color: var(--primary-color);
+            margin: 0 0 8px 0;
+            font-size: 0.9em;
+        }}
+
+        .appendix-charts .chart-container {{
+            margin: 15px 0;
+        }}
+
         .summary-cards {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -267,6 +328,9 @@ HTML_HEAD = """
                 padding: 0;
             }}
             .section {{
+                page-break-inside: avoid;
+            }}
+            .chart-cell, .appendix-charts .chart-container {{
                 page-break-inside: avoid;
             }}
         }}
@@ -455,6 +519,323 @@ def generate_summary_cards(metrics: Dict[str, Any]) -> str:
 
 
 # =============================================================================
+# CHART HELPERS
+# =============================================================================
+
+def _resolve_sensor_column(role: str, config: Dict[str, Any]) -> Optional[str]:
+    """Resolve a logical sensor role to the actual DataFrame column name."""
+    sensor_roles = config.get('sensor_roles', {})
+    if not sensor_roles:
+        sensor_roles = config.get('columns', {})
+    return sensor_roles.get(role)
+
+
+def _detect_time_col(df: pd.DataFrame) -> Optional[str]:
+    """Find the time column in a DataFrame."""
+    for candidate in ('time_s', 'time_ms', 'timestamp', 'Time', 't'):
+        if candidate in df.columns:
+            return candidate
+    return None
+
+
+def _create_time_series_chart(
+    df: pd.DataFrame,
+    time_col: str,
+    data_col: str,
+    title: str,
+    y_label: str,
+    steady_window: Optional[Tuple[float, float]] = None,
+    color: str = '#18181b',
+    is_first_chart: bool = False,
+) -> str:
+    """
+    Create an embedded time-series chart as HTML.
+
+    Args:
+        df: Full test DataFrame
+        time_col: Name of time column
+        data_col: Name of data column to plot
+        title: Chart title
+        y_label: Y-axis label
+        steady_window: Optional (start, end) for green overlay
+        color: Line color
+        is_first_chart: If True, includes plotly.js CDN
+
+    Returns:
+        HTML string with embedded chart, or empty string if unavailable
+    """
+    if not PLOTLY_AVAILABLE:
+        return ''
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df[time_col], y=df[data_col],
+        mode='lines', name=data_col,
+        line=dict(width=1.5, color=color),
+    ))
+
+    if steady_window is not None:
+        fig.add_vrect(
+            x0=steady_window[0], x1=steady_window[1],
+            fillcolor=_REPORT_COLORS['steady_fill'],
+            line_width=0,
+            annotation_text='steady',
+            annotation_position='top left',
+            annotation_font_size=10,
+            annotation_font_color=_REPORT_COLORS['success'],
+        )
+
+    time_label = 'Time (s)' if time_col == 'time_s' else f'Time ({time_col})'
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=13)),
+        xaxis_title=time_label,
+        yaxis_title=y_label,
+        **_REPORT_LAYOUT,
+    )
+
+    include_js = 'cdn' if is_first_chart else False
+    return fig.to_html(full_html=False, include_plotlyjs=include_js)
+
+
+def _create_bar_chart(
+    measurements: Dict[str, Any],
+    metric_keys: List[str],
+    title: str,
+    is_first_chart: bool = False,
+) -> str:
+    """
+    Create a bar chart for computed measurements with error bars.
+
+    Args:
+        measurements: Dict of measurement name -> MeasurementWithUncertainty
+        metric_keys: List of keys to plot
+        title: Chart title
+        is_first_chart: If True, includes plotly.js CDN
+
+    Returns:
+        HTML string with embedded chart
+    """
+    if not PLOTLY_AVAILABLE:
+        return ''
+
+    names = []
+    values = []
+    errors = []
+    units = []
+
+    for key in metric_keys:
+        if key in measurements:
+            m = measurements[key]
+            if hasattr(m, 'value') and hasattr(m, 'uncertainty'):
+                names.append(key)
+                values.append(m.value)
+                errors.append(m.uncertainty)
+                units.append(getattr(m, 'unit', ''))
+
+    if not names:
+        return ''
+
+    hover_text = [
+        f"{n}: {v:.4g} ± {e:.4g} {u}"
+        for n, v, e, u in zip(names, values, errors, units)
+    ]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=names, y=values,
+        error_y=dict(type='data', array=errors, visible=True),
+        marker_color=_REPORT_COLORS['accent'],
+        text=hover_text,
+        hoverinfo='text',
+    ))
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=13)),
+        yaxis_title='Value',
+        **_REPORT_LAYOUT,
+    )
+
+    include_js = 'cdn' if is_first_chart else False
+    return fig.to_html(full_html=False, include_plotlyjs=include_js)
+
+
+# =============================================================================
+# CHART SECTION GENERATORS
+# =============================================================================
+
+def generate_key_charts_section(
+    df: pd.DataFrame,
+    test_type: str,
+    config: Dict[str, Any],
+    measurements: Dict[str, Any],
+    steady_window: Optional[Tuple[float, float]] = None,
+    is_first_chart_in_report: bool = True,
+) -> str:
+    """
+    Generate the key charts 2x2 grid section for the report.
+
+    Args:
+        df: Full test DataFrame with time series data
+        test_type: 'cold_flow' or 'hot_fire'
+        config: Configuration dictionary (with sensor_roles or columns)
+        measurements: Dict of measurements with uncertainties
+        steady_window: (start, end) for green overlay
+        is_first_chart_in_report: If True, first chart includes plotly.js CDN
+
+    Returns:
+        HTML string for the key charts section
+    """
+    if not PLOTLY_AVAILABLE:
+        return (
+            '<div class="section"><h2>Key Charts</h2>'
+            '<p><em>Chart visualization requires the plotly library.</em></p></div>'
+        )
+
+    chart_specs = _KEY_CHARTS.get(test_type, _KEY_CHARTS['cold_flow'])
+    time_col = _detect_time_col(df)
+
+    if time_col is None:
+        return ''
+
+    chart_html_cells = []
+    key_columns = []
+    first_chart = is_first_chart_in_report
+
+    for spec in chart_specs:
+        if spec.get('type') == 'bar':
+            html = _create_bar_chart(
+                measurements, spec['metrics'], spec['title'],
+                is_first_chart=first_chart,
+            )
+            if html:
+                chart_html_cells.append(f'<div class="chart-cell">{html}</div>')
+                if first_chart:
+                    first_chart = False
+        else:
+            # Time series chart — resolve sensor column
+            col_name = _resolve_sensor_column(spec['role'], config)
+
+            # Try fallback roles if primary not found
+            if (col_name is None or col_name not in df.columns) and 'fallbacks' in spec:
+                for fb_role in spec['fallbacks']:
+                    fb_col = _resolve_sensor_column(fb_role, config)
+                    if fb_col and fb_col in df.columns:
+                        col_name = fb_col
+                        break
+
+            if col_name is None or col_name not in df.columns:
+                chart_html_cells.append(
+                    f'<div class="chart-cell">'
+                    f'<h4>{spec["title"]}</h4>'
+                    f'<p style="color:#71717a;padding:60px 20px;text-align:center;">'
+                    f'Sensor not available</p></div>'
+                )
+                continue
+
+            key_columns.append(col_name)
+
+            html = _create_time_series_chart(
+                df, time_col, col_name,
+                title=spec['title'],
+                y_label=spec.get('y_label', ''),
+                steady_window=steady_window,
+                color=spec.get('color', _REPORT_COLORS['primary']),
+                is_first_chart=first_chart,
+            )
+            if html:
+                chart_html_cells.append(f'<div class="chart-cell">{html}</div>')
+                if first_chart:
+                    first_chart = False
+
+    if not chart_html_cells:
+        return ''
+
+    return (
+        '<div class="section">'
+        '<h2>Key Charts</h2>'
+        f'<div class="chart-grid">{"".join(chart_html_cells)}</div>'
+        '</div>'
+    )
+
+
+def generate_appendix_charts_section(
+    df: pd.DataFrame,
+    config: Dict[str, Any],
+    steady_window: Optional[Tuple[float, float]] = None,
+    key_columns: Optional[List[str]] = None,
+) -> str:
+    """
+    Generate appendix section with remaining sensor time series.
+
+    Args:
+        df: Full test DataFrame
+        config: Configuration dict
+        steady_window: (start, end) for green overlay
+        key_columns: Columns already plotted in key charts (excluded)
+
+    Returns:
+        HTML string for appendix section
+    """
+    if not PLOTLY_AVAILABLE:
+        return ''
+
+    time_col = _detect_time_col(df)
+    if time_col is None:
+        return ''
+
+    skip_cols = {'time', 'time_s', 'time_ms', 'timestamp', 'Time', 'TIME', 't'}
+    skip_cols.update(key_columns or [])
+
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    appendix_cols = [c for c in numeric_cols if c not in skip_cols]
+
+    if not appendix_cols:
+        return ''
+
+    chart_parts = []
+    for col in appendix_cols:
+        html = _create_time_series_chart(
+            df, time_col, col,
+            title=col, y_label=col,
+            steady_window=steady_window,
+            color=_REPORT_COLORS['muted'],
+            is_first_chart=False,
+        )
+        if html:
+            chart_parts.append(f'<div class="chart-container">{html}</div>')
+
+    if not chart_parts:
+        return ''
+
+    return (
+        '<div class="section appendix-charts">'
+        '<h2>Appendix: Sensor Data</h2>'
+        '<p style="color:#666;font-size:0.9em;">'
+        'Full time-series traces for all recorded sensor channels. '
+        'Green bands indicate the steady-state analysis window.</p>'
+        f'{"".join(chart_parts)}'
+        '</div>'
+    )
+
+
+def _get_key_chart_columns(test_type: str, config: Dict[str, Any]) -> List[str]:
+    """Get the list of DataFrame columns used by key charts (for appendix exclusion)."""
+    chart_specs = _KEY_CHARTS.get(test_type, _KEY_CHARTS.get('cold_flow', []))
+    key_cols = []
+    for spec in chart_specs:
+        if spec.get('type') == 'bar':
+            continue
+        col = _resolve_sensor_column(spec.get('role', ''), config)
+        if col:
+            key_cols.append(col)
+        for fb_role in spec.get('fallbacks', []):
+            fb_col = _resolve_sensor_column(fb_role, config)
+            if fb_col:
+                key_cols.append(fb_col)
+    return key_cols
+
+
+# =============================================================================
 # MAIN REPORT GENERATORS
 # =============================================================================
 
@@ -467,10 +848,13 @@ def generate_test_report(
     metadata: Optional[Dict[str, Any]] = None,
     config: Optional[Dict[str, Any]] = None,
     include_config_snapshot: bool = False,
+    df: Optional[pd.DataFrame] = None,
+    steady_window: Optional[Tuple[float, float]] = None,
+    include_charts: bool = True,
 ) -> str:
     """
     Generate complete HTML report for a single test.
-    
+
     Args:
         test_id: Test identifier
         test_type: 'cold_flow' or 'hot_fire'
@@ -480,7 +864,10 @@ def generate_test_report(
         metadata: Additional metadata
         config: Test configuration
         include_config_snapshot: Include full config JSON
-        
+        df: Processed test DataFrame for chart generation (optional)
+        steady_window: (start, end) in seconds for chart overlay (optional)
+        include_charts: Whether to generate charts (default True)
+
     Returns:
         Complete HTML report as string
     """
@@ -545,7 +932,19 @@ def generate_test_report(
             {generate_summary_cards(key_metrics)}
         </div>
         """)
-    
+
+    # Key charts (2x2 grid)
+    if include_charts and df is not None and PLOTLY_AVAILABLE and config:
+        key_chart_columns = _get_key_chart_columns(test_type, config)
+        report_parts.append(generate_key_charts_section(
+            df=df,
+            test_type=test_type,
+            config=config,
+            measurements=measurements,
+            steady_window=steady_window,
+            is_first_chart_in_report=True,
+        ))
+
     # Full measurements table
     report_parts.append(f"""
     <div class="section">
@@ -572,7 +971,17 @@ def generate_test_report(
             </div>
         </div>
         """)
-    
+
+    # Appendix charts (all remaining sensor traces)
+    if include_charts and df is not None and PLOTLY_AVAILABLE:
+        key_chart_cols = _get_key_chart_columns(test_type, config or {})
+        report_parts.append(generate_appendix_charts_section(
+            df=df,
+            config=config or {},
+            steady_window=steady_window,
+            key_columns=key_chart_cols,
+        ))
+
     # Footer
     report_parts.append(HTML_FOOTER.format(timestamp=datetime.now().isoformat()))
     

@@ -34,6 +34,12 @@ from core.reporting import (
     generate_campaign_report,
     generate_measurement_table,
     save_report,
+    generate_key_charts_section,
+    generate_appendix_charts_section,
+    _resolve_sensor_column,
+    _create_time_series_chart,
+    _create_bar_chart,
+    PLOTLY_AVAILABLE,
 )
 
 from core.batch_analysis import (
@@ -288,6 +294,254 @@ class TestReporting:
             os.unlink(temp_path)
 
 
+class TestReportCharts:
+    """Test report chart generation functions."""
+
+    def _make_test_df(self):
+        """Create a synthetic time-series DataFrame."""
+        np.random.seed(42)
+        n = 500
+        t = np.linspace(0, 5, n)
+        return pd.DataFrame({
+            'time_s': t,
+            'IG-PT-01': 25.0 + np.random.normal(0, 0.1, n),
+            'IG-PT-02': 1.0 + np.random.normal(0, 0.05, n),
+            'FM-01': 12.5 + np.random.normal(0, 0.2, n),
+            'TC-01': 295.0 + np.random.normal(0, 0.5, n),
+        })
+
+    def _make_test_config(self):
+        """Create a config with sensor_roles."""
+        return {
+            'sensor_roles': {
+                'upstream_pressure': 'IG-PT-01',
+                'downstream_pressure': 'IG-PT-02',
+                'mass_flow': 'FM-01',
+                'fluid_temperature': 'TC-01',
+            },
+        }
+
+    def _make_test_measurements(self):
+        """Create test measurements with uncertainties."""
+        from core.uncertainty import MeasurementWithUncertainty
+        return {
+            'Cd': MeasurementWithUncertainty(0.654, 0.012, '-', 'Cd'),
+            'pressure_upstream': MeasurementWithUncertainty(25.0, 0.5, 'bar', 'pressure'),
+            'mass_flow': MeasurementWithUncertainty(12.5, 0.25, 'g/s', 'mass_flow'),
+            'delta_p': MeasurementWithUncertainty(24.0, 0.55, 'bar', 'delta_p'),
+        }
+
+    def test_resolve_sensor_column(self):
+        """Test sensor role resolution."""
+        config = self._make_test_config()
+        assert _resolve_sensor_column('upstream_pressure', config) == 'IG-PT-01'
+        assert _resolve_sensor_column('mass_flow', config) == 'FM-01'
+        assert _resolve_sensor_column('nonexistent', config) is None
+
+        # Legacy columns fallback
+        legacy_config = {'columns': {'upstream_pressure': 'PT-01'}}
+        assert _resolve_sensor_column('upstream_pressure', legacy_config) == 'PT-01'
+
+        print("[PASS] Sensor column resolution works")
+
+    def test_create_time_series_chart(self):
+        """Test single time-series chart generation."""
+        if not PLOTLY_AVAILABLE:
+            print("[SKIP] Plotly not available")
+            return
+
+        df = self._make_test_df()
+        html = _create_time_series_chart(
+            df, 'time_s', 'IG-PT-01',
+            title='Upstream Pressure', y_label='Pressure (bar)',
+            steady_window=(1.0, 4.0), color='#2563eb',
+            is_first_chart=True,
+        )
+        assert 'plotly' in html.lower(), "Should contain plotly reference"
+        assert len(html) > 100, "Should produce substantial HTML"
+
+        # Second chart should not include plotly.js
+        html2 = _create_time_series_chart(
+            df, 'time_s', 'FM-01',
+            title='Mass Flow', y_label='Flow (g/s)',
+            is_first_chart=False,
+        )
+        assert 'cdn.plot.ly' not in html2, "Non-first chart should not include CDN"
+
+        print(f"[PASS] Time series chart generated ({len(html)} chars)")
+
+    def test_create_bar_chart(self):
+        """Test bar chart generation for computed metrics."""
+        if not PLOTLY_AVAILABLE:
+            print("[SKIP] Plotly not available")
+            return
+
+        measurements = self._make_test_measurements()
+        html = _create_bar_chart(
+            measurements, ['Cd', 'delta_p'],
+            title='Key Metrics', is_first_chart=True,
+        )
+        assert len(html) > 100, "Should produce substantial HTML"
+        assert 'Key Metrics' in html
+
+        # Empty metrics
+        html_empty = _create_bar_chart(measurements, ['nonexistent'], title='Empty')
+        assert html_empty == '', "Should return empty for missing metrics"
+
+        print(f"[PASS] Bar chart generated ({len(html)} chars)")
+
+    def test_key_charts_cold_flow(self):
+        """Test key charts section for cold flow."""
+        if not PLOTLY_AVAILABLE:
+            print("[SKIP] Plotly not available")
+            return
+
+        df = self._make_test_df()
+        config = self._make_test_config()
+        measurements = self._make_test_measurements()
+
+        html = generate_key_charts_section(
+            df=df, test_type='cold_flow', config=config,
+            measurements=measurements, steady_window=(1.0, 4.0),
+        )
+
+        assert 'chart-grid' in html, "Should contain chart grid"
+        assert 'Key Charts' in html
+        assert 'chart-cell' in html
+
+        print(f"[PASS] Cold flow key charts generated ({len(html)} chars)")
+
+    def test_key_charts_hot_fire(self):
+        """Test key charts section for hot fire."""
+        if not PLOTLY_AVAILABLE:
+            print("[SKIP] Plotly not available")
+            return
+
+        from core.uncertainty import MeasurementWithUncertainty
+
+        df = pd.DataFrame({
+            'time_s': np.linspace(0, 5, 300),
+            'PC-01': 15.0 + np.random.normal(0, 0.1, 300),
+            'LC-01': 200.0 + np.random.normal(0, 2, 300),
+            'OX-FM-01': 5.0 + np.random.normal(0, 0.1, 300),
+        })
+        config = {
+            'sensor_roles': {
+                'chamber_pressure': 'PC-01',
+                'thrust': 'LC-01',
+                'mass_flow_ox': 'OX-FM-01',
+            },
+        }
+        measurements = {
+            'Isp': MeasurementWithUncertainty(220.0, 5.0, 's', 'Isp'),
+            'c_star': MeasurementWithUncertainty(1450.0, 30.0, 'm/s', 'c_star'),
+            'of_ratio': MeasurementWithUncertainty(2.5, 0.1, '-', 'of_ratio'),
+        }
+
+        html = generate_key_charts_section(
+            df=df, test_type='hot_fire', config=config,
+            measurements=measurements,
+        )
+
+        assert 'chart-grid' in html
+        assert 'Key Charts' in html
+
+        print(f"[PASS] Hot fire key charts generated ({len(html)} chars)")
+
+    def test_key_charts_missing_sensor(self):
+        """Test graceful degradation with missing sensor."""
+        if not PLOTLY_AVAILABLE:
+            print("[SKIP] Plotly not available")
+            return
+
+        df = self._make_test_df()
+        config = {'sensor_roles': {'upstream_pressure': 'IG-PT-01'}}  # Missing others
+        measurements = self._make_test_measurements()
+
+        html = generate_key_charts_section(
+            df=df, test_type='cold_flow', config=config,
+            measurements=measurements,
+        )
+
+        assert 'Sensor not available' in html, "Should show placeholder for missing sensors"
+        assert 'chart-grid' in html, "Grid should still render"
+
+        print("[PASS] Missing sensor handled gracefully")
+
+    def test_appendix_charts(self):
+        """Test appendix section generation."""
+        if not PLOTLY_AVAILABLE:
+            print("[SKIP] Plotly not available")
+            return
+
+        df = self._make_test_df()
+        config = self._make_test_config()
+
+        # Key columns should be excluded from appendix
+        key_columns = ['IG-PT-01', 'IG-PT-02', 'FM-01']
+
+        html = generate_appendix_charts_section(
+            df=df, config=config, steady_window=(1.0, 4.0),
+            key_columns=key_columns,
+        )
+
+        assert 'Appendix' in html
+        assert 'TC-01' in html, "Non-key sensor should appear in appendix"
+
+        print(f"[PASS] Appendix charts generated ({len(html)} chars)")
+
+    def test_report_with_charts(self):
+        """Test full report generation with embedded charts."""
+        if not PLOTLY_AVAILABLE:
+            print("[SKIP] Plotly not available")
+            return
+
+        df = self._make_test_df()
+        config = self._make_test_config()
+        measurements = self._make_test_measurements()
+
+        traceability = {
+            'raw_data_hash': 'sha256:abc123',
+            'analyst_username': 'test_user',
+            'analysis_timestamp_utc': datetime.now().isoformat(),
+        }
+
+        html = generate_test_report(
+            test_id='CF-001', test_type='cold_flow',
+            measurements=measurements, traceability=traceability,
+            config=config, df=df, steady_window=(1.0, 4.0),
+        )
+
+        assert '<!DOCTYPE html>' in html
+        assert 'chart-grid' in html, "Should contain chart grid"
+        assert 'Appendix' in html, "Should contain appendix"
+        assert 'Key Charts' in html
+
+        print(f"[PASS] Full report with charts generated ({len(html)} chars)")
+
+    def test_report_without_df_backward_compat(self):
+        """Test that report without df is backward compatible (no charts)."""
+        measurements = self._make_test_measurements()
+        traceability = {
+            'raw_data_hash': 'sha256:abc123',
+            'analyst_username': 'test_user',
+            'analysis_timestamp_utc': datetime.now().isoformat(),
+        }
+
+        html = generate_test_report(
+            test_id='CF-001', test_type='cold_flow',
+            measurements=measurements, traceability=traceability,
+        )
+
+        assert '<!DOCTYPE html>' in html
+        assert 'Key Charts' not in html, "No chart section without df"
+        assert 'Appendix' not in html, "No appendix without df"
+        assert 'Key Results' in html, "Key results should still be present"
+        assert 'Traceability' in html
+
+        print("[PASS] Backward-compatible report (no charts) works")
+
+
 class TestBatchAnalysis:
     """Test batch analysis functions."""
     
@@ -466,6 +720,7 @@ def run_all_tests():
     test_classes = [
         TestSPC,
         TestReporting,
+        TestReportCharts,
         TestBatchAnalysis,
         TestExport,
     ]
