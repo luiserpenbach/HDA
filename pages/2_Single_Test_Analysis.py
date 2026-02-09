@@ -1645,6 +1645,14 @@ with tab_export:
                                     for c in (qc_report.checks if qc_report else [])
                                 ],
                             }
+                            # Merge sensor_roles into config for chart generation
+                            report_config = dict(config)
+                            loaded_meta = st.session_state.get('loaded_metadata') or {}
+                            if 'sensor_roles' in loaded_meta:
+                                report_config['sensor_roles'] = loaded_meta['sensor_roles']
+
+                            report_df = st.session_state.df_processed if st.session_state.df_processed is not None else st.session_state.df
+
                             html = generate_test_report(
                                 test_id=test_id,
                                 test_type=test_type,
@@ -1652,8 +1660,10 @@ with tab_export:
                                 traceability=result.traceability,
                                 qc_report=qc_dict,
                                 metadata={'part': part_number, 'serial': serial_number},
-                                config=config,
+                                config=report_config,
                                 include_config_snapshot=True,
+                                df=report_df,
+                                steady_window=st.session_state.steady_window,
                             )
                             st.download_button(
                                 "Download Report",
