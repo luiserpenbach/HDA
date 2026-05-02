@@ -45,17 +45,20 @@ ui/           PySide6 widgets (added in a later commit).
 python -m pytest hda/tests/ -v
 ```
 
-35 tests passing as of this commit; UI is not yet implemented.
+93 tests passing as of this commit; UI is not yet implemented.
 
 ## Next commits (in order)
 
-1. Plugin-aware metadata schema + the three-layer resolution (sidecar JSON →
-   campaign defaults → operator dialog).
-2. Derived-channel evaluator (`hda.domain.derived.evaluate`) + standard
-   formula library.
-3. Concrete `IngestService` + preprocessing pipeline.
-4. Concrete `AnalysisService` + plugin port (cold flow, hot fire).
-5. Repositories for `test_runs`, `hardware`, `measurements`, `qc_findings`.
-6. PySide6 shell — single window, dashboard, watch folder.
-7. Test-detail screen with interactive steady-state preview.
-8. Campaign analytics with the cross-campaign hardware filter.
+1. Concrete `IngestService` + preprocessing pipeline (file hash, parse,
+   resample, sidecar+campaign+operator metadata resolution, derived-channel
+   evaluation during preprocessing).
+2. Concrete `AnalysisService` + plugin port (cold flow, hot fire), with
+   QC, steady-state, measurement+derived-measurement evaluation, and
+   traceability persisted via the new repositories.
+3. Repositories for `test_runs`, `hardware`, `measurements`, `qc_findings`,
+   `derived_specs` — with cross-campaign hardware queries.
+4. Uncertainty propagation for derived measurements (numerical Jacobian +
+   Monte Carlo, plumbed into ``UncertaintyMethod``).
+5. PySide6 shell — single window, dashboard model, watch folder.
+6. Test-detail screen with interactive steady-state preview.
+7. Campaign analytics with the cross-campaign hardware filter.

@@ -15,9 +15,9 @@ from hda.domain.errors import ConfigError
 
 def test_channel_spec_requires_name_and_formula():
     with pytest.raises(ConfigError):
-        DerivedChannelSpec(name="", unit="g/s", formula="cd_orifice", inputs=())
+        DerivedChannelSpec(name="", unit="g/s", formula="cd_orifice", inputs={})
     with pytest.raises(ConfigError):
-        DerivedChannelSpec(name="mf_fuel", unit="g/s", formula="", inputs=())
+        DerivedChannelSpec(name="mf_fuel", unit="g/s", formula="", inputs={})
 
 
 def test_channel_spec_rejects_self_reference():
@@ -26,8 +26,18 @@ def test_channel_spec_rejects_self_reference():
             name="mf_fuel",
             unit="g/s",
             formula="cd_orifice",
-            inputs=("mf_fuel", "PT-up"),
+            inputs={"p_up": "PT-up", "echo": "mf_fuel"},
         )
+
+
+def test_channel_spec_source_names():
+    spec = DerivedChannelSpec(
+        name="mf_fuel",
+        unit="g/s",
+        formula="cd_orifice",
+        inputs={"p_up": "PT-fuel-up", "p_down": "PT-fuel-down"},
+    )
+    assert set(spec.source_names()) == {"PT-fuel-up", "PT-fuel-down"}
 
 
 def test_measurement_spec_basic_construction():
@@ -35,11 +45,22 @@ def test_measurement_spec_basic_construction():
         name="of_ratio",
         unit="",
         formula="ratio",
-        inputs=("mf_ox", "mf_fuel"),
+        inputs={"num": "mf_ox", "den": "mf_fuel"},
         uncertainty_method=UncertaintyMethod.ANALYTICAL,
     )
     assert spec.name == "of_ratio"
     assert spec.uncertainty_method is UncertaintyMethod.ANALYTICAL
+    assert set(spec.source_names()) == {"mf_ox", "mf_fuel"}
+
+
+def test_measurement_spec_rejects_self_reference():
+    with pytest.raises(ConfigError):
+        DerivedMeasurementSpec(
+            name="of",
+            unit="",
+            formula="ratio",
+            inputs={"num": "mf_ox", "den": "of"},
+        )
 
 
 def test_formula_library_register_and_get():

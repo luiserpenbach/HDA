@@ -30,12 +30,18 @@ class UncertaintyMethod(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class DerivedChannelSpec:
-    """Spec for a per-sample derived time-series channel."""
+    """Spec for a per-sample derived time-series channel.
+
+    ``inputs`` maps the formula function's kwarg name to the source name of
+    the value (sensor channel, derived channel, scalar, geometry, metadata).
+    The mapping shape is what enables a generic library function to be reused
+    across testbenches that wire different sensor names to the same role.
+    """
 
     name: str
     unit: str
     formula: str
-    inputs: Sequence[str]
+    inputs: Mapping[str, str]
     uncertainty_method: UncertaintyMethod = UncertaintyMethod.PROPAGATE
     params: Mapping[str, float] = field(default_factory=dict)
 
@@ -46,20 +52,28 @@ class DerivedChannelSpec:
             raise ConfigError(
                 f"DerivedChannelSpec '{self.name}' requires a formula"
             )
-        if self.name in self.inputs:
+        if self.name in tuple(self.inputs.values()):
             raise ConfigError(
                 f"DerivedChannelSpec '{self.name}' cannot reference itself in inputs"
             )
 
+    def source_names(self) -> Sequence[str]:
+        return tuple(self.inputs.values())
+
 
 @dataclass(frozen=True, slots=True)
 class DerivedMeasurementSpec:
-    """Spec for a per-test scalar derived measurement."""
+    """Spec for a per-test scalar derived measurement.
+
+    Same input semantics as ``DerivedChannelSpec``. Channel-typed inputs are
+    resolved to their steady-state mean by the analysis service before the
+    measurement evaluator is called.
+    """
 
     name: str
     unit: str
     formula: str
-    inputs: Sequence[str]
+    inputs: Mapping[str, str]
     uncertainty_method: UncertaintyMethod = UncertaintyMethod.ANALYTICAL
     params: Mapping[str, float] = field(default_factory=dict)
 
@@ -70,6 +84,13 @@ class DerivedMeasurementSpec:
             raise ConfigError(
                 f"DerivedMeasurementSpec '{self.name}' requires a formula"
             )
+        if self.name in tuple(self.inputs.values()):
+            raise ConfigError(
+                f"DerivedMeasurementSpec '{self.name}' cannot reference itself in inputs"
+            )
+
+    def source_names(self) -> Sequence[str]:
+        return tuple(self.inputs.values())
 
 
 FormulaFn = Callable[..., float]
