@@ -45,17 +45,16 @@ ui/           PySide6 widgets (added in a later commit).
 python -m pytest hda/tests/ -v
 ```
 
-128 tests passing as of this commit; UI is not yet implemented.
+165 tests passing as of this commit; UI is not yet implemented.
 
 ## Next commits (in order)
 
-1. Concrete `AnalysisService` + plugin port (cold flow, hot fire), with
-   QC, steady-state, measurement+derived-measurement evaluation, and
-   traceability persisted via the new repositories.
-2. Repositories for `measurements`, `qc_findings`, `derived_specs` —
-   with cross-campaign filter queries.
-3. Uncertainty propagation for derived measurements (numerical Jacobian +
-   Monte Carlo, plumbed into ``UncertaintyMethod``).
-4. PySide6 shell — single window, dashboard model, watch folder.
-5. Test-detail screen with interactive steady-state preview.
-6. Campaign analytics with the cross-campaign hardware filter.
+1. Uncertainty propagation for derived measurements (numerical Jacobian +
+   Monte Carlo, plumbed into ``UncertaintyMethod``); cold-flow + hot-fire
+   plugin ports that consume it.
+2. Derived-measurement evaluation wired into `AnalysisServiceImpl`
+   (sensor-scalar + plugin-scalar -> derived-measurement chain).
+3. PySide6 shell — single window, dashboard model, watch folder, single-
+   instance lock, structured logging.
+4. Test-detail screen with interactive steady-state preview.
+5. Campaign analytics with the cross-campaign hardware filter.

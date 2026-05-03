@@ -7,9 +7,10 @@ TestState, TestRunRepository) — they are domain types, not test classes.
 
 from __future__ import annotations
 
-from hda.domain.types import TestRun
+from hda.domain.types import TestMetadata, TestRun
 from hda.persistence.repositories.test_runs import TestRunRepository
 
 
 TestRun.__test__ = False  # type: ignore[attr-defined]
+TestMetadata.__test__ = False  # type: ignore[attr-defined]
 TestRunRepository.__test__ = False  # type: ignore[attr-defined]

@@ -5,6 +5,11 @@ from hda.services.ingest_impl import (
     IngestServiceImpl,
 )
 from hda.services.analysis import AnalysisRequest, AnalysisService
+from hda.services.analysis_impl import (
+    AnalysisOutcome,
+    AnalysisProfile,
+    AnalysisServiceImpl,
+)
 from hda.services.hashing import hash_file
 from hda.services.preprocessing import (
     NaNPolicy,
@@ -23,6 +28,9 @@ __all__ = [
     "IngestServiceImpl",
     "AnalysisRequest",
     "AnalysisService",
+    "AnalysisOutcome",
+    "AnalysisProfile",
+    "AnalysisServiceImpl",
     "hash_file",
     "NaNPolicy",
     "PreprocessedData",
