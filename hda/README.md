@@ -45,17 +45,16 @@ ui/           PySide6 widgets (added in a later commit).
 python -m pytest hda/tests/ -v
 ```
 
-35 tests passing as of this commit; UI is not yet implemented.
+187 tests passing as of this commit; UI is not yet implemented.
 
 ## Next commits (in order)
 
-1. Plugin-aware metadata schema + the three-layer resolution (sidecar JSON →
-   campaign defaults → operator dialog).
-2. Derived-channel evaluator (`hda.domain.derived.evaluate`) + standard
-   formula library.
-3. Concrete `IngestService` + preprocessing pipeline.
-4. Concrete `AnalysisService` + plugin port (cold flow, hot fire).
-5. Repositories for `test_runs`, `hardware`, `measurements`, `qc_findings`.
-6. PySide6 shell — single window, dashboard, watch folder.
-7. Test-detail screen with interactive steady-state preview.
-8. Campaign analytics with the cross-campaign hardware filter.
+1. Cold-flow plugin port — full uncertainty propagation through the Cd
+   formula using the new ``SensorUncertainty`` model and the analytical
+   Jacobian.
+2. Hot-fire plugin port — chamber pressure, thrust, mass flows, OF, Isp,
+   c* with chained uncertainty.
+3. PySide6 shell — single window, dashboard model, watch folder, single-
+   instance lock, structured logging.
+4. Test-detail screen with interactive steady-state preview.
+5. Campaign analytics with the cross-campaign hardware filter.

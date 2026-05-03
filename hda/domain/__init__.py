@@ -22,6 +22,12 @@ from hda.domain.types import (
     TraceabilityRecord,
     AnalysisResult,
 )
+from hda.domain.uncertainty import (
+    SensorUncertainty,
+    UncertaintyKind,
+    propagate_analytical,
+    propagate_monte_carlo,
+)
 
 __all__ = [
     "HDAError",
@@ -47,4 +53,8 @@ __all__ = [
     "TestRun",
     "TraceabilityRecord",
     "AnalysisResult",
+    "SensorUncertainty",
+    "UncertaintyKind",
+    "propagate_analytical",
+    "propagate_monte_carlo",
 ]
