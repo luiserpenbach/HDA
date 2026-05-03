@@ -22,6 +22,7 @@ from hda.domain.types import (
     SteadyWindow,
     TestMetadata,
 )
+from hda.domain.uncertainty import SensorUncertainty, UncertaintyKind
 from hda.persistence import Database, apply_migrations
 from hda.persistence.repositories import (
     CampaignRepository,
@@ -107,7 +108,7 @@ def _profile(plugin_name: str = "basic_means", auto_thresh: float = 0.5):
         steady_state_window_s=0.2,
         steady_state_min_duration_s=2.0,
         auto_confirm_confidence=auto_thresh,
-        sensor_uncertainties={"PT-up": 0.05, "PT-down": 0.05},
+        sensor_calibrations={"PT-up": SensorUncertainty(UncertaintyKind.ABSOLUTE, 0.05), "PT-down": SensorUncertainty(UncertaintyKind.ABSOLUTE, 0.05)},
     )
 
 
@@ -277,7 +278,7 @@ def test_derived_measurement_chained_after_plugin(
         steady_state_window_s=0.2,
         steady_state_min_duration_s=2.0,
         auto_confirm_confidence=0.0,
-        sensor_uncertainties={"PT-up": 0.05, "PT-down": 0.05},
+        sensor_calibrations={"PT-up": SensorUncertainty(UncertaintyKind.ABSOLUTE, 0.05), "PT-down": SensorUncertainty(UncertaintyKind.ABSOLUTE, 0.05)},
         derived_measurements=(
             DerivedMeasurementSpec(
                 name="dp_mean",
@@ -339,7 +340,7 @@ def test_derived_measurement_name_collision_with_plugin_raises(
         steady_state_window_s=0.2,
         steady_state_min_duration_s=2.0,
         auto_confirm_confidence=0.0,
-        sensor_uncertainties={"PT-up": 0.05, "PT-down": 0.05},
+        sensor_calibrations={"PT-up": SensorUncertainty(UncertaintyKind.ABSOLUTE, 0.05), "PT-down": SensorUncertainty(UncertaintyKind.ABSOLUTE, 0.05)},
         derived_measurements=(colliding_spec,),
     )
     svc = AnalysisServiceImpl(db, plugins, profiles={campaign_id: profile})

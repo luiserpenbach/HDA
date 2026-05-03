@@ -44,6 +44,7 @@ from hda.domain.types import (
     TestMetadata,
     TraceabilityRecord,
 )
+from hda.domain.uncertainty import SensorUncertainty
 from hda.persistence.db import Database
 from hda.persistence.repositories import (
     MeasurementsRepository,
@@ -77,7 +78,7 @@ class AnalysisProfile:
     steady_state_window_s: float = 1.0
     steady_state_min_duration_s: float = 2.0
     auto_confirm_confidence: float = 0.7
-    sensor_uncertainties: Mapping[str, float] = field(default_factory=dict)
+    sensor_calibrations: Mapping[str, SensorUncertainty] = field(default_factory=dict)
     derived_measurements: tuple[DerivedMeasurementSpec, ...] = ()
     geometry_uncertainties: Mapping[str, float] = field(default_factory=dict)
     monte_carlo_samples: int = 10_000
@@ -168,8 +169,9 @@ class AnalysisServiceImpl:
                 steady_df=steady_df,
                 steady_window=window,
                 metadata=metadata,
-                sensor_uncertainties=profile.sensor_uncertainties,
+                sensor_calibrations=profile.sensor_calibrations,
                 geometry=metadata.geometry,
+                geometry_uncertainties=profile.geometry_uncertainties,
             )
             measurements: dict[str, MeasurementWithUncertainty] = dict(plugin.compute(ctx))
             if profile.derived_measurements:

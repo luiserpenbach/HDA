@@ -45,16 +45,13 @@ ui/           PySide6 widgets (added in a later commit).
 python -m pytest hda/tests/ -v
 ```
 
-187 tests passing as of this commit; UI is not yet implemented.
+199 tests passing as of this commit; UI is not yet implemented.
 
 ## Next commits (in order)
 
-1. Cold-flow plugin port — full uncertainty propagation through the Cd
-   formula using the new ``SensorUncertainty`` model and the analytical
-   Jacobian.
-2. Hot-fire plugin port — chamber pressure, thrust, mass flows, OF, Isp,
-   c* with chained uncertainty.
-3. PySide6 shell — single window, dashboard model, watch folder, single-
+1. Hot-fire plugin port — chamber pressure, thrust, mass flows, OF, Isp,
+   c* with chained uncertainty over the new SensorUncertainty model.
+2. PySide6 shell — single window, dashboard model, watch folder, single-
    instance lock, structured logging.
-4. Test-detail screen with interactive steady-state preview.
-5. Campaign analytics with the cross-campaign hardware filter.
+3. Test-detail screen with interactive steady-state preview.
+4. Campaign analytics with the cross-campaign hardware filter.

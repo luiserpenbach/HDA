@@ -16,9 +16,10 @@ from hda.domain.types import (
     SteadyWindow,
     TestMetadata,
 )
+from hda.domain.uncertainty import SensorUncertainty, UncertaintyKind
 
 
-def _ctx(steady_df: pd.DataFrame, sensor_uncertainties: dict | None = None) -> AnalysisContext:
+def _ctx(steady_df: pd.DataFrame, sensor_calibrations: dict | None = None) -> AnalysisContext:
     md = TestMetadata(
         hardware=Hardware(part_number="PN-1", serial_number="SN-1"),
         fluid="N2",
@@ -33,7 +34,7 @@ def _ctx(steady_df: pd.DataFrame, sensor_uncertainties: dict | None = None) -> A
             method="cv", confidence=0.9
         ),
         metadata=md,
-        sensor_uncertainties=sensor_uncertainties or {},
+        sensor_calibrations=sensor_calibrations or {},
         geometry={},
     )
 
@@ -92,10 +93,22 @@ def test_basic_means_combines_sem_and_calibration():
         "PT-up": 10.0 + rng.standard_normal(101) * 0.5,  # sigma ~0.5
     })
     plugin = BasicMeansPlugin()
-    out = plugin.compute(_ctx(df, sensor_uncertainties={"PT-up": 0.1}))
+    cal = {"PT-up": SensorUncertainty(UncertaintyKind.ABSOLUTE, 0.1)}
+    out = plugin.compute(_ctx(df, sensor_calibrations=cal))
     m = out["avg_PT-up"]
     # SEM ~ 0.5/sqrt(101) ~ 0.05; combined with 0.1 cal -> sqrt(0.05^2 + 0.1^2) ~ 0.112
     assert 0.05 < m.uncertainty < 0.2
+
+
+def test_basic_means_relative_calibration_scales_with_reading():
+    df = pd.DataFrame({
+        "timestamp": np.linspace(0.0, 1.0, 101),
+        "PT-up": np.full(101, 200.0),  # constant -> SEM ~ 0
+    })
+    cal = {"PT-up": SensorUncertainty(UncertaintyKind.RELATIVE, 0.005)}  # 0.5%
+    out = BasicMeansPlugin().compute(_ctx(df, sensor_calibrations=cal))
+    # 0.5% of 200 -> 1.0
+    assert out["avg_PT-up"].uncertainty == pytest.approx(1.0, rel=1e-3)
 
 
 def test_basic_means_skips_non_numeric_columns():
