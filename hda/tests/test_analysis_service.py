@@ -255,6 +255,106 @@ def test_unknown_campaign_raises(db: Database):
         )
 
 
+def test_derived_measurement_chained_after_plugin(
+    db: Database, tmp_path: Path, campaign_id: str
+):
+    """Plugin emits avg_PT-up and avg_PT-down with uncertainty. A derived
+    measurement subtracts them to produce dp_mean — uncertainty must
+    propagate end-to-end and the persisted measurement carries
+    Provenance.DERIVED.
+    """
+    from hda.domain.derived import DerivedMeasurementSpec, UncertaintyMethod
+    from hda.domain.types import Provenance
+
+    ing = _ingest_one(db, tmp_path, campaign_id)
+    plugins = PluginRegistry()
+    plugins.register(BasicMeansPlugin())
+    profile = AnalysisProfile(
+        plugin_name="basic_means",
+        qc_config=QCConfig(expected_sample_rate_hz=100.0),
+        steady_state_signal="PT-up",
+        steady_state_cv_threshold=0.005,
+        steady_state_window_s=0.2,
+        steady_state_min_duration_s=2.0,
+        auto_confirm_confidence=0.0,
+        sensor_uncertainties={"PT-up": 0.05, "PT-down": 0.05},
+        derived_measurements=(
+            DerivedMeasurementSpec(
+                name="dp_mean",
+                unit="bar",
+                formula="subtract",
+                inputs={"a": "avg_PT-up", "b": "avg_PT-down"},
+                uncertainty_method=UncertaintyMethod.ANALYTICAL,
+            ),
+        ),
+    )
+    svc = AnalysisServiceImpl(db, plugins, profiles={campaign_id: profile})
+    outcome = svc.submit(
+        test_run_id=ing.test_run_id,
+        campaign_id=campaign_id,
+        preprocessed=ing.preprocessed,
+        metadata=_build_metadata(),
+        config_hash="cfg",
+        metadata_hash="md",
+        analyst="alice",
+    )
+    assert outcome.final_state is TestState.PERSISTED
+    assert "dp_mean" in outcome.result.measurements
+    dp = outcome.result.measurements["dp_mean"]
+    assert dp.provenance is Provenance.DERIVED
+    assert dp.value == pytest.approx(5.0, abs=0.05)
+    assert dp.uncertainty > 0.0
+
+    # Persisted into the measurements table with provenance preserved.
+    saved = MeasurementsRepository(db).get_for_run(ing.test_run_id)
+    saved_by_name = {m.name: m for m in saved}
+    assert saved_by_name["dp_mean"].provenance is Provenance.DERIVED
+
+
+def test_derived_measurement_name_collision_with_plugin_raises(
+    db: Database, tmp_path: Path, campaign_id: str
+):
+    from hda.domain.derived import DerivedMeasurementSpec, UncertaintyMethod
+
+    ing = _ingest_one(db, tmp_path, campaign_id)
+    plugins = PluginRegistry()
+    plugins.register(BasicMeansPlugin())
+    # Deliberately pick a name the plugin will produce.
+    # Spec uses a different formula on different inputs but names itself
+    # "avg_PT-up" — the same name the plugin produces. Self-reference is
+    # blocked at spec construction; the runtime collision check handles
+    # this distinct case.
+    colliding_spec = DerivedMeasurementSpec(
+        name="avg_PT-up",
+        unit="",
+        formula="ratio",
+        inputs={"num": "avg_PT-down", "den": "avg_PT-down"},
+        uncertainty_method=UncertaintyMethod.NONE,
+    )
+    profile = AnalysisProfile(
+        plugin_name="basic_means",
+        qc_config=QCConfig(expected_sample_rate_hz=100.0),
+        steady_state_signal="PT-up",
+        steady_state_cv_threshold=0.005,
+        steady_state_window_s=0.2,
+        steady_state_min_duration_s=2.0,
+        auto_confirm_confidence=0.0,
+        sensor_uncertainties={"PT-up": 0.05, "PT-down": 0.05},
+        derived_measurements=(colliding_spec,),
+    )
+    svc = AnalysisServiceImpl(db, plugins, profiles={campaign_id: profile})
+    with pytest.raises(ConfigError, match="collide"):
+        svc.submit(
+            test_run_id=ing.test_run_id,
+            campaign_id=campaign_id,
+            preprocessed=ing.preprocessed,
+            metadata=_build_metadata(),
+            config_hash="cfg",
+            metadata_hash="md",
+            analyst="alice",
+        )
+
+
 def test_steady_window_override(db: Database, tmp_path: Path, campaign_id: str):
     ing = _ingest_one(db, tmp_path, campaign_id)
     plugins = PluginRegistry()

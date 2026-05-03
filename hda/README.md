@@ -45,15 +45,15 @@ ui/           PySide6 widgets (added in a later commit).
 python -m pytest hda/tests/ -v
 ```
 
-165 tests passing as of this commit; UI is not yet implemented.
+187 tests passing as of this commit; UI is not yet implemented.
 
 ## Next commits (in order)
 
-1. Uncertainty propagation for derived measurements (numerical Jacobian +
-   Monte Carlo, plumbed into ``UncertaintyMethod``); cold-flow + hot-fire
-   plugin ports that consume it.
-2. Derived-measurement evaluation wired into `AnalysisServiceImpl`
-   (sensor-scalar + plugin-scalar -> derived-measurement chain).
+1. Cold-flow plugin port — full uncertainty propagation through the Cd
+   formula using the new ``SensorUncertainty`` model and the analytical
+   Jacobian.
+2. Hot-fire plugin port — chamber pressure, thrust, mass flows, OF, Isp,
+   c* with chained uncertainty.
 3. PySide6 shell — single window, dashboard model, watch folder, single-
    instance lock, structured logging.
 4. Test-detail screen with interactive steady-state preview.

@@ -24,6 +24,13 @@ from typing import Callable, Mapping, Optional, Sequence
 
 import numpy as np
 
+from hda.domain.derived import (
+    DerivedContext,
+    DerivedMeasurementSpec,
+    FormulaLibrary,
+    evaluate_measurements,
+    standard_library,
+)
 from hda.domain.errors import AnalysisError, ConfigError
 from hda.domain.plugins import AnalysisContext, AnalysisPlugin, PluginRegistry
 from hda.domain.qc import QCConfig, run_qc
@@ -31,6 +38,7 @@ from hda.domain.state import TestState
 from hda.domain.steady_state import detect_cv, detect_simple
 from hda.domain.types import (
     AnalysisResult,
+    MeasurementWithUncertainty,
     QCReport,
     SteadyWindow,
     TestMetadata,
@@ -51,8 +59,15 @@ class AnalysisProfile:
 
     The profile is locked to a campaign and selected once when the campaign
     is created — it pins the plugin, QC thresholds, steady-state policy,
-    and which sensor calibration uncertainties to use, so per-test
-    operator decisions reduce to "approve or reject the auto result".
+    sensor calibration uncertainties, and any derived measurements that
+    should be computed after the plugin runs. Per-test operator decisions
+    reduce to "approve or reject the auto result".
+
+    ``derived_measurements`` are evaluated after ``plugin.compute`` using
+    the plugin's outputs as ``sensor_measurements`` so a chain like
+        ``mf_fuel`` (plugin) -> ``of_ratio`` (derived) -> ``c_star`` (derived)
+    propagates uncertainty correctly without the plugin having to know
+    about the derived layer.
     """
 
     plugin_name: str
@@ -63,6 +78,10 @@ class AnalysisProfile:
     steady_state_min_duration_s: float = 2.0
     auto_confirm_confidence: float = 0.7
     sensor_uncertainties: Mapping[str, float] = field(default_factory=dict)
+    derived_measurements: tuple[DerivedMeasurementSpec, ...] = ()
+    geometry_uncertainties: Mapping[str, float] = field(default_factory=dict)
+    monte_carlo_samples: int = 10_000
+    monte_carlo_seed: Optional[int] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,11 +103,13 @@ class AnalysisServiceImpl:
         plugins: PluginRegistry,
         profiles: Mapping[str, AnalysisProfile],
         processing_version: str = "3.0.0-dev",
+        formula_library: Optional[FormulaLibrary] = None,
     ) -> None:
         self._db = db
         self._plugins = plugins
         self._profiles = dict(profiles)
         self._processing_version = processing_version
+        self._library = formula_library if formula_library is not None else standard_library()
         self._test_runs = TestRunRepository(db)
         self._measurements = MeasurementsRepository(db)
         self._qc_findings = QCFindingsRepository(db)
@@ -150,7 +171,16 @@ class AnalysisServiceImpl:
                 sensor_uncertainties=profile.sensor_uncertainties,
                 geometry=metadata.geometry,
             )
-            measurements = dict(plugin.compute(ctx))
+            measurements: dict[str, MeasurementWithUncertainty] = dict(plugin.compute(ctx))
+            if profile.derived_measurements:
+                derived = self._evaluate_derived(profile, metadata, measurements)
+                overlap = set(derived.keys()) & set(measurements.keys())
+                if overlap:
+                    raise ConfigError(
+                        f"Derived measurement names collide with plugin output: "
+                        f"{sorted(overlap)}"
+                    )
+                measurements.update(derived)
             traceability = TraceabilityRecord(
                 file_hash=self._file_hash_for(test_run_id),
                 config_hash=config_hash,
@@ -217,6 +247,30 @@ class AnalysisServiceImpl:
         target = TestState.ANALYZED if approve else TestState.QC_FAILED
         self._transition(test_run_id, target, on_state_change)
         return target
+
+    def _evaluate_derived(
+        self,
+        profile: AnalysisProfile,
+        metadata: TestMetadata,
+        plugin_measurements: Mapping[str, MeasurementWithUncertainty],
+    ) -> Mapping[str, MeasurementWithUncertainty]:
+        ctx = DerivedContext(
+            sensor_measurements=plugin_measurements,
+            geometry=metadata.geometry,
+            geometry_uncertainties=profile.geometry_uncertainties,
+            metadata={
+                k: v
+                for k, v in (metadata.extra or {}).items()
+                if isinstance(v, (int, float))
+            },
+        )
+        return evaluate_measurements(
+            list(profile.derived_measurements),
+            ctx,
+            self._library,
+            monte_carlo_samples=profile.monte_carlo_samples,
+            monte_carlo_seed=profile.monte_carlo_seed,
+        )
 
     def _detect_or_override(
         self,

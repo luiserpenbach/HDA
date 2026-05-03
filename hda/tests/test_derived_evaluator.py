@@ -171,7 +171,133 @@ def test_evaluate_measurement_chains_dependencies():
     assert out["dp_half"].value == pytest.approx(3.0)
 
 
-def test_evaluate_measurement_rejects_unimplemented_uncertainty():
+def test_evaluate_measurement_analytical_uncertainty_propagates_from_sensors():
+    """Sensor measurements with uncertainty -> derived measurement uncertainty."""
+    from hda.domain.types import MeasurementWithUncertainty, Provenance
+
+    spec = DerivedMeasurementSpec(
+        name="of_ratio",
+        unit="",
+        formula="of_ratio",
+        inputs={"mf_ox_g_s": "mf_ox", "mf_fuel_g_s": "mf_fuel"},
+        uncertainty_method=UncertaintyMethod.ANALYTICAL,
+    )
+    ctx = DerivedContext(
+        sensor_measurements={
+            "mf_ox": MeasurementWithUncertainty(
+                "mf_ox", 100.0, 1.0, "g/s", provenance=Provenance.SENSOR
+            ),
+            "mf_fuel": MeasurementWithUncertainty(
+                "mf_fuel", 50.0, 0.5, "g/s", provenance=Provenance.SENSOR
+            ),
+        }
+    )
+    out = evaluate_measurements([spec], ctx, _lib())
+    m = out["of_ratio"]
+    assert m.value == pytest.approx(2.0)
+    # Quadrature: rel_y = sqrt((1/100)^2 + (0.5/50)^2) = sqrt(2)/100
+    expected = 2.0 * math.sqrt((1.0 / 100.0) ** 2 + (0.5 / 50.0) ** 2)
+    assert m.uncertainty == pytest.approx(expected, rel=1e-4)
+
+
+def test_evaluate_measurement_chained_uncertainty():
+    """Earlier derived measurements feed into later ones — uncertainty
+    must propagate end-to-end."""
+    import math
+    from hda.domain.types import MeasurementWithUncertainty, Provenance
+
+    dp = DerivedMeasurementSpec(
+        name="dp_mean",
+        unit="bar",
+        formula="subtract",
+        inputs={"a": "p_up", "b": "p_down"},
+        uncertainty_method=UncertaintyMethod.ANALYTICAL,
+    )
+    ratio = DerivedMeasurementSpec(
+        name="dp_ratio",
+        unit="",
+        formula="ratio",
+        inputs={"num": "dp_mean", "den": "p_up"},
+        uncertainty_method=UncertaintyMethod.ANALYTICAL,
+    )
+    ctx = DerivedContext(
+        sensor_measurements={
+            "p_up": MeasurementWithUncertainty(
+                "p_up", 10.0, 0.05, "bar", provenance=Provenance.SENSOR
+            ),
+            "p_down": MeasurementWithUncertainty(
+                "p_down", 4.0, 0.04, "bar", provenance=Provenance.SENSOR
+            ),
+        }
+    )
+    out = evaluate_measurements([ratio, dp], ctx, _lib())
+    assert out["dp_mean"].value == pytest.approx(6.0)
+    assert out["dp_mean"].uncertainty == pytest.approx(
+        math.hypot(0.05, 0.04), rel=1e-5
+    )
+    assert out["dp_ratio"].value == pytest.approx(0.6)
+    # Uncertainty on dp_ratio is non-zero because both inputs have it.
+    assert out["dp_ratio"].uncertainty > 0.0
+
+
+def test_evaluate_measurement_monte_carlo_uncertainty():
+    from hda.domain.types import MeasurementWithUncertainty, Provenance
+
+    spec = DerivedMeasurementSpec(
+        name="of_ratio",
+        unit="",
+        formula="of_ratio",
+        inputs={"mf_ox_g_s": "mf_ox", "mf_fuel_g_s": "mf_fuel"},
+        uncertainty_method=UncertaintyMethod.MONTE_CARLO,
+    )
+    ctx = DerivedContext(
+        sensor_measurements={
+            "mf_ox": MeasurementWithUncertainty(
+                "mf_ox", 100.0, 1.0, "g/s", provenance=Provenance.SENSOR
+            ),
+            "mf_fuel": MeasurementWithUncertainty(
+                "mf_fuel", 50.0, 0.5, "g/s", provenance=Provenance.SENSOR
+            ),
+        }
+    )
+    out = evaluate_measurements(
+        [spec], ctx, _lib(), monte_carlo_samples=5000, monte_carlo_seed=7
+    )
+    m = out["of_ratio"]
+    assert m.value == pytest.approx(2.0, rel=0.01)
+    expected_u = 2.0 * math.sqrt((1.0 / 100.0) ** 2 + (0.5 / 50.0) ** 2)
+    assert m.uncertainty == pytest.approx(expected_u, rel=0.05)
+
+
+def test_evaluate_measurement_geometry_uncertainty_used():
+    """Geometry parameters with declared uncertainty contribute too."""
+    spec = DerivedMeasurementSpec(
+        name="cd_estimate",
+        unit="",
+        formula="ratio",
+        inputs={"num": "mf_meas", "den": "area"},
+        uncertainty_method=UncertaintyMethod.ANALYTICAL,
+    )
+    from hda.domain.types import MeasurementWithUncertainty, Provenance
+
+    ctx = DerivedContext(
+        sensor_measurements={
+            "mf_meas": MeasurementWithUncertainty(
+                "mf_meas", 100.0, 1.0, "g/s", provenance=Provenance.SENSOR
+            ),
+        },
+        geometry={"area": 50.0},
+        geometry_uncertainties={"area": 2.5},
+    )
+    out = evaluate_measurements([spec], ctx, _lib())
+    m = out["cd_estimate"]
+    assert m.value == pytest.approx(2.0)
+    expected = 2.0 * math.hypot(1.0 / 100.0, 2.5 / 50.0)
+    assert m.uncertainty == pytest.approx(expected, rel=1e-4)
+
+
+def test_evaluate_measurement_zero_uncertainty_inputs_yield_zero_uncertainty():
+    """If all inputs have zero uncertainty, the analytical result is zero."""
     spec = DerivedMeasurementSpec(
         name="x",
         unit="",
@@ -180,8 +306,8 @@ def test_evaluate_measurement_rejects_unimplemented_uncertainty():
         uncertainty_method=UncertaintyMethod.ANALYTICAL,
     )
     ctx = DerivedContext(sensor_scalars={"a": 1.0, "b": 2.0})
-    with pytest.raises(NotImplementedError):
-        evaluate_measurements([spec], ctx, _lib())
+    out = evaluate_measurements([spec], ctx, _lib())
+    assert out["x"].uncertainty == 0.0
 
 
 def test_evaluate_uses_geometry_and_metadata_as_scalars():
