@@ -203,7 +203,7 @@ def test_review_approval_advances_state(db: Database, tmp_path: Path, campaign_i
         analyst="alice",
     )
     final = svc.confirm_review(outcome_ingest.test_run_id, approve=True)
-    assert final is TestState.ANALYZED
+    assert final is TestState.PERSISTED
 
 
 def test_qc_failure_routes_to_qc_failed(db: Database, tmp_path: Path, campaign_id: str):

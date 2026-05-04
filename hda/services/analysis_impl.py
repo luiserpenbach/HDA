@@ -127,13 +127,13 @@ class AnalysisServiceImpl:
         steady_window_override: Optional[SteadyWindow] = None,
         on_state_change: Optional[StateChangeCallback] = None,
     ) -> AnalysisOutcome:
-        profile = self._profiles.get(campaign_id)
-        if profile is None:
-            raise ConfigError(
-                f"No AnalysisProfile registered for campaign '{campaign_id}'"
-            )
-        plugin = self._plugins.get(profile.plugin_name)
+        """Drive a TestRun from PREPROCESSED through the analysis pipeline.
 
+        Measurements + qc_findings are written once QC passes regardless
+        of confidence, so the operator can review them in the detail
+        panel before approving a NEEDS_REVIEW outcome.
+        """
+        profile, plugin = self._lookup(campaign_id)
         try:
             window = self._detect_or_override(
                 preprocessed, profile, steady_window_override
@@ -141,102 +141,61 @@ class AnalysisServiceImpl:
             self._transition(
                 test_run_id, TestState.STEADY_DETECTED, on_state_change
             )
-
-            steady_df = self._slice_steady(preprocessed, window)
-            qc = self._run_qc_suite(preprocessed, steady_df, profile.qc_config)
-            self._qc_findings.write_all(test_run_id, qc.findings, qc.passed)
-
-            if not qc.passed:
-                self._transition(
-                    test_run_id, TestState.QC_RUN, on_state_change
-                )
-                self._transition(
-                    test_run_id, TestState.QC_FAILED, on_state_change
-                )
-                return AnalysisOutcome(
-                    test_run_id=test_run_id,
-                    final_state=TestState.QC_FAILED,
-                    steady_window=window,
-                    result=None,
-                    qc_passed=False,
-                )
-
-            self._transition(test_run_id, TestState.QC_RUN, on_state_change)
-
-            self._validate_required_channels(plugin, steady_df)
-            ctx = AnalysisContext(
-                df=preprocessed.df,
-                steady_df=steady_df,
-                steady_window=window,
+            return self._run_analysis_core(
+                test_run_id=test_run_id,
+                profile=profile,
+                plugin=plugin,
+                preprocessed=preprocessed,
                 metadata=metadata,
-                sensor_calibrations=profile.sensor_calibrations,
-                geometry=metadata.geometry,
-                geometry_uncertainties=profile.geometry_uncertainties,
-            )
-            measurements: dict[str, MeasurementWithUncertainty] = dict(plugin.compute(ctx))
-            if profile.derived_measurements:
-                derived = self._evaluate_derived(profile, metadata, measurements)
-                overlap = set(derived.keys()) & set(measurements.keys())
-                if overlap:
-                    raise ConfigError(
-                        f"Derived measurement names collide with plugin output: "
-                        f"{sorted(overlap)}"
-                    )
-                measurements.update(derived)
-            traceability = TraceabilityRecord(
-                file_hash=self._file_hash_for(test_run_id),
+                window=window,
                 config_hash=config_hash,
                 metadata_hash=metadata_hash,
-                processing_version=self._processing_version,
-                plugin_name=plugin.name,
-                plugin_version=plugin.version,
                 analyst=analyst,
-                analyzed_at=datetime.utcnow(),
+                on_state_change=on_state_change,
             )
-            result = AnalysisResult(
-                measurements=measurements,
-                qc_report=qc,
-                traceability=traceability,
-                confidence=window.confidence,
-            )
-
-            if window.confidence < profile.auto_confirm_confidence:
-                self._transition(
-                    test_run_id, TestState.NEEDS_REVIEW, on_state_change
-                )
-                return AnalysisOutcome(
-                    test_run_id=test_run_id,
-                    final_state=TestState.NEEDS_REVIEW,
-                    steady_window=window,
-                    result=result,
-                    qc_passed=True,
-                )
-
-            self._transition(test_run_id, TestState.ANALYZED, on_state_change)
-            self._persist(
-                test_run_id=test_run_id,
-                window=window,
-                result=result,
-                plugin=plugin,
-                config_hash=config_hash,
-            )
-            self._transition(
-                test_run_id, TestState.PERSISTED, on_state_change
-            )
-            return AnalysisOutcome(
-                test_run_id=test_run_id,
-                final_state=TestState.PERSISTED,
-                steady_window=window,
-                result=result,
-                qc_passed=True,
-            )
-
         except (AnalysisError, ConfigError) as e:
-            self._test_runs.update_state(
-                test_run_id, TestState.ERROR, error_message=str(e)
+            self._fail(test_run_id, e, on_state_change)
+            raise
+
+    def reanalyze(
+        self,
+        test_run_id: str,
+        campaign_id: str,
+        preprocessed: PreprocessedData,
+        metadata: TestMetadata,
+        manual_window: SteadyWindow,
+        config_hash: str,
+        metadata_hash: str,
+        analyst: str = "operator-reanalyze",
+        on_state_change: Optional[StateChangeCallback] = None,
+    ) -> AnalysisOutcome:
+        """Re-run analysis with an operator-supplied steady-state window.
+
+        Re-opens the test from any of PERSISTED / NEEDS_REVIEW / QC_FAILED
+        via the dedicated reanalysis edge in the state DAG (the only path
+        out of those states besides ERROR). Measurements and qc_findings
+        from the previous analysis are replaced atomically by the
+        repositories' write_all semantics.
+        """
+        profile, plugin = self._lookup(campaign_id)
+        try:
+            self._transition(
+                test_run_id, TestState.STEADY_DETECTED, on_state_change
             )
-            if on_state_change is not None:
-                on_state_change(test_run_id, TestState.ERROR)
+            return self._run_analysis_core(
+                test_run_id=test_run_id,
+                profile=profile,
+                plugin=plugin,
+                preprocessed=preprocessed,
+                metadata=metadata,
+                window=manual_window,
+                config_hash=config_hash,
+                metadata_hash=metadata_hash,
+                analyst=analyst,
+                on_state_change=on_state_change,
+            )
+        except (AnalysisError, ConfigError) as e:
+            self._fail(test_run_id, e, on_state_change)
             raise
 
     def confirm_review(
@@ -245,10 +204,144 @@ class AnalysisServiceImpl:
         approve: bool,
         on_state_change: Optional[StateChangeCallback] = None,
     ) -> TestState:
-        """Operator decision on a NEEDS_REVIEW run."""
-        target = TestState.ANALYZED if approve else TestState.QC_FAILED
-        self._transition(test_run_id, target, on_state_change)
-        return target
+        """Resolve a NEEDS_REVIEW run.
+
+        Approve  -> NEEDS_REVIEW -> ANALYZED -> PERSISTED.
+        Reject   -> NEEDS_REVIEW -> QC_FAILED.
+        Measurements are already in the DB from the analysis pass; this
+        is purely a state transition.
+        """
+        if approve:
+            self._transition(test_run_id, TestState.ANALYZED, on_state_change)
+            self._transition(test_run_id, TestState.PERSISTED, on_state_change)
+            return TestState.PERSISTED
+        self._transition(test_run_id, TestState.QC_FAILED, on_state_change)
+        return TestState.QC_FAILED
+
+    def _lookup(
+        self, campaign_id: str
+    ) -> tuple[AnalysisProfile, AnalysisPlugin]:
+        profile = self._profiles.get(campaign_id)
+        if profile is None:
+            raise ConfigError(
+                f"No AnalysisProfile registered for campaign '{campaign_id}'"
+            )
+        plugin = self._plugins.get(profile.plugin_name)
+        return profile, plugin
+
+    def _run_analysis_core(
+        self,
+        *,
+        test_run_id: str,
+        profile: AnalysisProfile,
+        plugin: AnalysisPlugin,
+        preprocessed: PreprocessedData,
+        metadata: TestMetadata,
+        window: SteadyWindow,
+        config_hash: str,
+        metadata_hash: str,
+        analyst: str,
+        on_state_change: Optional[StateChangeCallback],
+    ) -> AnalysisOutcome:
+        """Drive the pipeline from STEADY_DETECTED through to a final state.
+        Caller must have already transitioned the run to STEADY_DETECTED.
+        """
+        steady_df = self._slice_steady(preprocessed, window)
+        qc = self._run_qc_suite(preprocessed, steady_df, profile.qc_config)
+        self._qc_findings.write_all(test_run_id, qc.findings, qc.passed)
+
+        if not qc.passed:
+            self._transition(test_run_id, TestState.QC_RUN, on_state_change)
+            self._transition(test_run_id, TestState.QC_FAILED, on_state_change)
+            return AnalysisOutcome(
+                test_run_id=test_run_id,
+                final_state=TestState.QC_FAILED,
+                steady_window=window,
+                result=None,
+                qc_passed=False,
+            )
+
+        self._transition(test_run_id, TestState.QC_RUN, on_state_change)
+        self._validate_required_channels(plugin, steady_df)
+
+        ctx = AnalysisContext(
+            df=preprocessed.df,
+            steady_df=steady_df,
+            steady_window=window,
+            metadata=metadata,
+            sensor_calibrations=profile.sensor_calibrations,
+            geometry=metadata.geometry,
+            geometry_uncertainties=profile.geometry_uncertainties,
+        )
+        measurements: dict[str, MeasurementWithUncertainty] = dict(plugin.compute(ctx))
+        if profile.derived_measurements:
+            derived = self._evaluate_derived(profile, metadata, measurements)
+            overlap = set(derived.keys()) & set(measurements.keys())
+            if overlap:
+                raise ConfigError(
+                    f"Derived measurement names collide with plugin output: "
+                    f"{sorted(overlap)}"
+                )
+            measurements.update(derived)
+
+        traceability = TraceabilityRecord(
+            file_hash=self._file_hash_for(test_run_id),
+            config_hash=config_hash,
+            metadata_hash=metadata_hash,
+            processing_version=self._processing_version,
+            plugin_name=plugin.name,
+            plugin_version=plugin.version,
+            analyst=analyst,
+            analyzed_at=datetime.utcnow(),
+        )
+        result = AnalysisResult(
+            measurements=measurements,
+            qc_report=qc,
+            traceability=traceability,
+            confidence=window.confidence,
+        )
+
+        # Always persist artifacts so the detail panel shows them, whether
+        # the run ends in NEEDS_REVIEW or PERSISTED.
+        self._persist(
+            test_run_id=test_run_id,
+            window=window,
+            result=result,
+            plugin=plugin,
+            config_hash=config_hash,
+        )
+
+        if window.confidence < profile.auto_confirm_confidence:
+            self._transition(test_run_id, TestState.NEEDS_REVIEW, on_state_change)
+            return AnalysisOutcome(
+                test_run_id=test_run_id,
+                final_state=TestState.NEEDS_REVIEW,
+                steady_window=window,
+                result=result,
+                qc_passed=True,
+            )
+
+        self._transition(test_run_id, TestState.ANALYZED, on_state_change)
+        self._transition(test_run_id, TestState.PERSISTED, on_state_change)
+        return AnalysisOutcome(
+            test_run_id=test_run_id,
+            final_state=TestState.PERSISTED,
+            steady_window=window,
+            result=result,
+            qc_passed=True,
+        )
+
+    def _fail(
+        self,
+        test_run_id: str,
+        e: Exception,
+        on_state_change: Optional[StateChangeCallback],
+    ) -> None:
+        self._test_runs.update_state(
+            test_run_id, TestState.ERROR, error_message=str(e)
+        )
+        if on_state_change is not None:
+            on_state_change(test_run_id, TestState.ERROR)
 
     def _evaluate_derived(
         self,

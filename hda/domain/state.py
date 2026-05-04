@@ -31,11 +31,13 @@ class TestState(str, Enum):
     ERROR = "error"
 
 
-_TERMINAL: FrozenSet[TestState] = frozenset(
-    {TestState.PERSISTED, TestState.QC_FAILED, TestState.ERROR}
-)
+_TERMINAL: FrozenSet[TestState] = frozenset({TestState.ERROR})
 
-
+# PERSISTED, QC_FAILED, NEEDS_REVIEW are not terminal in the
+# operator-action sense: an operator can re-open a finished test by
+# choosing a manual steady-state window. The reanalyze entry point on
+# AnalysisService is the only place that should drive these "back to
+# STEADY_DETECTED" edges; the normal pipeline never reaches them.
 ALLOWED_TRANSITIONS: Mapping[TestState, FrozenSet[TestState]] = {
     TestState.DISCOVERED: frozenset({TestState.INGESTING, TestState.ERROR}),
     TestState.INGESTING: frozenset(
@@ -53,11 +55,16 @@ ALLOWED_TRANSITIONS: Mapping[TestState, FrozenSet[TestState]] = {
         }
     ),
     TestState.NEEDS_REVIEW: frozenset(
-        {TestState.ANALYZED, TestState.QC_FAILED, TestState.ERROR}
+        {
+            TestState.ANALYZED,
+            TestState.QC_FAILED,
+            TestState.STEADY_DETECTED,
+            TestState.ERROR,
+        }
     ),
     TestState.ANALYZED: frozenset({TestState.PERSISTED, TestState.ERROR}),
-    TestState.PERSISTED: frozenset(),
-    TestState.QC_FAILED: frozenset(),
+    TestState.PERSISTED: frozenset({TestState.STEADY_DETECTED, TestState.ERROR}),
+    TestState.QC_FAILED: frozenset({TestState.STEADY_DETECTED, TestState.ERROR}),
     TestState.ERROR: frozenset(),
 }
 

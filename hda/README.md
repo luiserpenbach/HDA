@@ -65,16 +65,30 @@ file dialog to test the pipeline end-to-end.
 QT_QPA_PLATFORM=offscreen python -m pytest hda/tests/
 ```
 
-210 tests passing as of this commit (one skipped where Qt widgets
+233 tests passing as of this commit (one skipped where Qt widgets
 cannot load — desktops are fine, libEGL-less containers skip
 gracefully).
+
+## Interactive steady-state preview
+
+Selecting a persisted test in the dashboard opens the **steady-state
+window** preview in the detail panel: the chosen channel plotted with a
+draggable shaded region marking the steady window. Drag either handle
+and a stats readout updates live (mean, std, n, CV%) for every channel
+— microsecond-fast because ``window_stats`` is pure numpy and the
+preprocessed DataFrame is held in an in-memory LRU cache.
+
+Click **Apply window** to commit the new bounds. The detail panel
+spawns a ``ReanalyzeWorker`` that re-runs QC + plugin compute + derived
+measurements and atomically replaces the persisted measurements + qc
+findings + steady-window fields. State machine has dedicated edges
+``PERSISTED → STEADY_DETECTED`` and ``QC_FAILED → STEADY_DETECTED``
+gated behind ``AnalysisService.reanalyze`` so accidental code paths can't
+trigger a re-run.
 
 ## Next commits (in order)
 
 1. Hot-fire plugin port — chamber pressure, thrust, mass flows, OF, Isp,
    c* with chained uncertainty over the SensorUncertainty model.
-2. Watch folder + drag-and-drop ingest in the UI; auto-confirm threshold
-   surfacing.
-3. Interactive steady-state preview in the detail panel (drag-handle
-   window, live mean/std/n).
-4. Cross-campaign analytics screen with the hardware filter.
+2. Watch folder + drag-and-drop ingest in the UI.
+3. Cross-campaign analytics screen with the hardware filter.

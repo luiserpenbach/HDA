@@ -34,6 +34,7 @@ from hda.services import (
     NaNPolicy,
     PreprocessingConfig,
 )
+from hda.services.preprocessed_cache import PreprocessedDataCache
 
 
 @dataclass(slots=True)
@@ -46,6 +47,9 @@ class Workspace:
     log_dir: Optional[Path] = None
     ingest_service: Optional[IngestServiceImpl] = None
     analysis_service: Optional[AnalysisServiceImpl] = None
+    preprocessed_cache: PreprocessedDataCache = field(
+        default_factory=PreprocessedDataCache
+    )
 
     def configure_services(self) -> None:
         """Construct the service instances. Call after pipelines/profiles

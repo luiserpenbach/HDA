@@ -9,17 +9,82 @@ A `simple` fallback returns the middle 50% of the trace; the analysis
 service uses it when the CV detector returns no window (so the operator
 can still tweak it manually rather than the test failing outright).
 
+``window_stats`` is the live-preview primitive: takes a DataFrame, a
+timestamp column, and a [start_s, end_s] window; returns per-channel
+mean / std / n / cv. The interactive drag-handle widget calls this on
+every drag tick, so it stays pure-numpy with no allocations beyond what
+the slice itself requires.
+
 Pure: numpy in, SteadyWindow out. No I/O, no Qt.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from dataclasses import dataclass
+from typing import Mapping, Optional
 
 import numpy as np
+import pandas as pd
 
 from hda.domain.errors import AnalysisError
 from hda.domain.types import SteadyWindow
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelStats:
+    mean: float
+    std: float
+    n: int
+    cv: float
+
+    @property
+    def is_finite(self) -> bool:
+        import math
+
+        return math.isfinite(self.mean) and math.isfinite(self.std)
+
+
+def window_stats(
+    df: "pd.DataFrame",
+    start_s: float,
+    end_s: float,
+    timestamp_column: str = "timestamp",
+) -> Mapping[str, ChannelStats]:
+    """Per-channel mean/std/n/cv over the closed slice [start_s, end_s].
+
+    Channels with zero finite samples in the window get NaN mean and std
+    and n=0 (rather than raising) so the live preview stays fluid even
+    when the operator drags both handles together.
+    """
+    if end_s <= start_s:
+        raise AnalysisError(
+            f"window_stats: end_s ({end_s}) must exceed start_s ({start_s})"
+        )
+    if timestamp_column not in df.columns:
+        raise AnalysisError(
+            f"window_stats: timestamp column '{timestamp_column}' not in DataFrame"
+        )
+    ts = df[timestamp_column].to_numpy(dtype=float)
+    mask = (ts >= start_s) & (ts <= end_s)
+    out: dict[str, ChannelStats] = {}
+    for col in df.columns:
+        if col == timestamp_column:
+            continue
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        arr = df[col].to_numpy(dtype=float)[mask]
+        finite = arr[np.isfinite(arr)]
+        n = int(finite.size)
+        if n == 0:
+            out[col] = ChannelStats(
+                mean=float("nan"), std=float("nan"), n=0, cv=float("nan")
+            )
+            continue
+        mean = float(np.mean(finite))
+        std = float(np.std(finite, ddof=1)) if n > 1 else 0.0
+        cv = float("nan") if mean == 0.0 else abs(std / mean)
+        out[col] = ChannelStats(mean=mean, std=std, n=n, cv=cv)
+    return out
 
 
 def detect_cv(

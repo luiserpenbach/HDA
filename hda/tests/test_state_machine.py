@@ -38,19 +38,33 @@ def test_awaiting_metadata_branch():
     )
 
 
-def test_qc_failed_is_terminal():
-    assert is_terminal(TestState.QC_FAILED)
+def test_qc_failed_blocks_normal_advance_but_allows_reanalyze():
+    """Operator can re-open a QC_FAILED run via a manual steady window;
+    normal forward transitions are still blocked."""
     with pytest.raises(IllegalTransition):
         transition(TestState.QC_FAILED, TestState.ANALYZED)
+    assert (
+        transition(TestState.QC_FAILED, TestState.STEADY_DETECTED)
+        == TestState.STEADY_DETECTED
+    )
 
 
-def test_persisted_is_terminal():
-    assert is_terminal(TestState.PERSISTED)
+def test_persisted_blocks_normal_advance_but_allows_reanalyze():
+    """Same operator-driven escape hatch from PERSISTED."""
     with pytest.raises(IllegalTransition):
         transition(TestState.PERSISTED, TestState.ANALYZED)
+    assert (
+        transition(TestState.PERSISTED, TestState.STEADY_DETECTED)
+        == TestState.STEADY_DETECTED
+    )
 
 
-def test_error_is_terminal_from_every_state():
+def test_error_is_terminal():
+    assert is_terminal(TestState.ERROR)
+    assert ALLOWED_TRANSITIONS[TestState.ERROR] == frozenset()
+
+
+def test_error_is_reachable_from_every_non_terminal_state():
     for s in TestState:
         if is_terminal(s):
             continue
@@ -69,9 +83,12 @@ def test_backwards_transition_is_illegal():
         transition(TestState.ANALYZED, TestState.STEADY_DETECTED)
 
 
-def test_terminal_states_have_no_outgoing():
-    for s in (TestState.PERSISTED, TestState.QC_FAILED, TestState.ERROR):
-        assert ALLOWED_TRANSITIONS[s] == frozenset()
+def test_only_error_is_truly_terminal():
+    assert ALLOWED_TRANSITIONS[TestState.ERROR] == frozenset()
+    # PERSISTED and QC_FAILED are operator-reachable via reanalysis,
+    # not truly terminal.
+    assert TestState.STEADY_DETECTED in ALLOWED_TRANSITIONS[TestState.PERSISTED]
+    assert TestState.STEADY_DETECTED in ALLOWED_TRANSITIONS[TestState.QC_FAILED]
 
 
 def test_review_can_be_resolved_either_way():

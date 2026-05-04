@@ -62,7 +62,8 @@ class MainWindow(QMainWindow):
         self._table.verticalHeader().setVisible(False)
         self._table.selectionModel().selectionChanged.connect(self._on_selection_changed)
 
-        self._detail = DetailPanel(workspace.db)
+        self._detail = DetailPanel(workspace)
+        self._detail.reanalyzed.connect(self._on_reanalyzed)
 
         splitter = QSplitter()
         splitter.addWidget(self._table)
@@ -151,3 +152,8 @@ class MainWindow(QMainWindow):
             return
         rid = self._dash_model.test_run_id_at(rows[0].row())
         self._detail.show_test_run(rid)
+
+    def _on_reanalyzed(self, test_run_id: str) -> None:
+        self._dash_model.reload()
+        self._select_run(test_run_id)
+        self.statusBar().showMessage(f"Reanalyzed {test_run_id[:8]}.")
