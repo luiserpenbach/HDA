@@ -65,7 +65,7 @@ file dialog to test the pipeline end-to-end.
 QT_QPA_PLATFORM=offscreen python -m pytest hda/tests/
 ```
 
-233 tests passing as of this commit (one skipped where Qt widgets
+245 tests passing as of this commit (one skipped where Qt widgets
 cannot load — desktops are fine, libEGL-less containers skip
 gracefully).
 
@@ -88,7 +88,5 @@ trigger a re-run.
 
 ## Next commits (in order)
 
-1. Hot-fire plugin port — chamber pressure, thrust, mass flows, OF, Isp,
-   c* with chained uncertainty over the SensorUncertainty model.
-2. Watch folder + drag-and-drop ingest in the UI.
-3. Cross-campaign analytics screen with the hardware filter.
+1. Watch folder + drag-and-drop ingest in the UI.
+2. Cross-campaign analytics screen with the hardware filter.
