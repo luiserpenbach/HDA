@@ -2,13 +2,12 @@
 
 For every numeric channel in the steady-state slice, emits a measurement
 ``avg_<channel>`` whose value is the mean and whose uncertainty is the
-quadrature combination of the standard error of the mean and any
-calibration uncertainty supplied in ``ctx.sensor_uncertainties``.
+quadrature combination of the standard error of the mean and the
+calibration uncertainty looked up from ``ctx.sensor_calibrations``.
 
-This is the substrate plugin: it proves the analysis pipeline end-to-end
-(plugin contract, traceability, persistence) before the test-type-specific
-plugins (cold-flow, hot-fire) land. It's also genuinely useful as a
-fallback for bring-up tests where no plugin has been written yet.
+Substrate plugin: proves the analysis pipeline end-to-end (plugin
+contract, traceability, persistence) and is genuinely useful as a
+fallback for bring-up tests where no specialized plugin exists yet.
 """
 
 from __future__ import annotations
@@ -50,8 +49,9 @@ class BasicMeansPlugin(AnalysisPlugin):
                 if finite.size > 1
                 else 0.0
             )
-            cal = float(ctx.sensor_uncertainties.get(col, 0.0))
-            uncertainty = math.sqrt(sem * sem + cal * cal)
+            cal_obj = ctx.sensor_calibrations.get(col)
+            cal_u = cal_obj.standard_uncertainty(mean) if cal_obj is not None else 0.0
+            uncertainty = math.sqrt(sem * sem + cal_u * cal_u)
             name = f"avg_{col}"
             out[name] = MeasurementWithUncertainty(
                 name=name,

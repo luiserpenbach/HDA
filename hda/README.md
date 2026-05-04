@@ -39,22 +39,56 @@ ui/           PySide6 widgets (added in a later commit).
 | Calculated channels & measurements | `domain.derived` | Declarative specs + a `FormulaLibrary` registry. Participate in QC and traceability. |
 | TestRun lifecycle | `domain.state.TestState` + `transition()` | DAG of legal transitions. Replaces session-state races. |
 
-## Running the new tests
+## Launching the desktop app (PySide6)
 
 ```bash
-python -m pytest hda/tests/ -v
+pip install PySide6 numpy pandas pytest                # one-time
+python -m hda                                          # default db at ~/.hda/hda.db
+python -m hda --db /tmp/hda.db --campaign INJ-CF-C1    # override location / campaign
 ```
 
-187 tests passing as of this commit; UI is not yet implemented.
+The app opens a single window with a campaign-scoped test list on the
+left, a detail panel (measurements + QC findings) on the right, and an
+"Add Test…" toolbar action (Ctrl+O) that runs ingest + analysis on a
+background QThreadPool worker so the UI never blocks. Logs land in
+``~/.hda/logs/hda.log`` (rotating). A ``QLockFile`` next to ``hda.db``
+prevents two app instances from racing on the same database.
+
+The first launch creates a ``DEMO-C1`` campaign with the
+``basic_means`` plugin so any CSV with a ``timestamp`` column ingests
+and analyzes immediately. Drop your hot-fire / cold-flow CSV in via the
+file dialog to test the pipeline end-to-end.
+
+## Running the tests
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m pytest hda/tests/
+```
+
+233 tests passing as of this commit (one skipped where Qt widgets
+cannot load — desktops are fine, libEGL-less containers skip
+gracefully).
+
+## Interactive steady-state preview
+
+Selecting a persisted test in the dashboard opens the **steady-state
+window** preview in the detail panel: the chosen channel plotted with a
+draggable shaded region marking the steady window. Drag either handle
+and a stats readout updates live (mean, std, n, CV%) for every channel
+— microsecond-fast because ``window_stats`` is pure numpy and the
+preprocessed DataFrame is held in an in-memory LRU cache.
+
+Click **Apply window** to commit the new bounds. The detail panel
+spawns a ``ReanalyzeWorker`` that re-runs QC + plugin compute + derived
+measurements and atomically replaces the persisted measurements + qc
+findings + steady-window fields. State machine has dedicated edges
+``PERSISTED → STEADY_DETECTED`` and ``QC_FAILED → STEADY_DETECTED``
+gated behind ``AnalysisService.reanalyze`` so accidental code paths can't
+trigger a re-run.
 
 ## Next commits (in order)
 
-1. Cold-flow plugin port — full uncertainty propagation through the Cd
-   formula using the new ``SensorUncertainty`` model and the analytical
-   Jacobian.
-2. Hot-fire plugin port — chamber pressure, thrust, mass flows, OF, Isp,
-   c* with chained uncertainty.
-3. PySide6 shell — single window, dashboard model, watch folder, single-
-   instance lock, structured logging.
-4. Test-detail screen with interactive steady-state preview.
-5. Campaign analytics with the cross-campaign hardware filter.
+1. Hot-fire plugin port — chamber pressure, thrust, mass flows, OF, Isp,
+   c* with chained uncertainty over the SensorUncertainty model.
+2. Watch folder + drag-and-drop ingest in the UI.
+3. Cross-campaign analytics screen with the hardware filter.

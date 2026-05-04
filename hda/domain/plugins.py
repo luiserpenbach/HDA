@@ -12,17 +12,22 @@ Cleaned up vs. the legacy ``core.plugins``:
     chaining, and state-machine progression. Plugins do one thing.
   - ``required_channels`` lets the orchestrator validate the steady_df
     has what the plugin needs *before* invoking it.
+  - ``sensor_calibrations`` carries SensorUncertainty (ABS/REL/PERCENT_FS)
+    so plugins like cold-flow can compute correct standard uncertainties
+    for each sensor reading. ``geometry_uncertainties`` likewise carries
+    the calibration uncertainties of geometry inputs (e.g. orifice area).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Protocol, Sequence, runtime_checkable
 
 import pandas as pd
 
 from hda.domain.errors import ConfigError
 from hda.domain.types import MeasurementWithUncertainty, SteadyWindow, TestMetadata
+from hda.domain.uncertainty import SensorUncertainty
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +36,9 @@ class AnalysisContext:
     steady_df: pd.DataFrame
     steady_window: SteadyWindow
     metadata: TestMetadata
-    sensor_uncertainties: Mapping[str, float]
-    geometry: Mapping[str, float]
+    sensor_calibrations: Mapping[str, SensorUncertainty] = field(default_factory=dict)
+    geometry: Mapping[str, float] = field(default_factory=dict)
+    geometry_uncertainties: Mapping[str, float] = field(default_factory=dict)
     timestamp_column: str = "timestamp"
 
 
