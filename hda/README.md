@@ -39,19 +39,42 @@ ui/           PySide6 widgets (added in a later commit).
 | Calculated channels & measurements | `domain.derived` | Declarative specs + a `FormulaLibrary` registry. Participate in QC and traceability. |
 | TestRun lifecycle | `domain.state.TestState` + `transition()` | DAG of legal transitions. Replaces session-state races. |
 
-## Running the new tests
+## Launching the desktop app (PySide6)
 
 ```bash
-python -m pytest hda/tests/ -v
+pip install PySide6 numpy pandas pytest                # one-time
+python -m hda                                          # default db at ~/.hda/hda.db
+python -m hda --db /tmp/hda.db --campaign INJ-CF-C1    # override location / campaign
 ```
 
-199 tests passing as of this commit; UI is not yet implemented.
+The app opens a single window with a campaign-scoped test list on the
+left, a detail panel (measurements + QC findings) on the right, and an
+"Add Test…" toolbar action (Ctrl+O) that runs ingest + analysis on a
+background QThreadPool worker so the UI never blocks. Logs land in
+``~/.hda/logs/hda.log`` (rotating). A ``QLockFile`` next to ``hda.db``
+prevents two app instances from racing on the same database.
+
+The first launch creates a ``DEMO-C1`` campaign with the
+``basic_means`` plugin so any CSV with a ``timestamp`` column ingests
+and analyzes immediately. Drop your hot-fire / cold-flow CSV in via the
+file dialog to test the pipeline end-to-end.
+
+## Running the tests
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m pytest hda/tests/
+```
+
+210 tests passing as of this commit (one skipped where Qt widgets
+cannot load — desktops are fine, libEGL-less containers skip
+gracefully).
 
 ## Next commits (in order)
 
 1. Hot-fire plugin port — chamber pressure, thrust, mass flows, OF, Isp,
-   c* with chained uncertainty over the new SensorUncertainty model.
-2. PySide6 shell — single window, dashboard model, watch folder, single-
-   instance lock, structured logging.
-3. Test-detail screen with interactive steady-state preview.
-4. Campaign analytics with the cross-campaign hardware filter.
+   c* with chained uncertainty over the SensorUncertainty model.
+2. Watch folder + drag-and-drop ingest in the UI; auto-confirm threshold
+   surfacing.
+3. Interactive steady-state preview in the detail panel (drag-handle
+   window, live mean/std/n).
+4. Cross-campaign analytics screen with the hardware filter.
