@@ -4,10 +4,18 @@ from hda.domain.plugin_modules.cold_flow import (
     ColdFlowConfig,
     ColdFlowPlugin,
 )
+from hda.domain.plugin_modules.hot_fire import (
+    HotFireChannelMap,
+    HotFireConfig,
+    HotFirePlugin,
+)
 
 __all__ = [
     "BasicMeansPlugin",
     "ColdFlowChannelMap",
     "ColdFlowConfig",
     "ColdFlowPlugin",
+    "HotFireChannelMap",
+    "HotFireConfig",
+    "HotFirePlugin",
 ]

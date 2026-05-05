@@ -65,9 +65,22 @@ file dialog to test the pipeline end-to-end.
 QT_QPA_PLATFORM=offscreen python -m pytest hda/tests/
 ```
 
-233 tests passing as of this commit (one skipped where Qt widgets
+260 tests passing as of this commit (one skipped where Qt widgets
 cannot load — desktops are fine, libEGL-less containers skip
 gracefully).
+
+## Hardware analytics (cross-campaign)
+
+Toolbar action **Hardware Analytics… (Ctrl+H)** opens a separate window
+that filters by `part_number` / `serial_number` / `measurement_name` and
+plots the measurement value with error bars across **every campaign that
+hardware appeared in**. Powered by a single indexed join on the v3
+single-DB schema (``MeasurementsRepository.hardware_history``) — the
+multi-database UNION the legacy app needed is gone.
+
+The status bar shows ``n / mean / std / cv / range`` for the currently
+filtered set; the table below the plot lists each test_run with its
+campaign, serial, persisted timestamp, value, and uncertainty.
 
 ## Interactive steady-state preview
 
@@ -88,7 +101,7 @@ trigger a re-run.
 
 ## Next commits (in order)
 
-1. Hot-fire plugin port — chamber pressure, thrust, mass flows, OF, Isp,
-   c* with chained uncertainty over the SensorUncertainty model.
-2. Watch folder + drag-and-drop ingest in the UI.
-3. Cross-campaign analytics screen with the hardware filter.
+1. Watch folder + drag-and-drop ingest in the UI.
+2. SPC charts on the analytics screen (I-MR control limits + Western
+   Electric rules), built on the existing cross-campaign query.
+3. Date-range / campaign multi-select filters on analytics.
