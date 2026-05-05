@@ -27,11 +27,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hda.ui.analytics_window import PYQTGRAPH_AVAILABLE as _ANALYTICS_OK
 from hda.ui.dashboard import DashboardData, DashboardModel
 from hda.ui.detail_panel import DetailPanel
 from hda.ui.logging_setup import get_logger
 from hda.ui.workers import IngestAndAnalyzeWorker, PipelineResult
 from hda.ui.workspace import Workspace
+
+if _ANALYTICS_OK:
+    from hda.ui.analytics_window import AnalyticsWindow
 
 
 _log = get_logger("main_window")
@@ -89,6 +93,11 @@ class MainWindow(QMainWindow):
         refresh_action.setShortcut("F5")
         refresh_action.triggered.connect(self._dash_model.reload)
         toolbar.addAction(refresh_action)
+        analytics_action = QAction("Hardware Analytics…", self)
+        analytics_action.setShortcut("Ctrl+H")
+        analytics_action.triggered.connect(self._open_analytics)
+        toolbar.addAction(analytics_action)
+        self._analytics_window: object | None = None
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage(
@@ -157,3 +166,17 @@ class MainWindow(QMainWindow):
         self._dash_model.reload()
         self._select_run(test_run_id)
         self.statusBar().showMessage(f"Reanalyzed {test_run_id[:8]}.")
+
+    def _open_analytics(self) -> None:
+        if not _ANALYTICS_OK:
+            QMessageBox.information(
+                self,
+                "Analytics unavailable",
+                "Hardware analytics requires pyqtgraph and Qt widgets.",
+            )
+            return
+        if self._analytics_window is None:
+            self._analytics_window = AnalyticsWindow(self._workspace)
+        self._analytics_window.show()
+        self._analytics_window.raise_()
+        self._analytics_window.activateWindow()

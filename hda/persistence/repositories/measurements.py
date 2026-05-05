@@ -116,3 +116,51 @@ class MeasurementsRepository:
         sql += " ORDER BY COALESCE(tr.persisted_at, tr.discovered_at)"
         rows = conn.execute(sql, params).fetchall()
         return pd.DataFrame([dict(r) for r in rows])
+
+    def list_parts_with_measurements(self) -> List[str]:
+        """Distinct part numbers that have at least one persisted measurement."""
+        conn = self._db.connect()
+        rows = conn.execute(
+            """
+            SELECT DISTINCT h.part_number
+              FROM hardware h
+              JOIN test_runs tr ON tr.hardware_id = h.id
+              JOIN measurements m ON m.test_run_id = tr.id
+             ORDER BY h.part_number
+            """
+        ).fetchall()
+        return [r["part_number"] for r in rows]
+
+    def list_serials_for_part(self, part_number: str) -> List[str]:
+        conn = self._db.connect()
+        rows = conn.execute(
+            """
+            SELECT DISTINCT h.serial_number
+              FROM hardware h
+              JOIN test_runs tr ON tr.hardware_id = h.id
+              JOIN measurements m ON m.test_run_id = tr.id
+             WHERE h.part_number = ?
+             ORDER BY h.serial_number
+            """,
+            (part_number,),
+        ).fetchall()
+        return [r["serial_number"] for r in rows]
+
+    def list_measurement_names_for_part(
+        self, part_number: str, serial_number: Optional[str] = None
+    ) -> List[str]:
+        conn = self._db.connect()
+        sql = """
+            SELECT DISTINCT m.name
+              FROM measurements m
+              JOIN test_runs tr ON tr.id = m.test_run_id
+              JOIN hardware h    ON h.id = tr.hardware_id
+             WHERE h.part_number = ?
+        """
+        params: list = [part_number]
+        if serial_number is not None:
+            sql += " AND h.serial_number = ?"
+            params.append(serial_number)
+        sql += " ORDER BY m.name"
+        rows = conn.execute(sql, params).fetchall()
+        return [r["name"] for r in rows]
