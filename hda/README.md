@@ -42,10 +42,15 @@ ui/           PySide6 widgets (added in a later commit).
 ## Launching the desktop app (PySide6)
 
 ```bash
-pip install PySide6 numpy pandas pytest                # one-time
-python -m hda                                          # default db at ~/.hda/hda.db
-python -m hda --db /tmp/hda.db --campaign INJ-CF-C1    # override location / campaign
+pip install -e .                          # one-time, from the repo root
+hda                                       # default db at ~/.hda/hda.db
+hda --db /tmp/hda.db --campaign INJ-CF-C1 # override location / campaign
 ```
+
+`pip install -e .` installs the package in editable mode and creates an
+`hda` console script. You can also still use `python -m hda` once the
+package is on the Python path (either via the editable install above or
+by running from the repo root).
 
 The app opens a single window with a campaign-scoped test list on the
 left, a detail panel (measurements + QC findings) on the right, and an
