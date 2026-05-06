@@ -1,13 +1,19 @@
 """Test-detail panel.
 
 For a selected test_run_id renders three sections:
-  1. Header line (id + state).
+  1. Header line — id + state, tinted with the same color used by the
+     dashboard's state column so the operator's eye lands on the same
+     hue across views.
   2. Interactive steady-state preview (when preprocessed data is in the
      cache) with live window stats and an Apply-window button.
-  3. Measurements + QC findings tables, refreshed on demand.
+  3. Measurements + QC findings tables. Group titles include counts.
 
 The steady-state preview is wired through ``window_committed`` to a
-ReanalyzeWorker; on success the panel reloads measurements + QC.
+ReanalyzeWorker; on success the panel reloads measurements + QC and
+emits ``reanalyzed(test_run_id)`` so the dashboard refreshes. While a
+reanalysis is in flight the Apply button is disabled — preventing
+double-clicks — and the parent gets a ``busy_changed(True/False)``
+signal so the status bar reflects "Reanalyzing…".
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import QThreadPool, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
     QGroupBox,
     QHeaderView,
@@ -33,6 +40,7 @@ from hda.persistence.repositories import (
     QCFindingsRepository,
     TestRunRepository,
 )
+from hda.ui.dashboard import state_colors
 from hda.ui.logging_setup import get_logger
 from hda.ui.steady_state_preview import PYQTGRAPH_AVAILABLE
 from hda.ui.workers import PipelineResult, ReanalyzeWorker
@@ -45,17 +53,31 @@ if PYQTGRAPH_AVAILABLE:
 _log = get_logger("detail_panel")
 
 
+_QC_STATUS_BG: dict[str, QColor] = {
+    "pass": QColor("#dcfce7"),
+    "warn": QColor("#fef3c7"),
+    "fail": QColor("#fee2e2"),
+}
+_QC_STATUS_FG: dict[str, QColor] = {
+    "pass": QColor("#14532d"),
+    "warn": QColor("#92400e"),
+    "fail": QColor("#7f1d1d"),
+}
+
+
 class DetailPanel(QWidget):
     """Test-detail view. Owns the steady-state preview and the
     measurements / QC tables for the selected run."""
 
     reanalyzed = Signal(str)
+    busy_changed = Signal(bool)
 
     def __init__(self, workspace: Workspace, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._workspace = workspace
         self._db: Database = workspace.db
         self._test_run_id: Optional[str] = None
+        self._busy: bool = False
         self._pool = QThreadPool.globalInstance()
 
         layout = QVBoxLayout(self)
@@ -63,7 +85,10 @@ class DetailPanel(QWidget):
         layout.setSpacing(8)
 
         self._header = QLabel("No test selected")
-        self._header.setStyleSheet("font-weight: 600; font-size: 14px;")
+        self._header.setStyleSheet(
+            "font-weight:600; font-size:14px; padding:6px 10px;"
+            " border-radius:4px; background:#f4f4f5; color:#27272a;"
+        )
         layout.addWidget(self._header)
 
         self._preview: Optional[SteadyStatePreview] = None
@@ -84,10 +109,14 @@ class DetailPanel(QWidget):
         self._meas_table.setHorizontalHeaderLabels(
             ["Name", "Value", "Uncertainty", "Unit"]
         )
-        self._meas_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.Stretch
-        )
+        meas_header = self._meas_table.horizontalHeader()
+        meas_header.setSectionResizeMode(0, QHeaderView.Stretch)
+        meas_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        meas_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        meas_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self._meas_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._meas_table.setAlternatingRowColors(True)
+        self._meas_table.verticalHeader().setVisible(False)
         meas_layout.addWidget(self._meas_table)
         layout.addWidget(self._meas_box, stretch=2)
 
@@ -97,19 +126,27 @@ class DetailPanel(QWidget):
         self._qc_table.setHorizontalHeaderLabels(
             ["Check", "Status", "Blocking", "Message"]
         )
-        self._qc_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.Stretch
-        )
+        qc_header = self._qc_table.horizontalHeader()
+        qc_header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        qc_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        qc_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        qc_header.setSectionResizeMode(3, QHeaderView.Stretch)
         self._qc_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._qc_table.setAlternatingRowColors(True)
+        self._qc_table.verticalHeader().setVisible(False)
         qc_layout.addWidget(self._qc_table)
         layout.addWidget(self._qc_box, stretch=1)
+
+    # ---------------------------------------------------------- public API
 
     def show_test_run(self, test_run_id: str | None) -> None:
         self._test_run_id = test_run_id
         if test_run_id is None:
-            self._header.setText("No test selected")
+            self._set_header("No test selected", "discovered")
             self._meas_table.setRowCount(0)
             self._qc_table.setRowCount(0)
+            self._meas_box.setTitle("Measurements")
+            self._qc_box.setTitle("QC findings")
             if self._preview is not None:
                 self._preview.clear()
                 self._preview_box.setVisible(False)
@@ -117,11 +154,23 @@ class DetailPanel(QWidget):
 
         run_state = TestRunRepository(self._db).get_state(test_run_id)
         state_str = run_state.value if run_state is not None else "?"
-        self._header.setText(f"Test {test_run_id[:8]} — state: {state_str}")
+        self._set_header(
+            f"Test {test_run_id[:8]} — state: {state_str}", state_str
+        )
 
         self._populate_preview(test_run_id)
         self._populate_measurements(test_run_id)
         self._populate_qc(test_run_id)
+
+    # ------------------------------------------------------------- private
+
+    def _set_header(self, text: str, state: str) -> None:
+        fg, bg = state_colors(state)
+        self._header.setText(text)
+        self._header.setStyleSheet(
+            f"font-weight:600; font-size:14px; padding:6px 10px;"
+            f" border-radius:4px; background:{bg.name()}; color:{fg.name()};"
+        )
 
     def _populate_preview(self, test_run_id: str) -> None:
         if self._preview is None:
@@ -137,6 +186,7 @@ class DetailPanel(QWidget):
             initial_window=steady_row,
             timestamp_column="timestamp",
         )
+        self._preview.set_busy(self._busy)
         self._preview_box.setVisible(True)
 
     def _lookup_steady_window(self, test_run_id: str) -> Optional[SteadyWindow]:
@@ -163,46 +213,83 @@ class DetailPanel(QWidget):
 
     def _populate_measurements(self, test_run_id: str) -> None:
         measurements = MeasurementsRepository(self._db).get_for_run(test_run_id)
+        self._meas_box.setTitle(f"Measurements ({len(measurements)})")
         self._meas_table.setRowCount(len(measurements))
         for r, m in enumerate(measurements):
-            self._meas_table.setItem(r, 0, _item(m.name))
-            self._meas_table.setItem(r, 1, _item(f"{m.value:.6g}"))
-            self._meas_table.setItem(r, 2, _item(f"{m.uncertainty:.6g}"))
-            self._meas_table.setItem(r, 3, _item(m.unit))
+            self._meas_table.setItem(r, 0, _name_item(m.name))
+            self._meas_table.setItem(r, 1, _numeric_item(f"{m.value:.6g}"))
+            self._meas_table.setItem(r, 2, _numeric_item(f"{m.uncertainty:.4g}"))
+            self._meas_table.setItem(r, 3, _name_item(m.unit))
 
     def _populate_qc(self, test_run_id: str) -> None:
         findings = QCFindingsRepository(self._db).get_for_run(test_run_id)
+        self._qc_box.setTitle(f"QC findings ({len(findings)})")
         self._qc_table.setRowCount(len(findings))
         for r, f in enumerate(findings):
-            self._qc_table.setItem(r, 0, _item(f.check_name))
-            self._qc_table.setItem(r, 1, _item(f.status.value))
-            self._qc_table.setItem(r, 2, _item("yes" if f.blocking else ""))
-            self._qc_table.setItem(r, 3, _item(f.message))
+            check = _name_item(f.check_name)
+            status = _name_item(f.status.value)
+            bg = _QC_STATUS_BG.get(f.status.value)
+            fg = _QC_STATUS_FG.get(f.status.value)
+            if bg is not None:
+                status.setBackground(QBrush(bg))
+            if fg is not None:
+                status.setForeground(QBrush(fg))
+            blocking = _name_item("yes" if f.blocking else "")
+            blocking.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+            self._qc_table.setItem(r, 0, check)
+            self._qc_table.setItem(r, 1, status)
+            self._qc_table.setItem(r, 2, blocking)
+            self._qc_table.setItem(r, 3, _name_item(f.message))
+
+    # ----------------------------------------------------------- reanalyze
 
     def _on_window_committed(self, window: SteadyWindow) -> None:
-        if self._test_run_id is None:
+        if self._test_run_id is None or self._busy:
             return
         _log.info(
             "operator commit window: id=%s [%.3f, %.3f]",
-            self._test_run_id,
-            window.start_s,
-            window.end_s,
+            self._test_run_id, window.start_s, window.end_s,
         )
+        self._set_busy(True)
         worker = ReanalyzeWorker(self._workspace, self._test_run_id, window)
         worker.signals.finished.connect(self._on_reanalyze_finished)
         worker.signals.failed.connect(self._on_reanalyze_failed)
         self._pool.start(worker)
 
     def _on_reanalyze_finished(self, result: PipelineResult) -> None:
+        self._set_busy(False)
         self.show_test_run(result.test_run_id)
         self.reanalyzed.emit(result.test_run_id)
 
     def _on_reanalyze_failed(self, message: str) -> None:
+        self._set_busy(False)
         _log.error("reanalyze failed: %s", message)
         QMessageBox.critical(self, "Reanalysis failed", message)
 
+    def _set_busy(self, busy: bool) -> None:
+        if busy == self._busy:
+            return
+        self._busy = busy
+        if self._preview is not None:
+            self._preview.set_busy(busy)
+        self.busy_changed.emit(busy)
 
-def _item(text: str) -> QTableWidgetItem:
+
+def _mono_font() -> QFont:
+    f = QFont("Menlo")
+    f.setStyleHint(QFont.Monospace)
+    f.setPointSize(10)
+    return f
+
+
+def _name_item(text: str) -> QTableWidgetItem:
     item = QTableWidgetItem(text)
     item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+    return item
+
+
+def _numeric_item(text: str) -> QTableWidgetItem:
+    item = QTableWidgetItem(text)
+    item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+    item.setFont(_mono_font())
     return item

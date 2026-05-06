@@ -14,6 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import QCoreApplication, Qt
+    from PySide6.QtGui import QBrush
     from PySide6.QtWidgets import QApplication
 except (ImportError, OSError) as e:
     pytest.skip(
@@ -27,7 +28,13 @@ from hda.persistence.repositories import (  # noqa: E402
 )
 from hda.domain.state import TestState  # noqa: E402
 from hda.domain.types import Campaign, TestRun  # noqa: E402
-from hda.ui.dashboard import DashboardData, DashboardModel  # noqa: E402
+from hda.ui.dashboard import (  # noqa: E402
+    STATE_COLORS,
+    TEST_RUN_ID_ROLE,
+    DashboardData,
+    DashboardModel,
+    state_colors,
+)
 from hda.ui.workspace import build_default_workspace  # noqa: E402
 
 
@@ -105,3 +112,90 @@ def _seed_one(ws, campaign_id: str):
         metadata_values={},
         metadata_hash="",
     )
+
+
+def test_test_run_id_role_returns_full_uuid(app, tmp_path: Path):
+    ws = build_default_workspace(db_path=tmp_path / "hda.db")
+    _seed(ws, n=2)
+    data = DashboardData(ws.db)
+    data.set_campaign("DEMO-C1")
+    model = DashboardModel(data)
+    idx = model.index(0, 0)
+    assert model.data(idx, TEST_RUN_ID_ROLE) == "run-1"
+    # Same regardless of column the index points at.
+    assert model.data(model.index(0, 4), TEST_RUN_ID_ROLE) == "run-1"
+
+
+def test_state_column_has_color_pair_per_state(app, tmp_path: Path):
+    ws = build_default_workspace(db_path=tmp_path / "hda.db")
+    _seed(ws, n=1)
+    data = DashboardData(ws.db)
+    data.set_campaign("DEMO-C1")
+    model = DashboardModel(data)
+    state_idx = model.index(0, 1)
+    bg = model.data(state_idx, Qt.BackgroundRole)
+    fg = model.data(state_idx, Qt.ForegroundRole)
+    assert isinstance(bg, QBrush)
+    assert isinstance(fg, QBrush)
+
+
+def test_state_colors_table_covers_every_TestState(app):
+    # Every TestState value defined in the domain has a UI color.
+    for s in TestState:
+        assert s.value in STATE_COLORS, f"missing color for state {s.value!r}"
+
+
+def test_state_colors_helper_falls_back_for_unknown(app):
+    fg, bg = state_colors("never_seen_state")
+    assert fg is not None and bg is not None  # fallback present
+
+
+def test_test_id_column_carries_full_uuid_as_tooltip(app, tmp_path: Path):
+    ws = build_default_workspace(db_path=tmp_path / "hda.db")
+    _seed(ws, n=1)
+    data = DashboardData(ws.db)
+    data.set_campaign("DEMO-C1")
+    model = DashboardModel(data)
+    idx = model.index(0, 0)
+    assert model.data(idx, Qt.ToolTipRole) == "run-0"
+
+
+def test_date_columns_right_aligned(app, tmp_path: Path):
+    ws = build_default_workspace(db_path=tmp_path / "hda.db")
+    _seed(ws, n=1)
+    data = DashboardData(ws.db)
+    data.set_campaign("DEMO-C1")
+    model = DashboardModel(data)
+    align_discovered = model.data(model.index(0, 3), Qt.TextAlignmentRole)
+    assert align_discovered & Qt.AlignRight
+    align_persisted = model.data(model.index(0, 4), Qt.TextAlignmentRole)
+    assert align_persisted & Qt.AlignRight
+
+
+def test_display_id_uses_test_id_label_when_present(app, tmp_path: Path):
+    ws = build_default_workspace(db_path=tmp_path / "hda.db")
+    runs = TestRunRepository(ws.db)
+    from hda.domain.types import TestMetadata, Hardware
+
+    runs.insert_initial(
+        TestRun(
+            id="abcd1234ef" * 6 + "abcd",  # long uuid-ish
+            campaign_id="DEMO-C1",
+            file_path=Path("/x.csv"),
+            file_hash="z" * 64,
+            state=TestState.PREPROCESSED,
+            metadata=TestMetadata(
+                hardware=Hardware(part_number="PN", serial_number="SN"),
+                fluid="N2",
+                operator="alice",
+                test_id="HF-2026-001",
+            ),
+        ),
+        hardware_id=None,
+        metadata_values={"test_id": "HF-2026-001"},
+        metadata_hash="",
+    )
+    data = DashboardData(ws.db)
+    data.set_campaign("DEMO-C1")
+    model = DashboardModel(data)
+    assert model.data(model.index(0, 0), Qt.DisplayRole) == "HF-2026-001"

@@ -3,6 +3,11 @@
 A QAbstractTableModel that surfaces the persisted test runs of a
 campaign, plus a small ``DashboardData`` shim that is independent of Qt
 so the data layer can be unit-tested without instantiating QApplication.
+
+State colors are exposed via ``Qt.BackgroundRole`` so the operator can
+scan a 10-tests/day list at a glance and drill into the yellows / reds.
+The mapping is in ``STATE_COLORS`` (single source of truth, also used by
+the detail panel's header tint).
 """
 
 from __future__ import annotations
@@ -11,9 +16,33 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtGui import QBrush, QColor
 
 from hda.persistence import Database
 from hda.persistence.repositories import TestRunRepository
+
+
+# (foreground, background) per state. Subdued so the table reads cleanly;
+# the foreground is used to tint the detail-panel header.
+STATE_COLORS: dict[str, tuple[QColor, QColor]] = {
+    "discovered":         (QColor("#52525b"), QColor("#f4f4f5")),
+    "ingesting":          (QColor("#0c4a6e"), QColor("#e0f2fe")),
+    "awaiting_metadata":  (QColor("#92400e"), QColor("#fef3c7")),
+    "preprocessed":       (QColor("#0c4a6e"), QColor("#e0f2fe")),
+    "steady_detected":    (QColor("#0c4a6e"), QColor("#e0f2fe")),
+    "qc_run":             (QColor("#0c4a6e"), QColor("#e0f2fe")),
+    "needs_review":       (QColor("#92400e"), QColor("#fef3c7")),
+    "analyzed":           (QColor("#14532d"), QColor("#dcfce7")),
+    "persisted":          (QColor("#14532d"), QColor("#dcfce7")),
+    "qc_failed":          (QColor("#7f1d1d"), QColor("#fee2e2")),
+    "error":              (QColor("#7f1d1d"), QColor("#fee2e2")),
+}
+
+
+def state_colors(state: str) -> tuple[QColor, QColor]:
+    return STATE_COLORS.get(
+        state, (QColor("#27272a"), QColor("#fafafa"))
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +104,10 @@ class DashboardData:
         return self._rows[index]
 
 
+# Custom data role for "give me this row's test_run_id" — survives sort.
+TEST_RUN_ID_ROLE = Qt.UserRole + 1
+
+
 class DashboardModel(QAbstractTableModel):
     def __init__(self, data: DashboardData) -> None:
         super().__init__()
@@ -97,25 +130,49 @@ class DashboardModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(DashboardData.COLUMNS)
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):
-        if role != Qt.DisplayRole or orientation != Qt.Horizontal:
+        if orientation != Qt.Horizontal:
             return None
-        return DashboardData.COLUMNS[section]
+        if role == Qt.DisplayRole:
+            return DashboardData.COLUMNS[section]
+        return None
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
-        if not index.isValid() or role != Qt.DisplayRole:
+        if not index.isValid():
             return None
         row = self._data.row(index.row())
         col = index.column()
-        if col == 0:
-            return row.display_id
-        if col == 1:
-            return row.state
-        if col == 2:
-            return row.operator
-        if col == 3:
-            return row.discovered_at
-        if col == 4:
-            return row.persisted_at
+
+        if role == TEST_RUN_ID_ROLE:
+            return row.test_run_id
+
+        if role == Qt.DisplayRole:
+            if col == 0:
+                return row.display_id
+            if col == 1:
+                return row.state
+            if col == 2:
+                return row.operator
+            if col == 3:
+                return row.discovered_at
+            if col == 4:
+                return row.persisted_at
+            return None
+
+        if role == Qt.ToolTipRole:
+            if col == 0:
+                return row.test_run_id  # full UUID on hover
+            return None
+
+        if role == Qt.BackgroundRole and col == 1:
+            _, bg = state_colors(row.state)
+            return QBrush(bg)
+        if role == Qt.ForegroundRole and col == 1:
+            fg, _ = state_colors(row.state)
+            return QBrush(fg)
+
+        if role == Qt.TextAlignmentRole:
+            if col in (3, 4):
+                return int(Qt.AlignVCenter | Qt.AlignRight)
         return None
 
     def test_run_id_at(self, row: int) -> Optional[str]:

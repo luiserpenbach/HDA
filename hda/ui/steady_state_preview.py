@@ -26,6 +26,7 @@ import pandas as pd
 try:
     import pyqtgraph as pg
     from PySide6.QtCore import Qt, Signal
+    from PySide6.QtGui import QFont
     from PySide6.QtWidgets import (
         QComboBox,
         QFrame,
@@ -74,6 +75,7 @@ if PYQTGRAPH_AVAILABLE:
             self._df: Optional[pd.DataFrame] = None
             self._ts_col = "timestamp"
             self._initial: Optional[SteadyWindow] = None
+            self._busy: bool = False
 
             layout = QVBoxLayout(self)
             layout.setContentsMargins(0, 0, 0, 0)
@@ -88,11 +90,16 @@ if PYQTGRAPH_AVAILABLE:
             )
             self._channel_combo.currentTextChanged.connect(self._on_channel_changed)
             controls.addWidget(self._channel_combo, stretch=1)
-            self._reset_btn = QPushButton("Reset to detected")
+            self._reset_btn = QPushButton("Reset window")
+            self._reset_btn.setToolTip("Restore the currently-persisted steady-state window.")
             self._reset_btn.clicked.connect(self._reset_window)
             controls.addWidget(self._reset_btn)
             self._apply_btn = QPushButton("Apply window")
             self._apply_btn.setStyleSheet("font-weight: 600;")
+            self._apply_btn.setToolTip(
+                "Re-run QC + analysis on the highlighted window. (Ctrl+Enter)"
+            )
+            self._apply_btn.setShortcut("Ctrl+Return")
             self._apply_btn.clicked.connect(self._on_apply)
             controls.addWidget(self._apply_btn)
             layout.addLayout(controls)
@@ -100,6 +107,7 @@ if PYQTGRAPH_AVAILABLE:
             self._plot = pg.PlotWidget()
             self._plot.setLabel("bottom", "time", units="s")
             self._plot.showGrid(x=True, y=True, alpha=0.2)
+            self._plot.getViewBox().enableAutoRange(axis="y", enable=True)
             self._curve = self._plot.plot(pen=pg.mkPen("#18181b", width=1))
             self._region = pg.LinearRegionItem(
                 brush=pg.mkBrush(24, 24, 27, 35),
@@ -111,10 +119,16 @@ if PYQTGRAPH_AVAILABLE:
 
             self._stats_label = QLabel("Drag the shaded region to adjust the window.")
             self._stats_label.setFrameStyle(QFrame.StyledPanel)
+            mono = QFont("Menlo")
+            mono.setStyleHint(QFont.Monospace)
+            mono.setPointSize(10)
+            self._stats_label.setFont(mono)
             self._stats_label.setStyleSheet(
-                "padding: 6px 8px; background:#f4f4f5; font-family:monospace;"
+                "padding:6px 10px; background:#f4f4f5; color:#27272a;"
+                " border:1px solid #e4e4e7; border-radius:3px;"
             )
-            self._stats_label.setWordWrap(True)
+            self._stats_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            self._stats_label.setWordWrap(False)
             layout.addWidget(self._stats_label)
 
             self._set_enabled(False)
@@ -168,6 +182,18 @@ if PYQTGRAPH_AVAILABLE:
             self._stats_label.setText("No test selected.")
             self._set_enabled(False)
 
+        def set_busy(self, busy: bool) -> None:
+            """Disable the Apply / Reset / channel controls while a
+            reanalysis worker is running so a slow click cannot stack
+            multiple jobs."""
+            self._busy = busy
+            has_data = self._df is not None
+            self._apply_btn.setEnabled(has_data and not busy)
+            self._reset_btn.setEnabled(has_data and not busy)
+            self._channel_combo.setEnabled(has_data and not busy)
+            self._region.setMovable(has_data and not busy)
+            self._apply_btn.setText("Reanalyzing…" if busy else "Apply window")
+
         def current_window(self) -> SteadyWindow:
             start, end = self._region.getRegion()
             method = "manual"
@@ -186,10 +212,11 @@ if PYQTGRAPH_AVAILABLE:
         # ---- handlers --------------------------------------------------
 
         def _set_enabled(self, enabled: bool) -> None:
-            self._channel_combo.setEnabled(enabled)
-            self._reset_btn.setEnabled(enabled)
-            self._apply_btn.setEnabled(enabled)
-            self._region.setMovable(enabled)
+            allow = enabled and not self._busy
+            self._channel_combo.setEnabled(allow)
+            self._reset_btn.setEnabled(allow)
+            self._apply_btn.setEnabled(allow)
+            self._region.setMovable(allow)
 
         def _render_curve(self) -> None:
             if self._df is None or self._channel_combo.count() == 0:

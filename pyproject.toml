@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hda"
+version = "3.0.0.dev0"
+description = "Hopper Data Studio — rocket-test data analysis (v3, Qt6 desktop)"
+readme = "hda/README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Hopper Propulsion Systems" }]
+license = { text = "Proprietary" }
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "PySide6>=6.5",
+    "pyqtgraph>=0.13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+hda = "hda.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["hda*"]
+exclude = ["core*", "pages*", "tests*", "scripts*"]
