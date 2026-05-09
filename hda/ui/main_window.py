@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hda.domain.state import TestState
 from hda.ui.analytics_window import PYQTGRAPH_AVAILABLE as _ANALYTICS_OK
 from hda.ui.dashboard import (
     TEST_RUN_ID_ROLE,
@@ -52,7 +53,12 @@ from hda.ui.dashboard import (
 )
 from hda.ui.detail_panel import DetailPanel
 from hda.ui.logging_setup import get_logger
-from hda.ui.workers import IngestAndAnalyzeWorker, PipelineResult
+from hda.ui.metadata_dialog import MetadataCompletionDialog
+from hda.ui.workers import (
+    CompleteMetadataAndAnalyzeWorker,
+    IngestAndAnalyzeWorker,
+    PipelineResult,
+)
 from hda.ui.workspace import Workspace
 
 if _ANALYTICS_OK:
@@ -122,6 +128,9 @@ class MainWindow(QMainWindow):
         self._detail = DetailPanel(workspace)
         self._detail.reanalyzed.connect(self._on_reanalyzed)
         self._detail.busy_changed.connect(self._on_detail_busy_changed)
+        self._detail.complete_metadata_requested.connect(
+            self._prompt_complete_metadata
+        )
 
         splitter = QSplitter()
         splitter.addWidget(table_container)
@@ -282,6 +291,15 @@ class MainWindow(QMainWindow):
         self._activity_label.setText(
             f"{result.test_run_id[:8]} → {result.final_state.value}{suffix}"
         )
+        if (
+            result.final_state is TestState.AWAITING_METADATA
+            and not result.duplicate_of
+            and self._in_flight == 0
+        ):
+            # Only auto-prompt when the queue is drained so we don't pop
+            # 5 dialogs after a 5-file drag-drop. The detail panel still
+            # exposes a "Complete metadata" button for the rest.
+            self._prompt_complete_metadata(result.test_run_id)
 
     def _on_pipeline_failed(self, message: str) -> None:
         self._in_flight = max(0, self._in_flight - 1)
@@ -317,6 +335,57 @@ class MainWindow(QMainWindow):
         self._dash_model.reload()
         self._select_run(test_run_id)
         self._activity_label.setText(f"Reanalyzed {test_run_id[:8]}.")
+
+    def prompt_complete_metadata(self, test_run_id: str) -> None:
+        """Public entry point so the detail panel can ask us to open the
+        dialog when the user clicks 'Complete metadata'."""
+        self._prompt_complete_metadata(test_run_id)
+
+    def _prompt_complete_metadata(self, test_run_id: str) -> None:
+        ingest_svc = self._workspace.ingest_service
+        if ingest_svc is None:
+            return
+        try:
+            schema = ingest_svc.metadata_schema_for_run(test_run_id)
+            existing = ingest_svc.existing_metadata_for_run(test_run_id)
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Cannot complete metadata", f"{type(e).__name__}: {e}"
+            )
+            return
+        # Re-validate to know which required fields are still missing.
+        missing = tuple(schema.validate(dict(existing)).missing_required)
+        dialog = MetadataCompletionDialog(
+            schema=schema,
+            existing=existing,
+            missing_required=missing,
+            parent=self,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        operator_md = dialog.values()
+        worker = CompleteMetadataAndAnalyzeWorker(
+            self._workspace, test_run_id, operator_md
+        )
+        worker.signals.finished.connect(self._on_complete_meta_finished)
+        worker.signals.failed.connect(self._on_pipeline_failed)
+        self._in_flight += 1
+        self._update_inflight_badge()
+        from PySide6.QtCore import QThreadPool
+
+        QThreadPool.globalInstance().start(worker)
+        self._activity_label.setText(
+            f"Completing metadata for {test_run_id[:8]}…"
+        )
+
+    def _on_complete_meta_finished(self, result: PipelineResult) -> None:
+        self._in_flight = max(0, self._in_flight - 1)
+        self._dash_model.reload()
+        self._select_run(result.test_run_id)
+        self._update_inflight_badge()
+        self._activity_label.setText(
+            f"{result.test_run_id[:8]} → {result.final_state.value}"
+        )
 
     def _on_detail_busy_changed(self, busy: bool) -> None:
         if busy:

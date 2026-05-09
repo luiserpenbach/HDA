@@ -76,6 +76,7 @@ if PYQTGRAPH_AVAILABLE:
             self._ts_col = "timestamp"
             self._initial: Optional[SteadyWindow] = None
             self._busy: bool = False
+            self._apply_allowed: bool = True
 
             layout = QVBoxLayout(self)
             layout.setContentsMargins(0, 0, 0, 0)
@@ -188,11 +189,28 @@ if PYQTGRAPH_AVAILABLE:
             multiple jobs."""
             self._busy = busy
             has_data = self._df is not None
-            self._apply_btn.setEnabled(has_data and not busy)
+            self._apply_btn.setEnabled(
+                has_data and not busy and self._apply_allowed
+            )
             self._reset_btn.setEnabled(has_data and not busy)
             self._channel_combo.setEnabled(has_data and not busy)
             self._region.setMovable(has_data and not busy)
             self._apply_btn.setText("Reanalyzing…" if busy else "Apply window")
+
+        def set_apply_enabled(self, allowed: bool) -> None:
+            """External lock on Apply (e.g. AWAITING_METADATA). Drag and
+            channel-switch stay live so the operator can still inspect."""
+            self._apply_allowed = allowed
+            self._apply_btn.setEnabled(
+                self._df is not None and not self._busy and allowed
+            )
+
+        def set_apply_tooltip(self, text: Optional[str]) -> None:
+            self._apply_btn.setToolTip(
+                text
+                if text is not None
+                else "Re-run QC + analysis on the highlighted window. (Ctrl+Enter)"
+            )
 
         def current_window(self) -> SteadyWindow:
             start, end = self._region.getRegion()
@@ -215,7 +233,7 @@ if PYQTGRAPH_AVAILABLE:
             allow = enabled and not self._busy
             self._channel_combo.setEnabled(allow)
             self._reset_btn.setEnabled(allow)
-            self._apply_btn.setEnabled(allow)
+            self._apply_btn.setEnabled(allow and self._apply_allowed)
             self._region.setMovable(allow)
 
         def _render_curve(self) -> None:

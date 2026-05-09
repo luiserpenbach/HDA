@@ -15,7 +15,6 @@ from typing import Any, Mapping, Optional
 from PySide6.QtCore import QObject, QRunnable, Signal
 
 from hda.domain.errors import HDAError
-from hda.domain.metadata import canonical_metadata_hash
 from hda.domain.state import TestState
 from hda.domain.types import Hardware, SteadyWindow, TestMetadata
 from hda.services.ingest import IngestRequest, IngestSource
@@ -67,10 +66,7 @@ def run_pipeline(
         ingest_outcome.state.value,
         bool(ingest_outcome.duplicate_of),
     )
-    if (
-        ingest_outcome.duplicate_of is not None
-        or ingest_outcome.preprocessed is None
-    ):
+    if ingest_outcome.duplicate_of is not None:
         return PipelineResult(
             test_run_id=ingest_outcome.test_run_id,
             final_state=ingest_outcome.state,
@@ -78,27 +74,46 @@ def run_pipeline(
             missing_metadata=ingest_outcome.missing_metadata,
         )
 
-    metadata = _build_metadata(ingest_outcome, sidecar_metadata, operator)
-    metadata_hash = canonical_metadata_hash(_metadata_for_hash(metadata))
-
-    workspace.preprocessed_cache.put(
-        CachedPreprocessed(
-            test_run_id=ingest_outcome.test_run_id,
-            data=ingest_outcome.preprocessed,
-            metadata=metadata,
-            config_hash="",
-            metadata_hash=metadata_hash,
-        )
+    # Cache the preprocessed data even when metadata is incomplete so the
+    # detail panel can preview the time-series immediately. Metadata can
+    # be filled in later via complete_metadata_and_analyze.
+    metadata_for_cache = (
+        ingest_outcome.metadata
+        if ingest_outcome.metadata is not None
+        else _placeholder_metadata(ingest_outcome.test_run_id)
     )
+    if ingest_outcome.preprocessed is not None:
+        workspace.preprocessed_cache.put(
+            CachedPreprocessed(
+                test_run_id=ingest_outcome.test_run_id,
+                data=ingest_outcome.preprocessed,
+                metadata=metadata_for_cache,
+                config_hash="",
+                metadata_hash=ingest_outcome.metadata_hash,
+            )
+        )
 
+    if ingest_outcome.state is TestState.AWAITING_METADATA:
+        _log.info(
+            "ingest awaiting metadata: id=%s missing=%s",
+            ingest_outcome.test_run_id,
+            list(ingest_outcome.missing_metadata),
+        )
+        return PipelineResult(
+            test_run_id=ingest_outcome.test_run_id,
+            final_state=ingest_outcome.state,
+            missing_metadata=ingest_outcome.missing_metadata,
+        )
+
+    assert ingest_outcome.metadata is not None
     _log.info("analysis start: id=%s", ingest_outcome.test_run_id)
     analysis_outcome = workspace.analysis_service.submit(
         test_run_id=ingest_outcome.test_run_id,
         campaign_id=campaign_id,
         preprocessed=ingest_outcome.preprocessed,
-        metadata=metadata,
+        metadata=ingest_outcome.metadata,
         config_hash="",
-        metadata_hash=metadata_hash,
+        metadata_hash=ingest_outcome.metadata_hash,
         analyst=analyst,
     )
     _log.info(
@@ -113,32 +128,72 @@ def run_pipeline(
     )
 
 
-def _build_metadata(ingest_outcome, sidecar, operator) -> TestMetadata:
-    """Best-effort TestMetadata construction from the resolved values."""
-    src = dict(sidecar or {})
-    if operator and "operator" not in src:
-        src["operator"] = operator
+def _placeholder_metadata(run_id: str) -> TestMetadata:
+    """A do-not-persist metadata used only as a CachedPreprocessed
+    handle while the test is in AWAITING_METADATA. The real metadata
+    is assembled by complete_metadata_and_analyze and stored in the DB."""
     return TestMetadata(
         hardware=Hardware(
-            part_number=str(src.get("part_number", "PN-UNKNOWN")),
-            serial_number=str(src.get("serial_number", "SN-UNKNOWN")),
+            part_number="__awaiting__", serial_number=run_id[:8]
         ),
-        fluid=str(src.get("fluid", "")),
-        operator=str(src.get("operator", "")),
-        test_id=str(src.get("test_id", ingest_outcome.test_run_id[:8])),
-        notes=str(src.get("notes", "")),
+        fluid="",
+        operator="",
+        test_id=run_id[:8],
     )
 
 
-def _metadata_for_hash(md: TestMetadata) -> dict[str, Any]:
-    return {
-        "part_number": md.hardware.part_number,
-        "serial_number": md.hardware.serial_number,
-        "fluid": md.fluid,
-        "operator": md.operator,
-        "test_id": md.test_id,
-        "notes": md.notes,
-    }
+def complete_metadata_and_analyze(
+    workspace: Workspace,
+    test_run_id: str,
+    operator_metadata: Mapping[str, Any],
+    analyst: str = "operator",
+) -> PipelineResult:
+    """Resolve the missing metadata, persist it, and run analysis.
+
+    The detail panel calls this when the operator submits the
+    "Complete metadata" form. Errors propagate as HDAError /
+    ConfigError so the dialog can show them inline.
+    """
+    if workspace.ingest_service is None or workspace.analysis_service is None:
+        raise HDAError("Workspace services were not configured")
+
+    cached = workspace.preprocessed_cache.get(test_run_id)
+    if cached is None:
+        raise HDAError(
+            f"Preprocessed data for {test_run_id} is not in the cache. "
+            "Re-ingest the source file to enable analysis."
+        )
+
+    outcome = workspace.ingest_service.complete_metadata(
+        test_run_id, operator_metadata
+    )
+    # Refresh the cache entry so the metadata it carries reflects what
+    # was just persisted (later reanalysis reads metadata from cache).
+    workspace.preprocessed_cache.put(
+        CachedPreprocessed(
+            test_run_id=test_run_id,
+            data=cached.data,
+            metadata=outcome.metadata,
+            config_hash=cached.config_hash,
+            metadata_hash=outcome.metadata_hash,
+        )
+    )
+
+    campaign_id = _lookup_campaign_id(workspace, test_run_id)
+    _log.info("analysis start (post-complete-metadata): id=%s", test_run_id)
+    analysis_outcome = workspace.analysis_service.submit(
+        test_run_id=test_run_id,
+        campaign_id=campaign_id,
+        preprocessed=cached.data,
+        metadata=outcome.metadata,
+        config_hash="",
+        metadata_hash=outcome.metadata_hash,
+        analyst=analyst,
+    )
+    return PipelineResult(
+        test_run_id=test_run_id,
+        final_state=analysis_outcome.final_state,
+    )
 
 
 def reanalyze_with_window(
@@ -260,4 +315,32 @@ class ReanalyzeWorker(QRunnable):
             self.signals.finished.emit(result)
         except Exception as e:
             _log.exception("reanalyze worker failed")
+            self.signals.failed.emit(f"{type(e).__name__}: {e}")
+
+
+class CompleteMetadataAndAnalyzeWorker(QRunnable):
+    """QRunnable wrapper around ``complete_metadata_and_analyze``."""
+
+    def __init__(
+        self,
+        workspace: Workspace,
+        test_run_id: str,
+        operator_metadata: Mapping[str, Any],
+    ) -> None:
+        super().__init__()
+        self.workspace = workspace
+        self.test_run_id = test_run_id
+        self.operator_metadata = dict(operator_metadata)
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:  # noqa: D401 - QRunnable contract
+        try:
+            result = complete_metadata_and_analyze(
+                self.workspace,
+                self.test_run_id,
+                self.operator_metadata,
+            )
+            self.signals.finished.emit(result)
+        except Exception as e:
+            _log.exception("complete-metadata worker failed")
             self.signals.failed.emit(f"{type(e).__name__}: {e}")

@@ -11,10 +11,19 @@ Idempotency: if a file with the same SHA-256 has already been ingested
 into the requested campaign, ``enqueue`` returns the existing TestRun id
 without re-processing. Watch-folder events that fire twice on the same
 file are therefore safe.
+
+Preprocessing-vs-metadata: preprocessing is data-only and never depends
+on metadata, so we always run it and cache the result. That way the
+operator can preview a freshly-dropped CSV in the detail panel
+*immediately*, even when required metadata fields are still missing —
+analysis is the only thing that's deferred to ``AWAITING_METADATA``.
+``complete_metadata`` later fills the missing fields and the analysis
+service runs against the same cached preprocessed data.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,13 +37,14 @@ from hda.domain.errors import ConfigError, IngestError
 from hda.domain.metadata import (
     MetadataLayer,
     MetadataSchema,
+    ResolvedMetadata,
     canonical_metadata_hash,
     load_sidecar,
     resolve_metadata,
 )
 from hda.domain.state import TestState
 from hda.domain.types import Hardware, TestMetadata, TestRun
-from hda.persistence.db import Database
+from hda.persistence.db import Database, transaction
 from hda.persistence.repositories import (
     CampaignRepository,
     HardwareRepository,
@@ -74,6 +84,15 @@ class IngestOutcome:
     duplicate_of: Optional[str] = None
     missing_metadata: tuple[str, ...] = ()
     preprocessed: Optional[PreprocessedData] = None
+    metadata: Optional[TestMetadata] = None
+    metadata_hash: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteMetadataOutcome:
+    test_run_id: str
+    metadata: TestMetadata
+    metadata_hash: str
 
 
 class IngestServiceImpl:
@@ -154,14 +173,18 @@ class IngestServiceImpl:
         except Exception as e:
             raise IngestError(f"Failed to read {path}: {e}") from e
 
-        if resolved.complete:
-            preprocessed = preprocess(raw, pipeline.preprocessing, self._library)
-            new_state = TestState.PREPROCESSED
-        else:
-            preprocessed = None
-            new_state = TestState.AWAITING_METADATA
+        # Preprocessing depends only on the data + the campaign's
+        # PreprocessingConfig — never on metadata. Always run it so the
+        # detail panel can preview the time-series even when required
+        # metadata is still missing.
+        preprocessed = preprocess(raw, pipeline.preprocessing, self._library)
+        new_state = (
+            TestState.PREPROCESSED if resolved.complete else TestState.AWAITING_METADATA
+        )
 
-        metadata_obj = self._build_metadata(resolved.values) if resolved.complete else None
+        metadata_obj = (
+            self._build_metadata(resolved.values) if resolved.complete else None
+        )
         test_run_id = _new_test_run_id()
         run = TestRun(
             id=test_run_id,
@@ -190,7 +213,134 @@ class IngestServiceImpl:
             file_hash=file_hash,
             missing_metadata=tuple(resolved.missing_required),
             preprocessed=preprocessed,
+            metadata=metadata_obj,
+            metadata_hash=metadata_hash,
         )
+
+    def complete_metadata(
+        self,
+        test_run_id: str,
+        operator_metadata: Mapping[str, Any],
+    ) -> CompleteMetadataOutcome:
+        """Fill the missing required fields on an AWAITING_METADATA run.
+
+        Re-validates the merged set against the campaign's schema; raises
+        ``ConfigError`` if required fields are still missing or any
+        supplied value is invalid. On success, updates the test_runs row
+        with the new resolved values + hash, persists the hardware row
+        (now that part_number/serial_number are known), and transitions
+        the state to PREPROCESSED — ready for the analysis service.
+        """
+        conn = self._db.connect()
+        row = conn.execute(
+            "SELECT campaign_id, metadata_json, state FROM test_runs WHERE id = ?",
+            (test_run_id,),
+        ).fetchone()
+        if row is None:
+            raise ConfigError(f"TestRun {test_run_id} does not exist")
+        current_state = TestState(row["state"])
+        if current_state is not TestState.AWAITING_METADATA:
+            raise ConfigError(
+                f"TestRun {test_run_id} is in state {current_state.value}; "
+                "complete_metadata only applies to AWAITING_METADATA"
+            )
+
+        pipeline = self._pipelines.get(row["campaign_id"])
+        if pipeline is None:
+            raise ConfigError(
+                f"No ingest pipeline registered for campaign '{row['campaign_id']}'"
+            )
+
+        previously_resolved: dict[str, Any] = (
+            json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+        )
+        # Previously-resolved values keep their (sidecar / campaign-default)
+        # source priority; the new operator dict only fills gaps.
+        resolved = resolve_metadata(
+            schema=pipeline.metadata_schema,
+            sidecar=previously_resolved or None,
+            campaign_defaults=None,
+            operator=dict(operator_metadata),
+        )
+        if resolved.errors:
+            raise ConfigError(
+                "Metadata validation errors: "
+                + "; ".join(f"{e.field_name}: {e.message}" for e in resolved.errors)
+            )
+        if resolved.missing_required:
+            raise ConfigError(
+                "Required fields still missing: "
+                + ", ".join(resolved.missing_required)
+            )
+
+        metadata_obj = self._build_metadata(resolved.values)
+        hardware_id = self._hardware.get_or_create(metadata_obj.hardware)
+        metadata_hash = canonical_metadata_hash(
+            _for_hash(resolved.values, resolved.sources)
+        )
+
+        with transaction(self._db, write=True) as conn:
+            conn.execute(
+                """
+                UPDATE test_runs
+                   SET state = ?,
+                       hardware_id = ?,
+                       test_id_label = ?,
+                       operator = ?,
+                       fluid = ?,
+                       metadata_json = ?,
+                       metadata_hash = ?
+                 WHERE id = ?
+                """,
+                (
+                    TestState.PREPROCESSED.value,
+                    hardware_id,
+                    metadata_obj.test_id or None,
+                    metadata_obj.operator or None,
+                    metadata_obj.fluid or None,
+                    json.dumps(dict(resolved.values), sort_keys=True),
+                    metadata_hash,
+                    test_run_id,
+                ),
+            )
+
+        return CompleteMetadataOutcome(
+            test_run_id=test_run_id,
+            metadata=metadata_obj,
+            metadata_hash=metadata_hash,
+        )
+
+    def metadata_schema_for_run(
+        self, test_run_id: str
+    ) -> MetadataSchema:
+        """Return the metadata schema for the campaign owning ``test_run_id``."""
+        conn = self._db.connect()
+        row = conn.execute(
+            "SELECT campaign_id FROM test_runs WHERE id = ?", (test_run_id,)
+        ).fetchone()
+        if row is None:
+            raise ConfigError(f"TestRun {test_run_id} does not exist")
+        pipeline = self._pipelines.get(row["campaign_id"])
+        if pipeline is None:
+            raise ConfigError(
+                f"No ingest pipeline registered for campaign '{row['campaign_id']}'"
+            )
+        return pipeline.metadata_schema
+
+    def existing_metadata_for_run(
+        self, test_run_id: str
+    ) -> Mapping[str, Any]:
+        """Return the previously-resolved metadata values for a run."""
+        conn = self._db.connect()
+        row = conn.execute(
+            "SELECT metadata_json FROM test_runs WHERE id = ?", (test_run_id,)
+        ).fetchone()
+        if row is None or not row["metadata_json"]:
+            return {}
+        try:
+            return json.loads(row["metadata_json"])
+        except (ValueError, TypeError):
+            return {}
 
     def _load_sidecar(
         self,

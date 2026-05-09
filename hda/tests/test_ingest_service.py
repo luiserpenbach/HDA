@@ -123,6 +123,10 @@ def test_ingest_complete_metadata_lands_in_preprocessed(db: Database, tmp_path: 
 def test_ingest_missing_required_metadata_lands_in_awaiting(
     db: Database, tmp_path: Path
 ):
+    """v3 contract: preprocessing is data-only, so it always runs even
+    when metadata is incomplete. The state lands in AWAITING_METADATA
+    but the preprocessed DataFrame is available for the detail panel
+    to preview."""
     campaign = _seed_campaign(db)
     csv = tmp_path / "test.csv"
     _write_csv(csv)
@@ -133,7 +137,9 @@ def test_ingest_missing_required_metadata_lands_in_awaiting(
     assert outcome.state is TestState.AWAITING_METADATA
     assert "serial_number" in outcome.missing_metadata
     assert "operator" in outcome.missing_metadata
-    assert outcome.preprocessed is None
+    assert outcome.preprocessed is not None
+    assert outcome.preprocessed.n_samples == 100
+    assert outcome.metadata is None  # not yet assembled
 
 
 def test_ingest_persists_test_run_and_hardware(db: Database, tmp_path: Path):
