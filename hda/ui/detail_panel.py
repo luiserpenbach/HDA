@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QThreadPool, Qt, Signal
+from PySide6.QtCore import QSettings, QThreadPool, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
     QGroupBox,
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -84,17 +85,18 @@ class DetailPanel(QWidget):
         self._test_run_id: Optional[str] = None
         self._busy: bool = False
         self._pool = QThreadPool.globalInstance()
+        self._settings = QSettings("HopperPropulsion", "HDA")
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(8)
 
         self._header = QLabel("No test selected")
         self._header.setStyleSheet(
             "font-weight:600; font-size:14px; padding:6px 10px;"
             " border-radius:4px; background:#f4f4f5; color:#27272a;"
         )
-        layout.addWidget(self._header)
+        outer.addWidget(self._header)
 
         # AWAITING_METADATA banner — visible only in that state.
         self._banner = QWidget()
@@ -112,22 +114,34 @@ class DetailPanel(QWidget):
             "background:#fef3c7; color:#92400e; border:1px solid #fcd34d;"
             " border-radius:4px;"
         )
-        layout.addWidget(self._banner)
+        outer.addWidget(self._banner)
+
+        # Three sections live in a draggable vertical splitter so the
+        # operator can grow the plot when they want to inspect a long
+        # transient or grow the tables when they want to scan many
+        # measurements. Each section has a minimum height to keep it
+        # usable; the splitter remembers its geometry across launches.
+        self._splitter = QSplitter(Qt.Vertical)
+        self._splitter.setHandleWidth(6)
+        self._splitter.setChildrenCollapsible(False)
 
         self._preview: Optional[SteadyStatePreview] = None
         if PYQTGRAPH_AVAILABLE:
             self._preview_box = QGroupBox("Steady-state window")
             preview_layout = QVBoxLayout(self._preview_box)
+            preview_layout.setContentsMargins(8, 16, 8, 8)
             self._preview = SteadyStatePreview()
             self._preview.window_committed.connect(self._on_window_committed)
             preview_layout.addWidget(self._preview)
+            self._preview_box.setMinimumHeight(280)
             self._preview_box.setVisible(False)
-            layout.addWidget(self._preview_box, stretch=3)
+            self._splitter.addWidget(self._preview_box)
         else:
             self._preview_box = None  # type: ignore[assignment]
 
         self._meas_box = QGroupBox("Measurements")
         meas_layout = QVBoxLayout(self._meas_box)
+        meas_layout.setContentsMargins(8, 16, 8, 8)
         self._meas_table = QTableWidget(0, 4)
         self._meas_table.setHorizontalHeaderLabels(
             ["Name", "Value", "Uncertainty", "Unit"]
@@ -141,10 +155,12 @@ class DetailPanel(QWidget):
         self._meas_table.setAlternatingRowColors(True)
         self._meas_table.verticalHeader().setVisible(False)
         meas_layout.addWidget(self._meas_table)
-        layout.addWidget(self._meas_box, stretch=2)
+        self._meas_box.setMinimumHeight(140)
+        self._splitter.addWidget(self._meas_box)
 
         self._qc_box = QGroupBox("QC findings")
         qc_layout = QVBoxLayout(self._qc_box)
+        qc_layout.setContentsMargins(8, 16, 8, 8)
         self._qc_table = QTableWidget(0, 4)
         self._qc_table.setHorizontalHeaderLabels(
             ["Check", "Status", "Blocking", "Message"]
@@ -158,7 +174,43 @@ class DetailPanel(QWidget):
         self._qc_table.setAlternatingRowColors(True)
         self._qc_table.verticalHeader().setVisible(False)
         qc_layout.addWidget(self._qc_table)
-        layout.addWidget(self._qc_box, stretch=1)
+        self._qc_box.setMinimumHeight(120)
+        self._splitter.addWidget(self._qc_box)
+
+        # Stretch factors set the *preferred* growth per section when the
+        # window is resized. The plot grows fastest, then measurements,
+        # then QC.
+        if PYQTGRAPH_AVAILABLE:
+            self._splitter.setStretchFactor(0, 5)
+            self._splitter.setStretchFactor(1, 3)
+            self._splitter.setStretchFactor(2, 2)
+            self._splitter.setSizes([460, 240, 160])
+        else:
+            self._splitter.setStretchFactor(0, 3)
+            self._splitter.setStretchFactor(1, 2)
+            self._splitter.setSizes([320, 200])
+        self._restore_splitter_sizes()
+        self._splitter.splitterMoved.connect(self._save_splitter_sizes)
+
+        outer.addWidget(self._splitter, 1)
+
+    # ----------------------------------------------------- splitter state
+
+    def _restore_splitter_sizes(self) -> None:
+        sizes = self._settings.value("detail/splitter_sizes")
+        if sizes is None:
+            return
+        try:
+            ints = [int(s) for s in sizes]
+        except (TypeError, ValueError):
+            return
+        if len(ints) == self._splitter.count():
+            self._splitter.setSizes(ints)
+
+    def _save_splitter_sizes(self, *_args) -> None:
+        self._settings.setValue(
+            "detail/splitter_sizes", list(self._splitter.sizes())
+        )
 
     # ---------------------------------------------------------- public API
 

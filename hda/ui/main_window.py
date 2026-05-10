@@ -135,9 +135,25 @@ class MainWindow(QMainWindow):
         splitter = QSplitter()
         splitter.addWidget(table_container)
         splitter.addWidget(self._detail)
+        splitter.setHandleWidth(6)
+        splitter.setChildrenCollapsible(False)
         splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([520, 760])
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([400, 880])
+        # Restore last-used split position.
+        sizes = self._settings.value("main/splitter_sizes")
+        if sizes is not None:
+            try:
+                ints = [int(s) for s in sizes]
+                if len(ints) == 2:
+                    splitter.setSizes(ints)
+            except (TypeError, ValueError):
+                pass
+        splitter.splitterMoved.connect(
+            lambda *_: self._settings.setValue(
+                "main/splitter_sizes", list(splitter.sizes())
+            )
+        )
 
         central = QWidget()
         layout = QVBoxLayout(central)

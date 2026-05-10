@@ -78,6 +78,7 @@ if PYQTGRAPH_AVAILABLE:
             self._busy: bool = False
             self._apply_allowed: bool = True
 
+            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             layout = QVBoxLayout(self)
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(4)
@@ -109,6 +110,8 @@ if PYQTGRAPH_AVAILABLE:
             self._plot.setLabel("bottom", "time", units="s")
             self._plot.showGrid(x=True, y=True, alpha=0.2)
             self._plot.getViewBox().enableAutoRange(axis="y", enable=True)
+            self._plot.setMinimumHeight(160)
+            self._plot.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self._curve = self._plot.plot(pen=pg.mkPen("#18181b", width=1))
             self._region = pg.LinearRegionItem(
                 brush=pg.mkBrush(24, 24, 27, 35),
