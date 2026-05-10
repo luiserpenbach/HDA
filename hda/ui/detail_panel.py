@@ -24,15 +24,19 @@ from PySide6.QtCore import QThreadPool, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
     QGroupBox,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
+    QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from hda.domain.state import TestState
+from hda.domain.steady_state import detect_cv, detect_simple
 from hda.domain.types import SteadyWindow
 from hda.persistence import Database
 from hda.persistence.repositories import (
@@ -71,6 +75,7 @@ class DetailPanel(QWidget):
 
     reanalyzed = Signal(str)
     busy_changed = Signal(bool)
+    complete_metadata_requested = Signal(str)  # test_run_id
 
     def __init__(self, workspace: Workspace, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -90,6 +95,24 @@ class DetailPanel(QWidget):
             " border-radius:4px; background:#f4f4f5; color:#27272a;"
         )
         layout.addWidget(self._header)
+
+        # AWAITING_METADATA banner — visible only in that state.
+        self._banner = QWidget()
+        self._banner.setVisible(False)
+        banner_layout = QHBoxLayout(self._banner)
+        banner_layout.setContentsMargins(10, 6, 10, 6)
+        self._banner_label = QLabel()
+        self._banner_label.setWordWrap(True)
+        self._banner_btn = QPushButton("Complete metadata…")
+        self._banner_btn.setStyleSheet("font-weight:600;")
+        self._banner_btn.clicked.connect(self._emit_complete_metadata)
+        banner_layout.addWidget(self._banner_label, stretch=1)
+        banner_layout.addWidget(self._banner_btn, stretch=0)
+        self._banner.setStyleSheet(
+            "background:#fef3c7; color:#92400e; border:1px solid #fcd34d;"
+            " border-radius:4px;"
+        )
+        layout.addWidget(self._banner)
 
         self._preview: Optional[SteadyStatePreview] = None
         if PYQTGRAPH_AVAILABLE:
@@ -147,6 +170,7 @@ class DetailPanel(QWidget):
             self._qc_table.setRowCount(0)
             self._meas_box.setTitle("Measurements")
             self._qc_box.setTitle("QC findings")
+            self._banner.setVisible(False)
             if self._preview is not None:
                 self._preview.clear()
                 self._preview_box.setVisible(False)
@@ -158,7 +182,8 @@ class DetailPanel(QWidget):
             f"Test {test_run_id[:8]} — state: {state_str}", state_str
         )
 
-        self._populate_preview(test_run_id)
+        self._refresh_banner(test_run_id, run_state)
+        self._populate_preview(test_run_id, run_state)
         self._populate_measurements(test_run_id)
         self._populate_qc(test_run_id)
 
@@ -172,22 +197,81 @@ class DetailPanel(QWidget):
             f" border-radius:4px; background:{bg.name()}; color:{fg.name()};"
         )
 
-    def _populate_preview(self, test_run_id: str) -> None:
+    def _populate_preview(
+        self, test_run_id: str, run_state: Optional[TestState]
+    ) -> None:
         if self._preview is None:
             return
         cached = self._workspace.preprocessed_cache.get(test_run_id)
-        steady_row = self._lookup_steady_window(test_run_id)
-        if cached is None or steady_row is None:
+        if cached is None:
             self._preview.clear()
             self._preview_box.setVisible(False)
             return
+
+        steady_row = self._lookup_steady_window(test_run_id)
+        if steady_row is None:
+            steady_row = _auto_detect_window(cached.data.df)
+        if steady_row is None:
+            self._preview.clear()
+            self._preview_box.setVisible(False)
+            return
+
+        title = (
+            "Steady-state window (preview — apply to analyze)"
+            if run_state is TestState.AWAITING_METADATA
+            else "Steady-state window"
+        )
+        self._preview_box.setTitle(title)
         self._preview.show_data(
             df=cached.data.df,
             initial_window=steady_row,
             timestamp_column="timestamp",
         )
+        # In AWAITING_METADATA the operator can browse + drag, but
+        # Apply is meaningless until metadata is filled in.
+        if run_state is TestState.AWAITING_METADATA:
+            self._preview.set_apply_enabled(False)
+            self._preview.set_apply_tooltip(
+                "Complete metadata first — Apply will run analysis once required fields are set."
+            )
+        else:
+            self._preview.set_apply_tooltip(None)
+            self._preview.set_apply_enabled(True)
         self._preview.set_busy(self._busy)
         self._preview_box.setVisible(True)
+
+    def _refresh_banner(
+        self, test_run_id: str, run_state: Optional[TestState]
+    ) -> None:
+        if run_state is not TestState.AWAITING_METADATA:
+            self._banner.setVisible(False)
+            return
+        ingest_svc = self._workspace.ingest_service
+        missing: tuple[str, ...] = ()
+        if ingest_svc is not None:
+            try:
+                schema = ingest_svc.metadata_schema_for_run(test_run_id)
+                existing = ingest_svc.existing_metadata_for_run(test_run_id)
+                missing = tuple(schema.validate(dict(existing)).missing_required)
+            except Exception:
+                missing = ()
+        if missing:
+            self._banner_label.setText(
+                "<b>Awaiting metadata.</b> Required fields still missing: "
+                + ", ".join(missing)
+                + ". Click <b>Complete metadata</b> to fill them in and analyze."
+            )
+        else:
+            self._banner_label.setText(
+                "<b>Awaiting metadata.</b> Click <b>Complete metadata</b> "
+                "to review and submit."
+            )
+        self._banner.setVisible(True)
+
+    def _emit_complete_metadata(self) -> None:
+        if self._test_run_id is None:
+            return
+        self.complete_metadata_requested.emit(self._test_run_id)
 
     def _lookup_steady_window(self, test_run_id: str) -> Optional[SteadyWindow]:
         conn = self._db.connect()
@@ -293,3 +377,25 @@ def _numeric_item(text: str) -> QTableWidgetItem:
     item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
     item.setFont(_mono_font())
     return item
+
+
+def _auto_detect_window(df) -> Optional[SteadyWindow]:
+    """Pick a sensible initial window for the AWAITING_METADATA preview:
+    try CV-based detection on the first non-timestamp channel, fall back
+    to the centered 50% if CV finds nothing."""
+    import numpy as np
+
+    cols = [c for c in df.columns if c != "timestamp"]
+    if not cols:
+        return None
+    t = df["timestamp"].to_numpy(dtype=float)
+    if t.size < 4:
+        return None
+    sig = df[cols[0]].to_numpy(dtype=float)
+    try:
+        cv = detect_cv(sig, t)
+        if cv is not None:
+            return cv
+        return detect_simple(t, fraction=0.5)
+    except Exception:
+        return None

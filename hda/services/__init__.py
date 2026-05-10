@@ -1,5 +1,6 @@
 from hda.services.ingest import IngestRequest, IngestService, IngestSource
 from hda.services.ingest_impl import (
+    CompleteMetadataOutcome,
     IngestOutcome,
     IngestPipeline,
     IngestServiceImpl,
@@ -23,6 +24,7 @@ __all__ = [
     "IngestRequest",
     "IngestService",
     "IngestSource",
+    "CompleteMetadataOutcome",
     "IngestOutcome",
     "IngestPipeline",
     "IngestServiceImpl",
