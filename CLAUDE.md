@@ -1546,7 +1546,265 @@ All pages should call `apply_styles()` from `_shared_styles.py` for consistent l
 
 ---
 
-**Last Updated**: 2026-02-05
+## Qt Desktop Application (hda/)
+
+### Overview and Philosophy
+
+HDA ships two UIs that coexist in the same repo:
+
+| | Streamlit (`app.py`) | Qt desktop (`hda/`) |
+|---|---|---|
+| **Purpose** | Rapid exploration, remote access | Daily engineering operations |
+| **Audience** | Any browser | Engineers at the test stand |
+| **Interaction** | Web form model | Native desktop app |
+| **State** | Session-scoped | Persisted across sessions |
+| **Workers** | Synchronous (blocks UI) | QRunnable background threads |
+
+**The Qt app is NOT a desktop wrapper around the Streamlit UI.** It is a separate application designed for engineers who run HDA daily. Streamlit remains useful for remote access and sharing results via URL. The Qt app is what replaces opening a browser for operations.
+
+#### Design principles
+
+1. **Desktop-native patterns** — right-click context menus, keyboard shortcuts, drag and drop, status bar feedback, splitter-based layouts. Never web concepts (no page reloads, no "Submit" buttons, no modal spinners).
+
+2. **Efficiency over discoverability** — common tasks must be achievable without a mouse. Streamlit trades efficiency for discoverability (good for occasional users). The Qt app trades discoverability for speed (good for daily users).
+
+3. **Clean chrome, dense data** — minimal decoration. No priority labels (P0/P1/P2) visible anywhere in the UI — those are internal dev classifications only. No emoji. Information density > empty space.
+
+4. **Single consistent theme** — pure white/light-zinc throughout. No dark sidebar. The nav bar uses `#f8fafc` (barely off-white) with a subtle border. Both nav and content share the same light palette so there is no jarring contrast switch.
+
+5. **State is persistent** — window geometry, last-used test root, selected program, splitter positions — all in `QSettings`. The app opens exactly where the user left it.
+
+6. **Background everything heavy** — file system scans, analysis, report generation — all run in `QRunnable` workers on the global thread pool. The UI stays responsive.
+
+---
+
+### Architecture
+
+```
+hda/
+├── __main__.py               ← CLI entry point (python -m hda)
+├── ui/
+│   ├── style.py              ← Design tokens + stylesheet builders
+│   ├── nav_bar.py            ← Left sidebar: context + navigation
+│   ├── main_window.py        ← HDAMainWindow: nav + QStackedWidget
+│   ├── main.py               ← QApplication setup
+│   ├── pages/
+│   │   ├── base.py           ← BasePage, MetricCard, InfoBanner
+│   │   ├── test_ingestion.py ← Browse / Ingest / Edit Metadata
+│   │   └── placeholders.py   ← Stub pages for unimplemented sections
+│   └── workers.py            ← QRunnable background workers (analysis pipeline)
+└── domain/ persistence/ services/   ← Business logic (unchanged)
+```
+
+Window structure:
+```
+QMainWindow
+├── central QWidget  (content_stylesheet applied once here)
+│   ├── NavBar (224 px fixed)
+│   │   ├── App title
+│   │   ├── TEST ROOT  — folder picker + browse button
+│   │   ├── PROGRAM    — combo + new-program button
+│   │   └── NAVIGATION — nav item buttons (one per page)
+│   └── QStackedWidget (fills remaining width)
+│       ├── [0] TestIngestionPage
+│       ├── [1] SingleTestAnalysisPage  (TBD)
+│       ├── [2] BatchAnalysisPage       (TBD)
+│       ├── [3] CampaignAnalysisPage    (TBD)
+│       ├── [4] SystemAnalysisPage      (TBD)
+│       ├── [5] AnalysisToolsPage       (TBD)
+│       └── [6] ConfigurationsPage      (TBD)
+└── QStatusBar — activity message (left) + version (right)
+```
+
+---
+
+### Design System (`hda/ui/style.py`)
+
+#### Critical rules
+
+1. **Call `content_stylesheet()` exactly once** — on the `central` widget in `main_window.py`. All child widgets inherit it. Never re-apply it on sub-widgets or pages.
+2. **Call `nav_stylesheet()` exactly once** — on the `NavBar` widget. Its background is set separately via `QPalette.Window` + `setAutoFillBackground(True)` so the rect is always filled regardless of stylesheet inheritance quirks.
+3. **Never use dark colours in the nav bar.** The sidebar is light zinc (`#f8fafc`), not dark. Dark/light mixing looks catastrophic.
+
+#### Colour tokens
+
+```python
+# Sidebar
+SIDEBAR_BG = "#f8fafc"          # barely off-white
+SIDEBAR_BORDER = "#e2e8f0"      # subtle right edge
+SIDEBAR_TEXT = "#3f3f46"
+SIDEBAR_HOVER_BG = "#f1f5f9"
+SIDEBAR_ACTIVE_BG = "#eff6ff"   # blue-50 — active page
+SIDEBAR_ACTIVE_TEXT = "#1d4ed8" # blue-700
+
+# Content
+CONTENT_BG = "#ffffff"
+CONTENT_SECONDARY_BG = "#f4f4f5"
+BORDER = "#e4e4e7"
+TEXT_PRIMARY = "#09090b"
+TEXT_MUTED = "#71717a"
+ACCENT_BLUE = "#3b82f6"
+```
+
+#### Typography
+
+All fonts: `Inter, Segoe UI, system-ui, sans-serif`  
+Page title: `SZ_2XL` (22 px), weight 700  
+Section labels in nav: `SZ_XS` (10 px), weight 700, letter-spacing  
+Body text: `SZ_BASE` (13 px)  
+Muted: `SZ_SM` (11 px)
+
+#### Never put priority badges on page headers
+
+`P0`, `P1`, `P2` are internal engineering classifications. Users do not care. Never add badge labels to page titles or descriptions.
+
+---
+
+### Context Model
+
+`NavBar` owns global context: `test_root` (path string) and `program` (name string).
+
+When either changes, `HDAMainWindow` calls `page.set_context(root, program)` on the currently visible page. When navigating to a new page, the window also calls `set_context` before showing it.
+
+Pages implement `on_context_changed()` to react:
+
+```python
+class MyPage(BasePage):
+    def on_context_changed(self) -> None:
+        if not (self._test_root and self._program):
+            return
+        # react to new context
+```
+
+A program is simply a folder: `{test_root}/{program_name}/`. Creating a program just creates that folder — no database entry needed.
+
+---
+
+### Adding a New Page
+
+1. Create `hda/ui/pages/my_page.py` inheriting from `BasePage`
+2. Instantiate it and insert it into `_pages` in `HDAMainWindow.__init__` at the correct index
+3. Ensure the index matches `NAV_ITEMS` in `nav_bar.py`
+4. Never add priority badges to the page title
+5. Never call `content_stylesheet()` inside the page — it's inherited
+
+```python
+from hda.ui.pages.base import BasePage, InfoBanner
+
+class MyPage(BasePage):
+    def __init__(self, parent=None):
+        super().__init__(
+            "My Page",
+            "Brief, plain-English description of what this page does",
+            parent=parent,
+        )
+        # Add content widgets to self.content_layout
+
+    def on_context_changed(self) -> None:
+        if not (self._test_root and self._program):
+            return
+        # Load data, refresh UI
+```
+
+---
+
+### Background Workers
+
+Never block the main thread for file I/O, analysis, or any operation >50 ms. Use the `QRunnable` + signals pattern:
+
+```python
+from PySide6.QtCore import QObject, QRunnable, Signal, QThreadPool
+
+class _Signals(QObject):
+    finished = Signal(object)
+    failed   = Signal(str)
+
+class MyScanWorker(QRunnable):
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self.signals = _Signals()
+        self._path = path
+
+    def run(self) -> None:
+        try:
+            result = expensive_scan(self._path)
+            self.signals.finished.emit(result)
+        except Exception as exc:
+            self.signals.failed.emit(str(exc))
+
+# Usage inside a widget:
+worker = MyScanWorker(path)
+worker.signals.finished.connect(self._on_done)
+worker.signals.failed.connect(self._on_error)
+QThreadPool.globalInstance().start(worker)
+```
+
+---
+
+### UX Patterns: DO / DON'T
+
+| DO | DON'T |
+|----|-------|
+| Right-click context menus on lists and tables | Duplicate all context actions as toolbar buttons |
+| Keyboard shortcuts for frequent operations (`Ctrl+O`, `F5`, …) | Require mouse for expert workflows |
+| Status bar messages for background tasks | Modal progress dialogs |
+| `QInputDialog` for simple one-field creation | Separate create-object windows |
+| Dense tables with tight row height | Wide card grids with lots of whitespace |
+| Tool tips on every non-obvious control | Long explanatory labels beside every widget |
+| `QPalette` + `setAutoFillBackground(True)` for widget backgrounds | Multi-level `ObjectName` stylesheet tricks |
+| Single `content_stylesheet()` on the root central widget | Per-widget stylesheet overrides in child widgets |
+
+---
+
+### QSettings Keys
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `main/geometry` | `QByteArray` | Window size and position |
+| `ctx/test_root` | `str` | Last-used test root folder |
+| `ctx/program` | `str` | Last-selected program name |
+
+Always restore on startup (`_restore_context`), always save geometry on close (`closeEvent`).
+
+---
+
+### Test Explorer Page (`hda/ui/pages/test_ingestion.py`)
+
+The most complete page so far. Tabs:
+
+**Browse Tests** — Three-panel splitter: Systems → Campaigns → Tests  
+- `_BrowsePanel` widgets populate from the filesystem using `core.test_metadata` helpers  
+- Selecting a system populates campaigns; selecting a campaign populates tests  
+- Creating a System or Campaign creates the corresponding folder immediately  
+- Per-test actions: "Open in Analysis" (switches to page 1), "Edit Metadata" (switches to Edit tab)
+
+**Ingest New Test** — Two-column form  
+- Left: location (Program/System/Campaign read-only + Test Type combo + auto-suggested ID)  
+- Right: metadata source (Manual form or JSON upload)  
+- Bottom: optional raw CSV upload (copied to `raw_data/` subfolder on create)  
+- On create: runs `create_new_test()` which mirrors the Streamlit helper exactly
+
+**Edit Metadata** — Structured editor  
+- Path picker (or pre-filled by "Edit Metadata" button in Browse tab)  
+- Create-from-template when no `metadata.json` exists  
+- `MetadataFormWidget`: 6 collapsible `QGroupBox` sections covering all `TestMetadata` fields  
+- Validate / Save Changes / Revert to Saved
+
+All I/O goes through `core.test_metadata` and `core.metadata_manager` — the same modules the Streamlit app uses. This guarantees identical behaviour and shared test coverage.
+
+---
+
+### Planned Pages (implementation order)
+
+1. **Configurations** — `core.saved_configs.SavedConfigManager`; list / edit / create testbench JSON configs; config diff viewer
+2. **Single Test Analysis** — wraps `core.integrated_analysis.analyze_cold_flow_test()` / `analyze_hot_fire_test()`; uses `pyqtgraph` for the time-series preview with interactive steady-state window
+3. **Campaign Analysis** — wraps `core.spc`; I-MR and X-bar/R charts; Western Electric violations highlighted inline in the plot
+4. **Batch Analysis** — wraps `core.batch_analysis`; folder picker → progress table → result table; export actions
+5. **Analysis Tools** / **System Analysis** — lower priority; build after the above
+
+---
+
+**Last Updated**: 2026-05-19
 **Codebase Version**: 2.4.0
 **Maintained by**: AI assistants working with HDA
 
