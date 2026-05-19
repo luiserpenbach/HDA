@@ -61,10 +61,3 @@ class AnalysisToolsPage(_PlaceholderPage):
         )
 
 
-class ConfigurationsPage(_PlaceholderPage):
-    def __init__(self, parent=None):
-        super().__init__(
-            "Configurations",
-            "Manage testbench hardware configurations and sensor calibration data",
-            parent,
-        )
