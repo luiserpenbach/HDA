@@ -67,12 +67,10 @@ from hda.ui.style import (
     BORDER,
     CONTENT_SECONDARY_BG,
     SZ_BASE,
-    SZ_LG,
     SZ_SM,
     TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
-    badge_style,
 )
 
 
@@ -1297,9 +1295,7 @@ class TestIngestionPage(BasePage):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
             title="Test Explorer",
-            description="Browse test data structure and ingest new tests with metadata",
-            badge_text="P1",
-            badge_kind="info",
+            description="Browse test data structure, create new tests, and manage metadata",
             parent=parent,
         )
         self._selected_system: str = ""

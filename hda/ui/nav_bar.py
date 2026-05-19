@@ -1,20 +1,14 @@
-"""Left navigation bar with global test-root / program context.
+"""Left navigation bar.
 
-The NavBar is a fixed-width QWidget that lives on the left side of the
-main window. It owns:
-  - App title + subtitle
-  - Global context selectors (Test Root path + Program combo)
-  - Navigation item buttons (one per page)
-  - Version label at the bottom
+Visual design: light zinc-50 sidebar — a subtle off-white, not a dark rail.
+The background is set via QPalette (most reliable) rather than stylesheet alone.
+A thin border-right is drawn in paintEvent.
 
 Signals
 -------
-nav_changed(int)
-    Emitted when the user clicks a nav item. The int is the page index.
-test_root_changed(str)
-    Emitted when the test-root path changes (user edits or picks a folder).
-program_changed(str)
-    Emitted when the user picks a different program from the combo.
+nav_changed(int)        — user clicks a nav item (page index)
+test_root_changed(str)  — test-root path edited or browsed
+program_changed(str)    — program selected or created
 """
 from __future__ import annotations
 
@@ -22,191 +16,258 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPalette
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
     QSizePolicy,
-    QSpacerItem,
     QVBoxLayout,
     QWidget,
 )
 
-from hda.ui.style import nav_stylesheet
+from hda.ui.style import (
+    BORDER,
+    SIDEBAR_BG,
+    SIDEBAR_BORDER,
+    SZ_XS,
+    SZ_SM,
+    SZ_BASE,
+    TEXT_MUTED,
+    TEXT_PRIMARY,
+    TEXT_SECONDARY,
+    nav_stylesheet,
+)
 
 
 # ---------------------------------------------------------------------------
-# Page registry — single source of truth for id, label, and page index
+# Page registry — order matches QStackedWidget pages in main_window.py
 # ---------------------------------------------------------------------------
 
 NAV_ITEMS: list[tuple[str, str]] = [
-    ("test_ingestion",       "Test Explorer"),
-    ("single_test",          "Single Test Analysis"),
-    ("batch_analysis",       "Batch Analysis"),
-    ("campaign_analysis",    "Campaign Analysis"),
-    ("system_analysis",      "System Analysis"),
-    ("analysis_tools",       "Analysis Tools"),
-    ("configurations",       "Configurations"),
+    ("test_ingestion",    "Test Explorer"),
+    ("single_test",       "Single Test Analysis"),
+    ("batch_analysis",    "Batch Analysis"),
+    ("campaign_analysis", "Campaign Analysis"),
+    ("system_analysis",   "System Analysis"),
+    ("analysis_tools",    "Analysis Tools"),
+    ("configurations",    "Configurations"),
 ]
 
 
 def _divider() -> QFrame:
-    line = QFrame()
-    line.setFrameShape(QFrame.HLine)
-    line.setObjectName("NavDivider")
-    line.setFixedHeight(1)
-    return line
+    f = QFrame()
+    f.setObjectName("NavDivider")
+    f.setFrameShape(QFrame.HLine)
+    f.setFixedHeight(1)
+    f.setStyleSheet(f"background: {BORDER}; border: none;")
+    return f
+
+
+def _section_label(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setObjectName("NavSectionLabel")
+    lbl.setStyleSheet(
+        f"color: {TEXT_MUTED}; font-size: {SZ_XS}; font-weight: 700; "
+        f"letter-spacing: 0.08em; background: transparent;"
+    )
+    return lbl
 
 
 class NavBar(QWidget):
-    nav_changed = Signal(int)
+    nav_changed     = Signal(int)
     test_root_changed = Signal(str)
     program_changed = Signal(str)
 
-    WIDTH = 230
+    WIDTH = 224
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setObjectName("NavBar")
         self.setFixedWidth(self.WIDTH)
-        self.setStyleSheet(nav_stylesheet())
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
-        self._active_index: int = 0
+        # Reliable background via QPalette (stylesheet alone can leave gaps)
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(SIDEBAR_BG))
+        self.setPalette(palette)
+        self.setAutoFillBackground(True)
+
+        # Child styling via stylesheet (does NOT affect this widget's bg rect)
+        self.setStyleSheet(nav_stylesheet())
+
+        self._active_index = 0
         self._nav_buttons: list[QPushButton] = []
-        self._programs: list[str] = []
 
         self._build()
+
+    # ---------------------------------------------------------------- paint
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        # Draw a thin right border separating nav from content
+        p = QPainter(self)
+        p.setPen(QColor(SIDEBAR_BORDER))
+        p.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
 
     # ---------------------------------------------------------------- build
 
     def _build(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
 
-        # ── App identity ──────────────────────────────────────────────────
-        header = QWidget()
-        header.setObjectName("NavBar")
-        h_lay = QVBoxLayout(header)
-        h_lay.setContentsMargins(16, 16, 16, 12)
-        h_lay.setSpacing(2)
+        # ── App identity ────────────────────────────────────────────────────
+        lay.addWidget(self._build_header())
+        lay.addWidget(_divider())
+
+        # ── Global context ──────────────────────────────────────────────────
+        lay.addWidget(self._build_context())
+        lay.addWidget(_divider())
+
+        # ── Navigation items ────────────────────────────────────────────────
+        lay.addWidget(self._build_nav(), 1)  # stretch=1 so it fills remaining space
+
+        lay.addWidget(_divider())
+
+        # ── Footer ──────────────────────────────────────────────────────────
+        lay.addWidget(self._build_footer())
+
+    def _build_header(self) -> QWidget:
+        w = QWidget()
+        w.setAutoFillBackground(False)
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(14, 14, 14, 12)
+        lay.setSpacing(2)
 
         title = QLabel("Hopper Data Studio")
         title.setObjectName("AppTitle")
+        title.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; font-size: 15px; font-weight: 700; background: transparent;"
+        )
         subtitle = QLabel("Rocket propulsion data analysis")
         subtitle.setObjectName("AppSubtitle")
-        h_lay.addWidget(title)
-        h_lay.addWidget(subtitle)
-        outer.addWidget(header)
+        subtitle.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: {SZ_SM}; background: transparent;"
+        )
+        lay.addWidget(title)
+        lay.addWidget(subtitle)
+        return w
 
-        outer.addWidget(_divider())
+    def _build_context(self) -> QWidget:
+        w = QWidget()
+        w.setAutoFillBackground(False)
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(8)
 
-        # ── Global context ─────────────────────────────────────────────────
-        ctx = QWidget()
-        ctx.setObjectName("NavBar")
-        ctx_lay = QVBoxLayout(ctx)
-        ctx_lay.setContentsMargins(12, 10, 12, 10)
-        ctx_lay.setSpacing(6)
-
-        root_label = QLabel("TEST ROOT")
-        root_label.setObjectName("NavSectionLabel")
-        ctx_lay.addWidget(root_label)
+        # TEST ROOT
+        lay.addWidget(_section_label("TEST ROOT"))
 
         root_row = QHBoxLayout()
         root_row.setSpacing(4)
+
         self._root_input = QLineEdit()
         self._root_input.setObjectName("NavInput")
         self._root_input.setPlaceholderText("/path/to/test_data")
-        self._root_input.setToolTip("Root folder that contains test program folders")
+        self._root_input.setToolTip(
+            "Root folder containing test program sub-folders.\n"
+            "Each immediate sub-folder is treated as a Test Program."
+        )
         self._root_input.editingFinished.connect(self._on_root_edited)
         root_row.addWidget(self._root_input, 1)
 
         browse_btn = QPushButton("…")
         browse_btn.setObjectName("NavMicroBtn")
         browse_btn.setToolTip("Browse for test root folder")
-        browse_btn.clicked.connect(self._on_browse_root)
+        browse_btn.clicked.connect(self._browse_root)
         root_row.addWidget(browse_btn)
-        ctx_lay.addLayout(root_row)
+        lay.addLayout(root_row)
 
-        program_label = QLabel("PROGRAM")
-        program_label.setObjectName("NavSectionLabel")
-        ctx_lay.addWidget(program_label)
+        # PROGRAM
+        lay.addWidget(_section_label("PROGRAM"))
+
+        prog_row = QHBoxLayout()
+        prog_row.setSpacing(4)
 
         self._program_combo = QComboBox()
         self._program_combo.setObjectName("NavCombo")
-        self._program_combo.setToolTip("Select the active test program")
+        self._program_combo.setToolTip(
+            "Active test program.\n"
+            "Each program is a top-level folder under the Test Root."
+        )
         self._program_combo.currentTextChanged.connect(self._on_program_changed)
-        ctx_lay.addWidget(self._program_combo)
+        prog_row.addWidget(self._program_combo, 1)
 
-        outer.addWidget(ctx)
-        outer.addWidget(_divider())
+        new_prog_btn = QPushButton("+")
+        new_prog_btn.setObjectName("NavMicroBtn")
+        new_prog_btn.setToolTip("Create a new Test Program folder")
+        new_prog_btn.clicked.connect(self._create_program)
+        prog_row.addWidget(new_prog_btn)
+        lay.addLayout(prog_row)
 
-        # ── Navigation items ───────────────────────────────────────────────
-        nav_container = QWidget()
-        nav_container.setObjectName("NavBar")
-        nav_lay = QVBoxLayout(nav_container)
-        nav_lay.setContentsMargins(8, 8, 8, 8)
-        nav_lay.setSpacing(1)
+        return w
 
-        nav_label = QLabel("NAVIGATION")
-        nav_label.setObjectName("NavSectionLabel")
-        nav_label.setContentsMargins(4, 0, 0, 4)
-        nav_lay.addWidget(nav_label)
+    def _build_nav(self) -> QWidget:
+        w = QWidget()
+        w.setAutoFillBackground(False)
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(1)
 
-        for idx, (key, label) in enumerate(NAV_ITEMS):
+        lbl = _section_label("NAVIGATION")
+        lbl.setContentsMargins(4, 0, 0, 4)
+        lay.addWidget(lbl)
+
+        for idx, (_key, label) in enumerate(NAV_ITEMS):
             btn = QPushButton(label)
             btn.setObjectName("NavItem")
-            btn.setCheckable(False)
-            btn.setProperty("active", "false")
             btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(lambda _checked, i=idx: self._on_nav_clicked(i))
+            btn.setProperty("active", "false")
+            btn.clicked.connect(lambda _chk=False, i=idx: self._on_nav_clicked(i))
+            lay.addWidget(btn)
             self._nav_buttons.append(btn)
-            nav_lay.addWidget(btn)
 
-        outer.addWidget(nav_container)
+        # Push nav items to the top of this section, spacer fills the rest
+        lay.addStretch(1)
+        return w
 
-        # ── Spacer ─────────────────────────────────────────────────────────
-        outer.addItem(QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding))
+    def _build_footer(self) -> QWidget:
+        w = QWidget()
+        w.setAutoFillBackground(False)
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(14, 6, 14, 10)
+        ver = QLabel("v2.4.0")
+        ver.setObjectName("NavVersion")
+        ver.setStyleSheet(f"color: {TEXT_MUTED}; font-size: {SZ_XS}; background: transparent;")
+        lay.addWidget(ver)
+        return w
 
-        outer.addWidget(_divider())
-
-        # ── Footer ─────────────────────────────────────────────────────────
-        footer = QWidget()
-        footer.setObjectName("NavBar")
-        f_lay = QVBoxLayout(footer)
-        f_lay.setContentsMargins(16, 8, 16, 12)
-        version_lbl = QLabel("v2.4.0")
-        version_lbl.setObjectName("NavVersion")
-        f_lay.addWidget(version_lbl)
-        outer.addWidget(footer)
-
-        # Activate first item
-        self._set_active(0)
-
-    # ---------------------------------------------------------------- helpers
+    # ---------------------------------------------------------------- active state
 
     def _set_active(self, index: int) -> None:
         for i, btn in enumerate(self._nav_buttons):
-            btn.setProperty("active", "true" if i == index else "false")
+            is_active = i == index
+            btn.setProperty("active", "true" if is_active else "false")
+            # Force style re-evaluation
             btn.style().unpolish(btn)
             btn.style().polish(btn)
         self._active_index = index
+
+    # ---------------------------------------------------------------- slots
 
     def _on_nav_clicked(self, index: int) -> None:
         self._set_active(index)
         self.nav_changed.emit(index)
 
-    def _on_browse_root(self) -> None:
+    def _browse_root(self) -> None:
         current = self._root_input.text().strip()
-        start = current if current and Path(current).exists() else str(Path.home())
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select Test Root Folder", start
-        )
+        start = current if current and Path(current).is_dir() else str(Path.home())
+        folder = QFileDialog.getExistingDirectory(self, "Select Test Root Folder", start)
         if folder:
             self._root_input.setText(folder)
             self._emit_root_changed(folder)
@@ -215,17 +276,37 @@ class NavBar(QWidget):
         self._emit_root_changed(self._root_input.text().strip())
 
     def _emit_root_changed(self, path: str) -> None:
-        self.test_root_changed.emit(path)
         self._refresh_programs(path)
+        self.test_root_changed.emit(path)
 
     def _on_program_changed(self, text: str) -> None:
         if text:
             self.program_changed.emit(text)
 
+    def _create_program(self) -> None:
+        root = self._root_input.text().strip()
+        if not root:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "No Test Root", "Set a Test Root folder first.")
+            return
+        name, ok = QInputDialog.getText(
+            self, "New Test Program", "Program folder name (e.g. Engine-A):"
+        )
+        name = name.strip()
+        if not ok or not name:
+            return
+        try:
+            (Path(root) / name).mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Error", str(exc))
+            return
+        self._refresh_programs(root)
+        self._program_combo.setCurrentText(name)
+
     def _refresh_programs(self, root_path: str) -> None:
-        """Scan root directory and populate program combo."""
         root = Path(root_path)
-        if not root.exists():
+        if not root.is_dir():
             self._program_combo.clear()
             return
 
@@ -240,19 +321,18 @@ class NavBar(QWidget):
         if prev in programs:
             self._program_combo.setCurrentText(prev)
         self._program_combo.blockSignals(False)
-        # Emit after unblocking so the page can react
-        if self._program_combo.currentText():
-            self.program_changed.emit(self._program_combo.currentText())
+
+        current = self._program_combo.currentText()
+        if current:
+            self.program_changed.emit(current)
 
     # ---------------------------------------------------------------- public API
 
     def set_test_root(self, path: str) -> None:
-        """Pre-populate the test root (e.g. from persisted QSettings)."""
         self._root_input.setText(path)
         self._refresh_programs(path)
 
     def set_program(self, program: str) -> None:
-        """Pre-select a program (e.g. from persisted QSettings)."""
         if self._program_combo.findText(program) >= 0:
             self._program_combo.setCurrentText(program)
 
@@ -264,3 +344,8 @@ class NavBar(QWidget):
 
     def active_index(self) -> int:
         return self._active_index
+
+    # ── Activate first item on startup ─────────────────────────────────────
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._set_active(0)

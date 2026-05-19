@@ -17,31 +17,30 @@ QSettings persistence
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QLabel,
     QMainWindow,
     QStackedWidget,
     QStatusBar,
-    QLabel,
     QWidget,
 )
 
 from hda.ui.nav_bar import NavBar
-from hda.ui.pages.test_ingestion import TestIngestionPage
+from hda.ui.pages.base import BasePage
 from hda.ui.pages.placeholders import (
-    SingleTestAnalysisPage,
+    AnalysisToolsPage,
     BatchAnalysisPage,
     CampaignAnalysisPage,
-    SystemAnalysisPage,
-    AnalysisToolsPage,
     ConfigurationsPage,
+    SingleTestAnalysisPage,
+    SystemAnalysisPage,
 )
-from hda.ui.pages.base import BasePage
-from hda.ui.style import content_stylesheet, CONTENT_SECONDARY_BG, BORDER
+from hda.ui.pages.test_ingestion import TestIngestionPage
+from hda.ui.style import content_stylesheet
 
 
 class HDAMainWindow(QMainWindow):
@@ -68,9 +67,6 @@ class HDAMainWindow(QMainWindow):
 
         # ── Page stack ─────────────────────────────────────────────────────
         self._stack = QStackedWidget()
-        self._stack.setStyleSheet(
-            f"QStackedWidget {{ background: white; }}"
-        )
         root_lay.addWidget(self._stack, 1)
 
         # Build pages in the same order as NAV_ITEMS in nav_bar.py
