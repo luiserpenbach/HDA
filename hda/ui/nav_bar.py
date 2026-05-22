@@ -84,7 +84,7 @@ class NavBar(QWidget):
     test_root_changed = Signal(str)
     program_changed = Signal(str)
 
-    WIDTH = 224
+    WIDTH = 240
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)

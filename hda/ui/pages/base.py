@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtWidgets import (
+    QFrame,
     QLabel,
     QVBoxLayout,
     QWidget,
@@ -42,7 +43,7 @@ class PageHeader(QWidget):
     ) -> None:
         super().__init__(parent)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 8)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
 
         title_lbl = QLabel(title)
@@ -59,6 +60,12 @@ class PageHeader(QWidget):
             desc.setWordWrap(True)
             lay.addWidget(desc)
 
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setFixedHeight(1)
+        divider.setStyleSheet(f"background: {BORDER}; border: none; margin-top: 6px;")
+        lay.addWidget(divider)
+
 
 class MetricCard(QWidget):
     """Small numeric metric widget — label above, large value below."""
@@ -70,12 +77,14 @@ class MetricCard(QWidget):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("MetricCard")
         self.setStyleSheet(
-            f"QWidget {{ border: 1px solid {BORDER}; border-radius: 6px; background: white; }}"
+            f"#MetricCard {{ border: 1px solid {BORDER}; border-radius: 6px; "
+            f"background: {CONTENT_SECONDARY_BG}; }}"
         )
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(2)
+        lay.setSpacing(3)
 
         self._label_w = QLabel(label)
         self._label_w.setStyleSheet(
@@ -86,7 +95,7 @@ class MetricCard(QWidget):
 
         self._value_w = QLabel(value)
         self._value_w.setStyleSheet(
-            f"font-size: 22px; font-weight: 700; color: {TEXT_PRIMARY}; "
+            f"font-size: 18px; font-weight: 700; color: {TEXT_PRIMARY}; "
             f"border: none; background: transparent;"
         )
         lay.addWidget(self._value_w)
@@ -158,7 +167,7 @@ class BasePage(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 20, 24, 16)
-        outer.setSpacing(12)
+        outer.setSpacing(16)
 
         outer.addWidget(PageHeader(title, description))
 

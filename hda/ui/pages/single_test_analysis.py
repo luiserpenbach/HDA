@@ -275,7 +275,7 @@ def _form_row(label: str, widget: QWidget) -> QHBoxLayout:
     row.setSpacing(6)
     lbl = QLabel(label)
     lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {SZ_SM}; background: transparent;")
-    lbl.setFixedWidth(100)
+    lbl.setFixedWidth(140)
     row.addWidget(lbl)
     row.addWidget(widget, 1)
     return row
@@ -424,7 +424,7 @@ class SingleTestAnalysisPage(BasePage):
         right_lay.addWidget(self._results, 2)
 
         splitter.addWidget(right)
-        splitter.setSizes([290, 900])
+        splitter.setSizes([340, 900])
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
@@ -438,7 +438,7 @@ class SingleTestAnalysisPage(BasePage):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setFixedWidth(290)
+        scroll.setFixedWidth(340)
         scroll.setStyleSheet(
             f"QScrollArea {{ background: {CONTENT_BG}; border: none; border-right: 1px solid {BORDER}; }}"
         )
