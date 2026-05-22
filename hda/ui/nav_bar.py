@@ -84,12 +84,12 @@ class NavBar(QWidget):
     test_root_changed = Signal(str)
     program_changed = Signal(str)
 
-    WIDTH = 240
+    _MIN_WIDTH = 180
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setFixedWidth(self.WIDTH)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.setMinimumWidth(self._MIN_WIDTH)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
         # Reliable background via QPalette (stylesheet alone can leave gaps)
         palette = self.palette()
