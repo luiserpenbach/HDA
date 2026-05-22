@@ -92,9 +92,10 @@ def nav_stylesheet() -> str:
         background: transparent;
         color: {SIDEBAR_TEXT};
         border: none;
-        border-radius: {RADIUS_SM};
+        border-left: 2px solid transparent;
+        border-radius: 0px;
         text-align: left;
-        padding: 7px 10px;
+        padding: 7px 10px 7px 10px;
         font-size: {SZ_BASE};
         font-family: {FONT_FAMILY};
     }}
@@ -106,6 +107,7 @@ def nav_stylesheet() -> str:
         background: {SIDEBAR_ACTIVE_BG};
         color: {SIDEBAR_ACTIVE_TEXT};
         font-weight: 600;
+        border-left: 2px solid {ACCENT_BLUE};
     }}
     /* ── Context inputs ──────────────────────────────────────────────────── */
     QLineEdit#NavInput {{
