@@ -16,15 +16,6 @@ class _PlaceholderPage(BasePage):
         self.content_layout.addStretch()
 
 
-class SingleTestAnalysisPage(_PlaceholderPage):
-    def __init__(self, parent=None):
-        super().__init__(
-            "Single Test Analysis",
-            "Analyse an individual test CSV with QC, uncertainty, and traceability",
-            parent,
-        )
-
-
 class BatchAnalysisPage(_PlaceholderPage):
     def __init__(self, parent=None):
         super().__init__(
@@ -61,10 +52,3 @@ class AnalysisToolsPage(_PlaceholderPage):
         )
 
 
-class ConfigurationsPage(_PlaceholderPage):
-    def __init__(self, parent=None):
-        super().__init__(
-            "Configurations",
-            "Manage testbench hardware configurations and sensor calibration data",
-            parent,
-        )
