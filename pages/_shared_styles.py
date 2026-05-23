@@ -163,7 +163,11 @@ def apply_custom_styles():
         font-family: var(--font-family);
         transition: all 0.2s ease;
         box-shadow: var(--shadow-sm);
-        height: 2.5rem;
+        min-height: 2.5rem;
+        height: auto;
+        white-space: normal;
+        word-break: break-word;
+        line-height: 1.3;
     }}
 
     .stButton > button:hover {{
@@ -193,6 +197,11 @@ def apply_custom_styles():
         font-weight: 500;
         transition: all 0.2s ease;
         box-shadow: var(--shadow-sm);
+        min-height: 2.5rem;
+        height: auto;
+        white-space: normal;
+        word-break: break-word;
+        line-height: 1.3;
     }}
 
     .stDownloadButton > button:hover {{
@@ -510,10 +519,13 @@ def apply_custom_styles():
     section[data-testid="stSidebar"] {{
         background-color: {COLORS['zinc-50']};
         border-right: 1px solid {COLORS['border']};
+        min-width: 0 !important;
     }}
 
     section[data-testid="stSidebar"] .block-container {{
         padding-top: 2rem;
+        min-width: 0;
+        overflow-x: hidden;
     }}
 
     /* Sidebar headers */
@@ -524,6 +536,61 @@ def apply_custom_styles():
         letter-spacing: 0.05em;
         color: {COLORS['zinc-600']};
         margin-bottom: 0.75rem;
+        word-break: break-word;
+        overflow-wrap: break-word;
+    }}
+
+    /* Sidebar labels and text - allow wrapping */
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] .stMarkdown,
+    section[data-testid="stSidebar"] p {{
+        word-break: break-word;
+        overflow-wrap: break-word;
+        white-space: normal;
+    }}
+
+    /* Sidebar nav links - fully flexible */
+    [data-testid="stSidebarNavItems"] {{
+        width: 100%;
+        overflow-x: hidden;
+    }}
+
+    [data-testid="stSidebarNavLink"] {{
+        width: 100%;
+        white-space: normal !important;
+        word-break: break-word;
+        overflow-wrap: break-word;
+        height: auto !important;
+        min-height: 2rem;
+        padding: 0.375rem 0.75rem;
+        line-height: 1.4;
+        display: flex;
+        align-items: center;
+    }}
+
+    [data-testid="stSidebarNavLink"] span {{
+        white-space: normal !important;
+        word-break: break-word;
+        overflow-wrap: break-word;
+        flex: 1;
+        min-width: 0;
+    }}
+
+    /* Sidebar buttons also wrap */
+    section[data-testid="stSidebar"] .stButton > button {{
+        white-space: normal;
+        word-break: break-word;
+        height: auto;
+        min-height: 2.5rem;
+        line-height: 1.3;
+    }}
+
+    /* Sidebar selectboxes and inputs fill width */
+    section[data-testid="stSidebar"] .stSelectbox,
+    section[data-testid="stSidebar"] .stTextInput,
+    section[data-testid="stSidebar"] .stNumberInput {{
+        width: 100%;
+        min-width: 0;
     }}
 
     /* ============================================
