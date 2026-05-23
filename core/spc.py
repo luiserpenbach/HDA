@@ -892,6 +892,122 @@ def create_imr_chart(
     return analysis
 
 
+def create_xbar_r_chart(
+    df: pd.DataFrame,
+    parameter: str,
+    subgroup_size: int = 5,
+    test_id_col: str = 'test_id',
+    timestamp_col: Optional[str] = 'test_timestamp',
+    usl: Optional[float] = None,
+    lsl: Optional[float] = None,
+    target: Optional[float] = None,
+) -> Tuple['SPCAnalysis', 'SPCAnalysis']:
+    """
+    Create X-bar and R control charts from campaign data.
+
+    Groups consecutive observations into subgroups of the given size, then
+    computes subgroup means (X-bar) and ranges (R) with their control limits.
+
+    Args:
+        df: DataFrame with campaign test results
+        parameter: Column name to analyze
+        subgroup_size: Number of consecutive measurements per subgroup (2–10)
+        test_id_col: Column containing test IDs
+        timestamp_col: Column containing timestamps
+        usl: Upper specification limit (for capability)
+        lsl: Lower specification limit (for capability)
+        target: Target value (for capability)
+
+    Returns:
+        Tuple of (xbar_analysis, r_analysis) SPCAnalysis objects
+    """
+    if parameter not in df.columns:
+        raise ValueError(f"Parameter '{parameter}' not found in data")
+
+    if not 2 <= subgroup_size <= 10:
+        raise ValueError("Subgroup size must be between 2 and 10")
+
+    valid_mask = df[parameter].notna()
+    df_valid = df[valid_mask].copy().reset_index(drop=True)
+
+    n_complete = len(df_valid) // subgroup_size
+    if n_complete < 2:
+        raise ValueError(
+            f"Need at least {2 * subgroup_size} valid points for X-bar/R with "
+            f"subgroup size {subgroup_size}, found {len(df_valid)}"
+        )
+
+    df_trimmed = df_valid.iloc[:n_complete * subgroup_size]
+    values = df_trimmed[parameter].values
+    test_ids_col = (
+        df_trimmed[test_id_col].values
+        if test_id_col in df_trimmed.columns
+        else [f"T{i}" for i in range(len(values))]
+    )
+
+    subgroups = [values[i * subgroup_size:(i + 1) * subgroup_size] for i in range(n_complete)]
+    subgroup_labels = [
+        f"SG{i + 1}: " + ", ".join(str(test_ids_col[i * subgroup_size + j]) for j in range(subgroup_size))
+        for i in range(n_complete)
+    ]
+
+    xbar_limits, r_limits = calculate_xbar_r_limits(subgroups)
+
+    x_bars = np.array([np.mean(sg) for sg in subgroups])
+    ranges = np.array([np.max(sg) - np.min(sg) for sg in subgroups])
+
+    xbar_violations = check_western_electric_rules(x_bars, xbar_limits)
+    r_violations = check_western_electric_rules(ranges, r_limits)
+
+    xbar_points = [
+        ControlChartPoint(
+            index=i,
+            value=float(xb),
+            test_id=label,
+            in_control=len(viols) == 0,
+            violations=viols,
+        )
+        for i, (xb, label, viols) in enumerate(zip(x_bars, subgroup_labels, xbar_violations))
+    ]
+
+    r_points = [
+        ControlChartPoint(
+            index=i,
+            value=float(r),
+            test_id=label,
+            in_control=len(viols) == 0,
+            violations=viols,
+        )
+        for i, (r, label, viols) in enumerate(zip(ranges, subgroup_labels, r_violations))
+    ]
+
+    capability = None
+    if usl is not None or lsl is not None:
+        capability = calculate_capability(values, usl, lsl, target)
+
+    has_trend, trend_direction, trend_slope = detect_trend(x_bars)
+
+    xbar_analysis = SPCAnalysis(
+        parameter_name=f"{parameter} (X-bar, n={subgroup_size})",
+        chart_type=ControlChartType.XBAR_R,
+        limits=xbar_limits,
+        points=xbar_points,
+        capability=capability,
+        has_trend=has_trend,
+        trend_direction=trend_direction,
+        trend_slope=trend_slope,
+    )
+
+    r_analysis = SPCAnalysis(
+        parameter_name=f"{parameter} (R, n={subgroup_size})",
+        chart_type=ControlChartType.XBAR_R,
+        limits=r_limits,
+        points=r_points,
+    )
+
+    return xbar_analysis, r_analysis
+
+
 def analyze_campaign_spc(
     df: pd.DataFrame,
     parameters: List[str],

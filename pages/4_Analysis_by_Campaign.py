@@ -27,6 +27,7 @@ from core.campaign_manager_v2 import (
 )
 from core.spc import (
     create_imr_chart,
+    create_xbar_r_chart,
     create_cusum_chart,
     create_ewma_chart,
     analyze_campaign_spc,
@@ -649,8 +650,8 @@ if selected_campaign:
             numeric_cols = [c for c in df.columns if df[c].dtype in ['float64', 'int64']]
             metric_cols = [c for c in numeric_cols if c.startswith('avg_') or c in ['Cd', 'Isp']]
 
-            spc_subtab1, spc_subtab2, spc_subtab3 = st.tabs([
-                "I-MR Chart", "CUSUM Chart", "EWMA Chart"
+            spc_subtab1, spc_subtab2, spc_subtab3, spc_subtab4 = st.tabs([
+                "I-MR Chart", "X-bar/R Chart", "CUSUM Chart", "EWMA Chart"
             ])
 
             # ---- I-MR Chart ----
@@ -697,22 +698,70 @@ if selected_campaign:
                                 else:
                                     st.metric("Cpk", "N/A")
 
+                            _rule_labels = {
+                                ViolationType.BEYOND_3SIGMA: "R1: Beyond 3σ",
+                                ViolationType.ZONE_A_2OF3: "R2: 2/3 in Zone A",
+                                ViolationType.ZONE_B_4OF5: "R3: 4/5 in Zone B",
+                                ViolationType.RUN_OF_8: "R4: Run of 8",
+                                ViolationType.TREND_6: "R5: Trend of 6",
+                                ViolationType.ALTERNATING_14: "R6: 14 Alternating",
+                            }
+
                             fig = make_subplots(rows=2, cols=1, row_heights=[0.7, 0.3],
                                                 shared_xaxes=True, vertical_spacing=0.08,
                                                 subplot_titles=[f"Individual Chart: {imr_param}", "Moving Range"])
 
                             x = list(range(len(analysis.points)))
                             y = [p.value for p in analysis.points]
-                            test_ids = [p.test_id for p in analysis.points]
-                            colors = ['#ef4444' if not p.in_control else '#3b82f6' for p in analysis.points]
+                            _imr_colors = ['#ef4444' if not p.in_control else '#3b82f6' for p in analysis.points]
+                            _imr_sizes = [12 if not p.in_control else 8 for p in analysis.points]
+                            _imr_symbols = ['diamond' if not p.in_control else 'circle' for p in analysis.points]
+
+                            # Hover text with violation details
+                            _imr_hover = []
+                            for p in analysis.points:
+                                _txt = f"<b>{p.test_id}</b><br>Value: {p.value:.4f}"
+                                if p.violations:
+                                    _rules = "<br>".join(f"⚠ {_rule_labels.get(v, v.value)}" for v in p.violations)
+                                    _txt += f"<br>{_rules}"
+                                _imr_hover.append(_txt)
+
+                            # Zone shading
+                            _imr_sigma = (analysis.limits.ucl - analysis.limits.center_line) / 3
+                            for _z0, _z1, _zc in [
+                                (analysis.limits.center_line + _imr_sigma, analysis.limits.center_line + 2 * _imr_sigma, "rgba(234,179,8,0.10)"),
+                                (analysis.limits.center_line - 2 * _imr_sigma, analysis.limits.center_line - _imr_sigma, "rgba(234,179,8,0.10)"),
+                                (analysis.limits.center_line + 2 * _imr_sigma, analysis.limits.ucl, "rgba(239,68,68,0.10)"),
+                                (analysis.limits.lcl, analysis.limits.center_line - 2 * _imr_sigma, "rgba(239,68,68,0.10)"),
+                            ]:
+                                fig.add_hrect(y0=_z0, y1=_z1, fillcolor=_zc, line_width=0, row=1, col=1)
 
                             fig.add_trace(go.Scatter(
                                 x=x, y=y, mode='markers+lines',
-                                marker=dict(color=colors, size=9),
+                                marker=dict(color=_imr_colors, size=_imr_sizes, symbol=_imr_symbols),
                                 line=dict(color='#93c5fd', width=1),
-                                text=test_ids,
-                                hovertemplate='%{text}<br>Value: %{y:.4f}<extra></extra>',
+                                text=_imr_hover,
+                                hovertemplate='%{text}<extra></extra>',
                                 name='Data'), row=1, col=1)
+
+                            # Inline violation rule labels
+                            _imr_ooc_x = [p.index for p in analysis.points if not p.in_control]
+                            _imr_ooc_y = [p.value for p in analysis.points if not p.in_control]
+                            _rule_key_list = list(_rule_labels.keys())
+                            _imr_ooc_labels = [
+                                " ".join(
+                                    f"R{_rule_key_list.index(v) + 1}" if v in _rule_key_list else "?"
+                                    for v in p.violations
+                                )
+                                for p in analysis.points if not p.in_control
+                            ]
+                            if _imr_ooc_x:
+                                fig.add_trace(go.Scatter(
+                                    x=_imr_ooc_x, y=_imr_ooc_y,
+                                    mode='text', text=_imr_ooc_labels,
+                                    textposition='top center',
+                                    textfont=dict(size=9, color='#ef4444'),
+                                    showlegend=False, hoverinfo='skip'), row=1, col=1)
 
                             fig.add_hline(y=analysis.limits.center_line, line_dash="solid",
                                           line_color="#22c55e", row=1, col=1,
@@ -736,10 +785,42 @@ if selected_campaign:
                             fig.add_hline(y=mr_bar, line_dash="solid", line_color="#22c55e", row=2, col=1)
                             fig.add_hline(y=3.267 * mr_bar, line_dash="dash", line_color="#ef4444", row=2, col=1)
 
-                            fig.update_layout(height=500, showlegend=False, plot_bgcolor='white')
+                            fig.update_layout(height=520, showlegend=False, plot_bgcolor='white')
                             st.plotly_chart(fig, use_container_width=True)
 
-                            with st.expander("SPC Summary"):
+                            with st.expander("Capability & Violations"):
+                                if analysis.capability:
+                                    _cap = analysis.capability
+                                    _cap_cols = st.columns(4)
+                                    for _ci, (_lbl, _val) in enumerate([
+                                        ("Cp", _cap.cp), ("Cpk", _cap.cpk),
+                                        ("Pp", _cap.pp), ("Ppk", _cap.ppk)
+                                    ]):
+                                        with _cap_cols[_ci]:
+                                            if _val is not None:
+                                                _clr = "green" if _val >= 1.33 else ("orange" if _val >= 1.0 else "red")
+                                                st.markdown(f"**{_lbl}**: :{_clr}[{_val:.2f}]")
+                                            else:
+                                                st.metric(_lbl, "N/A")
+                                    st.caption(_cap.summary())
+                                    st.divider()
+
+                                if analysis.n_violations > 0:
+                                    st.markdown("**Out-of-Control Points**")
+                                    _vd = [
+                                        {
+                                            'Index': p.index + 1,
+                                            'Test ID': p.test_id,
+                                            'Value': f"{p.value:.4f}",
+                                            'Violations': "; ".join(_rule_labels.get(v, v.value) for v in p.violations),
+                                        }
+                                        for p in analysis.points if not p.in_control
+                                    ]
+                                    st.dataframe(pd.DataFrame(_vd), use_container_width=True, hide_index=True)
+                                else:
+                                    st.success("All points within control limits.")
+
+                                st.divider()
                                 st.markdown(format_spc_summary(analysis))
 
                         except Exception as e:

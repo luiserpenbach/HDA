@@ -144,6 +144,7 @@ from .spc import (
     calculate_capability,
     detect_trend,
     create_imr_chart,
+    create_xbar_r_chart,
     create_cusum_chart,
     create_ewma_chart,
     analyze_campaign_spc,
