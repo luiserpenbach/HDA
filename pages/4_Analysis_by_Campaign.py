@@ -826,8 +826,214 @@ if selected_campaign:
                         except Exception as e:
                             st.error(f"I-MR Analysis error: {e}")
 
-            # ---- CUSUM Chart ----
+            # ---- X-bar/R Chart ----
             with spc_subtab2:
+                col1, col2 = st.columns([1, 3])
+
+                with col1:
+                    xr_param = st.selectbox(
+                        "Parameter", metric_cols if metric_cols else numeric_cols,
+                        key="xr_param"
+                    )
+                    st.divider()
+                    st.markdown("**Subgroup Settings**")
+                    xr_n = st.number_input(
+                        "Subgroup size (n)",
+                        min_value=2, max_value=10, value=5,
+                        help="Number of consecutive tests per subgroup. Typical: 5.",
+                        key="xr_n"
+                    )
+                    if xr_param:
+                        _xr_n_valid = int(df[xr_param].notna().sum())
+                        _xr_n_sg = _xr_n_valid // int(xr_n)
+                        st.caption(f"→ {_xr_n_sg} complete subgroups from {_xr_n_valid} valid points")
+
+                    st.divider()
+                    st.markdown("**Specification Limits**")
+                    xr_use_specs = st.checkbox("Use spec limits", key="xr_use_specs")
+                    xr_lsl, xr_usl, xr_target = None, None, None
+                    if xr_use_specs and xr_param:
+                        _xr_mean = float(df[xr_param].mean())
+                        _xr_range = float(df[xr_param].max() - df[xr_param].min())
+                        xr_lsl = st.number_input("LSL", value=round(_xr_mean - _xr_range, 4), key="xr_lsl")
+                        xr_usl = st.number_input("USL", value=round(_xr_mean + _xr_range, 4), key="xr_usl")
+                        xr_target = st.number_input("Target", value=round(_xr_mean, 4), key="xr_target")
+
+                with col2:
+                    if xr_param:
+                        try:
+                            xbar_analysis, r_analysis = create_xbar_r_chart(
+                                df, parameter=xr_param,
+                                subgroup_size=int(xr_n),
+                                test_id_col='test_id' if 'test_id' in df.columns else df.columns[0],
+                                usl=xr_usl if xr_use_specs else None,
+                                lsl=xr_lsl if xr_use_specs else None,
+                                target=xr_target if xr_use_specs else None,
+                            )
+
+                            xr_mcol1, xr_mcol2, xr_mcol3, xr_mcol4 = st.columns(4)
+                            with xr_mcol1:
+                                _xr_status = "In Control" if xbar_analysis.n_violations == 0 else "Out of Control"
+                                _xr_color = "green" if xbar_analysis.n_violations == 0 else "red"
+                                st.markdown(f"### :{_xr_color}[{_xr_status}]")
+                            with xr_mcol2:
+                                st.metric("Subgroups", xbar_analysis.n_points)
+                            with xr_mcol3:
+                                st.metric("Violations", xbar_analysis.n_violations)
+                            with xr_mcol4:
+                                if xbar_analysis.capability and xbar_analysis.capability.cpk is not None:
+                                    st.metric("Cpk", f"{xbar_analysis.capability.cpk:.2f}")
+                                else:
+                                    st.metric("Cpk", "N/A")
+
+                            _xr_rule_labels = {
+                                ViolationType.BEYOND_3SIGMA: "R1: Beyond 3σ",
+                                ViolationType.ZONE_A_2OF3: "R2: 2/3 in Zone A",
+                                ViolationType.ZONE_B_4OF5: "R3: 4/5 in Zone B",
+                                ViolationType.RUN_OF_8: "R4: Run of 8",
+                                ViolationType.TREND_6: "R5: Trend of 6",
+                                ViolationType.ALTERNATING_14: "R6: 14 Alternating",
+                            }
+                            _xr_rule_keys = list(_xr_rule_labels.keys())
+
+                            fig_xr = make_subplots(
+                                rows=2, cols=1, row_heights=[0.6, 0.4],
+                                shared_xaxes=True, vertical_spacing=0.08,
+                                subplot_titles=[
+                                    f"X-bar Chart: {xr_param} (n={xr_n})",
+                                    "R Chart (Range)"
+                                ]
+                            )
+
+                            # X-bar data
+                            _xb_x = list(range(xbar_analysis.n_points))
+                            _xb_y = [p.value for p in xbar_analysis.points]
+                            _xb_colors = ['#ef4444' if not p.in_control else '#3b82f6' for p in xbar_analysis.points]
+                            _xb_sizes = [12 if not p.in_control else 8 for p in xbar_analysis.points]
+                            _xb_symbols = ['diamond' if not p.in_control else 'circle' for p in xbar_analysis.points]
+
+                            _xb_hover = []
+                            for p in xbar_analysis.points:
+                                _t = f"<b>{p.test_id}</b><br>X-bar: {p.value:.4f}"
+                                if p.violations:
+                                    _t += "<br>" + "<br>".join(f"⚠ {_xr_rule_labels.get(v, v.value)}" for v in p.violations)
+                                _xb_hover.append(_t)
+
+                            # Zone shading for X-bar
+                            _xb_sigma = (xbar_analysis.limits.ucl - xbar_analysis.limits.center_line) / 3
+                            for _z0, _z1, _zc in [
+                                (xbar_analysis.limits.center_line + _xb_sigma, xbar_analysis.limits.center_line + 2 * _xb_sigma, "rgba(234,179,8,0.10)"),
+                                (xbar_analysis.limits.center_line - 2 * _xb_sigma, xbar_analysis.limits.center_line - _xb_sigma, "rgba(234,179,8,0.10)"),
+                                (xbar_analysis.limits.center_line + 2 * _xb_sigma, xbar_analysis.limits.ucl, "rgba(239,68,68,0.10)"),
+                                (xbar_analysis.limits.lcl, xbar_analysis.limits.center_line - 2 * _xb_sigma, "rgba(239,68,68,0.10)"),
+                            ]:
+                                fig_xr.add_hrect(y0=_z0, y1=_z1, fillcolor=_zc, line_width=0, row=1, col=1)
+
+                            fig_xr.add_trace(go.Scatter(
+                                x=_xb_x, y=_xb_y, mode='markers+lines',
+                                marker=dict(color=_xb_colors, size=_xb_sizes, symbol=_xb_symbols),
+                                line=dict(color='#93c5fd', width=1),
+                                text=_xb_hover,
+                                hovertemplate='%{text}<extra></extra>',
+                                name='X-bar'), row=1, col=1)
+
+                            # Inline violation labels for X-bar
+                            _xb_ooc_x = [p.index for p in xbar_analysis.points if not p.in_control]
+                            _xb_ooc_y = [p.value for p in xbar_analysis.points if not p.in_control]
+                            _xb_ooc_labels = [
+                                " ".join(
+                                    f"R{_xr_rule_keys.index(v) + 1}" if v in _xr_rule_keys else "?"
+                                    for v in p.violations
+                                )
+                                for p in xbar_analysis.points if not p.in_control
+                            ]
+                            if _xb_ooc_x:
+                                fig_xr.add_trace(go.Scatter(
+                                    x=_xb_ooc_x, y=_xb_ooc_y,
+                                    mode='text', text=_xb_ooc_labels,
+                                    textposition='top center',
+                                    textfont=dict(size=9, color='#ef4444'),
+                                    showlegend=False, hoverinfo='skip'), row=1, col=1)
+
+                            fig_xr.add_hline(y=xbar_analysis.limits.center_line, line_dash="solid",
+                                             line_color="#22c55e", row=1, col=1,
+                                             annotation_text=f"CL: {xbar_analysis.limits.center_line:.4f}")
+                            fig_xr.add_hline(y=xbar_analysis.limits.ucl, line_dash="dash",
+                                             line_color="#ef4444", row=1, col=1,
+                                             annotation_text=f"UCL: {xbar_analysis.limits.ucl:.4f}")
+                            fig_xr.add_hline(y=xbar_analysis.limits.lcl, line_dash="dash",
+                                             line_color="#ef4444", row=1, col=1,
+                                             annotation_text=f"LCL: {xbar_analysis.limits.lcl:.4f}")
+
+                            # R chart data
+                            _r_x = list(range(r_analysis.n_points))
+                            _r_y = [p.value for p in r_analysis.points]
+                            _r_colors = ['#ef4444' if not p.in_control else '#f97316' for p in r_analysis.points]
+                            _r_sizes = [12 if not p.in_control else 6 for p in r_analysis.points]
+
+                            _r_hover = []
+                            for p in r_analysis.points:
+                                _t = f"<b>{p.test_id}</b><br>Range: {p.value:.4f}"
+                                if p.violations:
+                                    _t += "<br>⚠ Beyond UCL"
+                                _r_hover.append(_t)
+
+                            fig_xr.add_trace(go.Scatter(
+                                x=_r_x, y=_r_y, mode='markers+lines',
+                                marker=dict(color=_r_colors, size=_r_sizes),
+                                line=dict(color='#fed7aa', width=1),
+                                text=_r_hover,
+                                hovertemplate='%{text}<extra></extra>',
+                                name='Range'), row=2, col=1)
+
+                            fig_xr.add_hline(y=r_analysis.limits.center_line, line_dash="solid",
+                                             line_color="#22c55e", row=2, col=1,
+                                             annotation_text=f"R̄: {r_analysis.limits.center_line:.4f}")
+                            fig_xr.add_hline(y=r_analysis.limits.ucl, line_dash="dash",
+                                             line_color="#ef4444", row=2, col=1,
+                                             annotation_text=f"UCL: {r_analysis.limits.ucl:.4f}")
+
+                            fig_xr.update_layout(height=560, showlegend=False, plot_bgcolor='white')
+                            st.plotly_chart(fig_xr, use_container_width=True)
+
+                            if xbar_analysis.capability:
+                                _xcap = xbar_analysis.capability
+                                with st.expander("Capability Indices"):
+                                    _xcap_cols = st.columns(4)
+                                    for _xci, (_xlbl, _xval) in enumerate([
+                                        ("Cp", _xcap.cp), ("Cpk", _xcap.cpk),
+                                        ("Pp", _xcap.pp), ("Ppk", _xcap.ppk)
+                                    ]):
+                                        with _xcap_cols[_xci]:
+                                            if _xval is not None:
+                                                _xclr = "green" if _xval >= 1.33 else ("orange" if _xval >= 1.0 else "red")
+                                                st.markdown(f"**{_xlbl}**: :{_xclr}[{_xval:.2f}]")
+                                            else:
+                                                st.metric(_xlbl, "N/A")
+                                    st.caption(_xcap.summary())
+
+                            with st.expander("Violations Detail"):
+                                if xbar_analysis.n_violations > 0:
+                                    _xvd = [
+                                        {
+                                            'Subgroup': p.index + 1,
+                                            'Tests': p.test_id[:60],
+                                            'X-bar': f"{p.value:.4f}",
+                                            'Rules': "; ".join(_xr_rule_labels.get(v, v.value) for v in p.violations),
+                                        }
+                                        for p in xbar_analysis.points if not p.in_control
+                                    ]
+                                    st.dataframe(pd.DataFrame(_xvd), use_container_width=True, hide_index=True)
+                                else:
+                                    st.success("No violations — X-bar chart in statistical control.")
+
+                        except ValueError as _ve:
+                            st.warning(str(_ve))
+                        except Exception as _e:
+                            st.error(f"X-bar/R Analysis error: {_e}")
+
+            # ---- CUSUM Chart ----
+            with spc_subtab3:
                 col1, col2 = st.columns([1, 3])
 
                 with col1:
@@ -930,7 +1136,7 @@ if selected_campaign:
                             st.error(f"CUSUM Analysis error: {e}")
 
             # ---- EWMA Chart ----
-            with spc_subtab3:
+            with spc_subtab4:
                 col1, col2 = st.columns([1, 3])
 
                 with col1:
