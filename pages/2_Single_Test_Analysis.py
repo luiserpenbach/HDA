@@ -185,7 +185,7 @@ def resample_data(df: pd.DataFrame, target_rate_hz: float,
     return df_resampled, stats
 
 
-def handle_nan_values(df: pd.DataFrame, method: str = 'interpolate',
+def handle_nan_values(df: pd.DataFrame, method: str = 'interpolate+ffill',
                       max_gap: int = 5) -> Tuple[pd.DataFrame, dict]:
     """Handle NaN values with interpolation, drop, or forward-fill."""
     stats = {
@@ -202,15 +202,13 @@ def handle_nan_values(df: pd.DataFrame, method: str = 'interpolate',
 
     stats['rows_affected'] = int(df_clean.isna().any(axis=1).sum())
 
-    if method == 'interpolate':
+    if method in ('interpolate', 'interpolate+ffill'):
         for col in df_clean.select_dtypes(include=[np.number]).columns:
             mask = df_clean[col].isna()
             if mask.any():
-                groups = (mask != mask.shift()).cumsum()
-                gap_sizes = mask.groupby(groups).transform('sum')
-                small_gaps = mask & (gap_sizes <= max_gap)
-                if small_gaps.any():
-                    df_clean[col] = df_clean[col].interpolate(method='linear', limit=max_gap)
+                df_clean[col] = df_clean[col].interpolate(method='linear', limit=max_gap)
+        if method == 'interpolate+ffill':
+            df_clean = df_clean.ffill().bfill()
     elif method == 'drop':
         df_clean = df_clean.dropna()
     elif method == 'ffill':
@@ -557,7 +555,7 @@ with tab_setup:
                 shift_to_zero = st.checkbox("Shift to t=0", value=True, key="setup_shift_zero")
 
                 nan_method = st.selectbox(
-                    "NaN handling", ["interpolate", "drop", "ffill", "none"],
+                    "Gap filling", ["interpolate+ffill", "interpolate", "ffill", "drop", "none"],
                     key="setup_nan_method",
                 )
 
