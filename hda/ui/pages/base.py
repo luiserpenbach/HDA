@@ -112,10 +112,10 @@ class InfoBanner(QLabel):
     """Single-line info / success / warning / error banner."""
 
     _KINDS = {
-        "info":    ("#dbeafe", "#1d4ed8", "#eff6ff"),
-        "success": ("#dcfce7", "#15803d", "#f0fdf4"),
-        "warning": ("#fef3c7", "#92400e", "#fffbeb"),
-        "error":   ("#fee2e2", "#991b1b", "#fef2f2"),
+        "info":    (ACCENT_BLUE,  TEXT_PRIMARY, CONTENT_SECONDARY_BG),
+        "success": (ACCENT_GREEN, TEXT_PRIMARY, CONTENT_SECONDARY_BG),
+        "warning": (ACCENT_AMBER, TEXT_PRIMARY, CONTENT_SECONDARY_BG),
+        "error":   (ACCENT_RED,   TEXT_PRIMARY, CONTENT_SECONDARY_BG),
     }
 
     def __init__(
@@ -130,10 +130,11 @@ class InfoBanner(QLabel):
         self.setVisible(bool(text))
 
     def _apply(self, kind: str) -> None:
-        border, fg, bg = self._KINDS.get(kind, self._KINDS["info"])
+        accent, fg, bg = self._KINDS.get(kind, self._KINDS["info"])
         self.setStyleSheet(
-            f"background: {bg}; color: {fg}; border: 1px solid {border}; "
-            f"border-radius: {RADIUS_SM}; padding: 7px 12px; font-size: {SZ_SM};"
+            f"background: {bg}; color: {fg}; border: 1px solid {accent}; "
+            f"border-left: 3px solid {accent}; border-radius: {RADIUS_SM}; "
+            f"padding: 7px 12px; font-size: {SZ_SM};"
         )
 
     def show_message(self, text: str, kind: str = "info") -> None:

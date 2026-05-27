@@ -9,7 +9,9 @@ import numpy as np
 
 try:
     import pyqtgraph as pg
-    pg.setConfigOptions(antialias=True, background="w", foreground="k")
+    from hda.ui.style import PLOT_BG, PLOT_FG, configure_pyqtgraph
+
+    configure_pyqtgraph()
     _PG_OK = True
 except Exception:
     _PG_OK = False
@@ -71,6 +73,8 @@ from hda.ui.style import (
     ACCENT_RED,
     BORDER,
     CONTENT_SECONDARY_BG,
+    PLOT_BG,
+    PLOT_FG,
     SZ_SM,
     SZ_XS,
     TEXT_MUTED,
@@ -245,7 +249,12 @@ class _SPCChartWidget(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         if _PG_OK:
             self._plot = pg.PlotWidget()
-            self._plot.showGrid(x=True, y=True, alpha=0.25)
+            self._plot.setBackground(PLOT_BG)
+            self._plot.showGrid(x=True, y=True, alpha=0.35)
+            self._plot.getAxis("bottom").setPen(PLOT_FG)
+            self._plot.getAxis("left").setPen(PLOT_FG)
+            self._plot.getAxis("bottom").setTextPen(PLOT_FG)
+            self._plot.getAxis("left").setTextPen(PLOT_FG)
             self._plot.setLabel("bottom", "Test index")
             lay.addWidget(self._plot, 1)
         else:

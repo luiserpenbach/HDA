@@ -2,8 +2,8 @@
 
 Layout
 ------
-QHBoxLayout
-├── NavBar (fixed 230 px)           — left navigation + global context
+QSplitter (horizontal)
+├── NavBar wrapper (resizable, 180–400 px)
 └── QStackedWidget                  — one widget per navigation page
 
 The NavBar owns Test Root and Program state; it pushes context updates to
@@ -12,6 +12,7 @@ whatever page is currently visible (and the next page on switch).
 QSettings persistence
 ---------------------
 - main/geometry        — window size + position
+- main/nav_splitter    — nav bar vs content split
 - ctx/test_root        — last-used test root path
 - ctx/program          — last-used program name
 """
@@ -19,13 +20,15 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QSplitter,
     QStackedWidget,
     QStatusBar,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -47,6 +50,10 @@ try:
 except ImportError:
     CORE_VERSION = "2.5.0"
 
+NAV_MIN_WIDTH = 200
+NAV_MAX_WIDTH = 400
+NAV_DEFAULT_WIDTH = 260
+
 
 class HDAMainWindow(QMainWindow):
     """Navigation-based main window for the HDA Qt desktop application."""
@@ -57,22 +64,38 @@ class HDAMainWindow(QMainWindow):
         self.setWindowTitle("Hopper Data Studio")
         self.resize(1400, 860)
         self.setMinimumSize(900, 600)
+        self.setStyleSheet(content_stylesheet())
 
         # ── Central widget ─────────────────────────────────────────────────
         central = QWidget()
-        central.setStyleSheet(content_stylesheet())
         root_lay = QHBoxLayout(central)
         root_lay.setContentsMargins(0, 0, 0, 0)
         root_lay.setSpacing(0)
         self.setCentralWidget(central)
 
-        # ── Nav bar ────────────────────────────────────────────────────────
+        self._root_splitter = QSplitter(Qt.Horizontal)
+        self._root_splitter.setHandleWidth(4)
+        self._root_splitter.setChildrenCollapsible(False)
+        root_lay.addWidget(self._root_splitter)
+
+        nav_wrap = QWidget()
+        nav_wrap.setMinimumWidth(NAV_MIN_WIDTH)
+        nav_wrap.setMaximumWidth(NAV_MAX_WIDTH)
+        nav_lay = QVBoxLayout(nav_wrap)
+        nav_lay.setContentsMargins(0, 0, 0, 0)
+        nav_lay.setSpacing(0)
         self._nav = NavBar()
-        root_lay.addWidget(self._nav)
+        nav_lay.addWidget(self._nav)
+        self._root_splitter.addWidget(nav_wrap)
 
         # ── Page stack ─────────────────────────────────────────────────────
         self._stack = QStackedWidget()
-        root_lay.addWidget(self._stack, 1)
+        self._root_splitter.addWidget(self._stack)
+
+        self._root_splitter.setStretchFactor(0, 0)
+        self._root_splitter.setStretchFactor(1, 1)
+        self._root_splitter.splitterMoved.connect(self._save_nav_splitter)
+        self._nav_splitter_initialized = False
 
         # Build pages in the same order as NAV_ITEMS in nav_bar.py
         self._pages: list[BasePage] = [
@@ -174,6 +197,26 @@ class HDAMainWindow(QMainWindow):
         # Push to initial page
         self._push_context_to_active_page()
 
+    def _save_nav_splitter(self, *_pos: int) -> None:
+        self._settings.setValue("main/nav_splitter", self._root_splitter.saveState())
+
+    def _restore_nav_splitter(self) -> None:
+        state = self._settings.value("main/nav_splitter")
+        if state is not None:
+            try:
+                self._root_splitter.restoreState(state)
+                return
+            except Exception:
+                pass
+        self._root_splitter.setSizes([NAV_DEFAULT_WIDTH, 1140])
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        if not self._nav_splitter_initialized:
+            self._restore_nav_splitter()
+            self._nav_splitter_initialized = True
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._settings.setValue("main/geometry", self.saveGeometry())
+        self._save_nav_splitter()
         super().closeEvent(event)

@@ -1,60 +1,122 @@
 """Design tokens and Qt stylesheet strings for the HDA desktop UI.
 
-Single theme: clean white/light-zinc throughout.
-No dark sidebar — both the nav bar and content area share the same
-light palette so there is no jarring contrast switch.
+Theme: VS Code Dark+ inspired — flat, neutral, no gradients.
 
 RULES:
   - Call content_stylesheet() ONCE on the central widget in main_window.py.
-    Children inherit automatically; never re-apply it on sub-widgets.
-  - The NavBar uses nav_stylesheet() on itself PLUS sets its background via
-    QPalette (more reliable than stylesheet for the root background rect).
-  - Never use dark colours in the nav bar.
+  - NavBar uses nav_stylesheet() + QPalette for its background rect.
+  - Call apply_app_font() once in main.py.
+  - Call configure_pyqtgraph() before creating plot widgets.
 """
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Colour tokens
+# Colour tokens (VS Code Dark+)
 # ---------------------------------------------------------------------------
 
-# Sidebar / nav bar
-SIDEBAR_BG = "#f8fafc"          # slate-50 — barely off-white
-SIDEBAR_BORDER = "#e2e8f0"      # subtle right border
-SIDEBAR_TEXT = "#3f3f46"        # zinc-700 — readable but not harsh
-SIDEBAR_TEXT_MUTED = "#71717a"  # zinc-500
-SIDEBAR_HOVER_BG = "#f1f5f9"    # slate-100
-SIDEBAR_ACTIVE_BG = "#eff6ff"   # blue-50
-SIDEBAR_ACTIVE_TEXT = "#1d4ed8" # blue-700
+# Sidebar / activity bar
+SIDEBAR_BG = "#252526"
+SIDEBAR_BORDER = "#3c3c3c"
+SIDEBAR_TEXT = "#cccccc"
+SIDEBAR_TEXT_MUTED = "#858585"
+SIDEBAR_HOVER_BG = "#2a2d2e"
+SIDEBAR_ACTIVE_BG = "#37373d"
+SIDEBAR_ACTIVE_TEXT = "#ffffff"
 
-# Content area
-CONTENT_BG = "#ffffff"
-CONTENT_SECONDARY_BG = "#f4f4f5"  # zinc-100
-BORDER = "#e4e4e7"                # zinc-200
-BORDER_DARK = "#d4d4d8"           # zinc-300
+# Editor / content
+CONTENT_BG = "#1e1e1e"
+CONTENT_SECONDARY_BG = "#252526"
+INPUT_BG = "#3c3c3c"
+BORDER = "#3c3c3c"
+BORDER_SUBTLE = "#2b2b2b"
 
-TEXT_PRIMARY = "#09090b"          # zinc-950
-TEXT_SECONDARY = "#3f3f46"        # zinc-700
-TEXT_MUTED = "#71717a"            # zinc-500
+TEXT_PRIMARY = "#cccccc"
+TEXT_SECONDARY = "#969696"
+TEXT_MUTED = "#858585"
 
-ACCENT_BLUE = "#3b82f6"
-ACCENT_GREEN = "#16a34a"
-ACCENT_AMBER = "#d97706"
-ACCENT_RED = "#dc2626"
+ACCENT_BLUE = "#007acc"
+ACCENT_GREEN = "#4ec9b0"
+ACCENT_AMBER = "#cca700"
+ACCENT_RED = "#f44747"
+
+SELECTION_BG = "#264f78"
+BUTTON_PRIMARY = "#0e639c"
+BUTTON_PRIMARY_HOVER = "#1177bb"
+BUTTON_PRIMARY_PRESSED = "#094771"
+
+# Charts (pyqtgraph)
+PLOT_BG = "#1e1e1e"
+PLOT_FG = "#cccccc"
+PLOT_GRID = "#3c3c3c"
 
 # ---------------------------------------------------------------------------
-# Typography
+# Typography — prefer smooth system UI fonts (Segoe UI Variable on Win11)
 # ---------------------------------------------------------------------------
 
-FONT_FAMILY = "Inter, Segoe UI, system-ui, sans-serif"
-SZ_XS   = "10px"
-SZ_SM   = "11px"
+APP_FONT_FAMILY = "Segoe UI"
+APP_FONT_SIZE = 13
+FONT_FAMILY = "'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif"
+FONT_MONO = "'Cascadia Mono', 'Cascadia Code', Consolas, 'Courier New', monospace"
+
+SZ_XS = "11px"
+SZ_SM = "12px"
 SZ_BASE = "13px"
-SZ_LG   = "15px"
-SZ_XL   = "18px"
-SZ_2XL  = "22px"
+SZ_LG = "15px"
+SZ_XL = "18px"
+SZ_2XL = "20px"
 
-RADIUS    = "6px"
-RADIUS_SM = "4px"
+RADIUS = "4px"
+RADIUS_SM = "3px"
+
+_FONT_CANDIDATES = (
+    "Segoe UI Variable Display",
+    "Segoe UI Variable Text",
+    "Segoe UI Variable",
+    "Inter",
+    "Segoe UI",
+    "Roboto",
+)
+
+
+def resolve_app_font_family() -> str:
+    """Pick the best available sans-serif UI font on this system."""
+    from PySide6.QtGui import QFontDatabase
+
+    families = set(QFontDatabase.families())
+    for name in _FONT_CANDIDATES:
+        if name in families:
+            return name
+    return APP_FONT_FAMILY
+
+
+def apply_app_font(app) -> None:
+    """Set the global application font and refresh stylesheet font tokens."""
+    global APP_FONT_FAMILY, FONT_FAMILY
+
+    from PySide6.QtGui import QFont
+
+    APP_FONT_FAMILY = resolve_app_font_family()
+    FONT_FAMILY = (
+        f"'{APP_FONT_FAMILY}', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif"
+    )
+
+    font = QFont(APP_FONT_FAMILY, APP_FONT_SIZE)
+    font.setStyleHint(QFont.StyleHint.SansSerif)
+    font.setHintingPreference(QFont.HintingPreference.PreferDefaultHinting)
+    font.setStyleStrategy(
+        QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality
+    )
+    app.setFont(font)
+
+
+def configure_pyqtgraph() -> None:
+    """Apply dark plot defaults. Safe to call if pyqtgraph is missing."""
+    try:
+        import pyqtgraph as pg
+
+        pg.setConfigOptions(antialias=True, background=PLOT_BG, foreground=PLOT_FG)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -62,10 +124,7 @@ RADIUS_SM = "4px"
 # ---------------------------------------------------------------------------
 
 def nav_stylesheet() -> str:
-    """Applied once to the NavBar widget. Background rect is handled via
-    QPalette in nav_bar.py — this covers only child widget styling."""
     return f"""
-    /* ── Labels ─────────────────────────────────────────────────────────── */
     QLabel {{
         background: transparent;
         color: {SIDEBAR_TEXT};
@@ -73,9 +132,9 @@ def nav_stylesheet() -> str:
         font-size: {SZ_BASE};
     }}
     QLabel#AppTitle {{
-        color: {TEXT_PRIMARY};
+        color: {SIDEBAR_ACTIVE_TEXT};
         font-size: {SZ_LG};
-        font-weight: 700;
+        font-weight: 600;
     }}
     QLabel#AppSubtitle {{
         color: {SIDEBAR_TEXT_MUTED};
@@ -84,10 +143,9 @@ def nav_stylesheet() -> str:
     QLabel#NavSectionLabel {{
         color: {SIDEBAR_TEXT_MUTED};
         font-size: {SZ_XS};
-        font-weight: 700;
-        letter-spacing: 0.08em;
+        font-weight: 600;
+        letter-spacing: 0.06em;
     }}
-    /* ── Nav item buttons ────────────────────────────────────────────────── */
     QPushButton#NavItem {{
         background: transparent;
         color: {SIDEBAR_TEXT};
@@ -95,13 +153,13 @@ def nav_stylesheet() -> str:
         border-left: 2px solid transparent;
         border-radius: 0px;
         text-align: left;
-        padding: 7px 10px 7px 10px;
+        padding: 6px 10px;
         font-size: {SZ_BASE};
         font-family: {FONT_FAMILY};
     }}
     QPushButton#NavItem:hover {{
         background: {SIDEBAR_HOVER_BG};
-        color: {TEXT_PRIMARY};
+        color: {SIDEBAR_ACTIVE_TEXT};
     }}
     QPushButton#NavItem[active="true"] {{
         background: {SIDEBAR_ACTIVE_BG};
@@ -109,22 +167,21 @@ def nav_stylesheet() -> str:
         font-weight: 600;
         border-left: 2px solid {ACCENT_BLUE};
     }}
-    /* ── Context inputs ──────────────────────────────────────────────────── */
     QLineEdit#NavInput {{
-        background: {CONTENT_BG};
+        background: {INPUT_BG};
         color: {TEXT_PRIMARY};
         border: 1px solid {BORDER};
         border-radius: {RADIUS_SM};
         padding: 4px 7px;
         font-size: {SZ_SM};
         font-family: {FONT_FAMILY};
-        selection-background-color: {ACCENT_BLUE};
+        selection-background-color: {SELECTION_BG};
     }}
     QLineEdit#NavInput:focus {{
         border-color: {ACCENT_BLUE};
     }}
     QPushButton#NavMicroBtn {{
-        background: {CONTENT_SECONDARY_BG};
+        background: {INPUT_BG};
         color: {TEXT_SECONDARY};
         border: 1px solid {BORDER};
         border-radius: {RADIUS_SM};
@@ -135,11 +192,12 @@ def nav_stylesheet() -> str:
         max-width: 26px;
     }}
     QPushButton#NavMicroBtn:hover {{
-        background: {BORDER};
+        background: {SIDEBAR_HOVER_BG};
         color: {TEXT_PRIMARY};
+        border-color: {ACCENT_BLUE};
     }}
     QComboBox#NavCombo {{
-        background: {CONTENT_BG};
+        background: {INPUT_BG};
         color: {TEXT_PRIMARY};
         border: 1px solid {BORDER};
         border-radius: {RADIUS_SM};
@@ -155,10 +213,10 @@ def nav_stylesheet() -> str:
         width: 16px;
     }}
     QComboBox#NavCombo QAbstractItemView {{
-        background: {CONTENT_BG};
+        background: {CONTENT_SECONDARY_BG};
         color: {TEXT_PRIMARY};
         border: 1px solid {BORDER};
-        selection-background-color: {CONTENT_SECONDARY_BG};
+        selection-background-color: {SELECTION_BG};
         selection-color: {TEXT_PRIMARY};
         padding: 2px;
         font-family: {FONT_FAMILY};
@@ -169,14 +227,12 @@ def nav_stylesheet() -> str:
         font-size: {SZ_XS};
     }}
     QFrame#NavDivider {{
-        background: {BORDER};
+        background: {BORDER_SUBTLE};
     }}
     """
 
 
 def content_stylesheet() -> str:
-    """Applied once to HDAMainWindow's central widget. All content pages
-    inherit this — do NOT re-apply on individual sub-widgets."""
     return f"""
     QWidget {{
         font-family: {FONT_FAMILY};
@@ -184,7 +240,6 @@ def content_stylesheet() -> str:
         color: {TEXT_PRIMARY};
         background: {CONTENT_BG};
     }}
-    /* ── Tabs ─────────────────────────────────────────────────────────── */
     QTabWidget::pane {{
         border: 1px solid {BORDER};
         border-top: none;
@@ -195,64 +250,62 @@ def content_stylesheet() -> str:
         color: {TEXT_MUTED};
         border: 1px solid {BORDER};
         border-bottom: none;
-        padding: 7px 18px;
+        padding: 6px 16px;
         border-top-left-radius: {RADIUS_SM};
         border-top-right-radius: {RADIUS_SM};
-        margin-right: 2px;
+        margin-right: 1px;
         font-size: {SZ_BASE};
     }}
     QTabBar::tab:selected {{
         background: {CONTENT_BG};
         color: {TEXT_PRIMARY};
-        font-weight: 600;
         border-bottom: 2px solid {ACCENT_BLUE};
     }}
     QTabBar::tab:hover:!selected {{
         color: {TEXT_PRIMARY};
-        background: {BORDER};
+        background: {SIDEBAR_HOVER_BG};
     }}
-    /* ── Buttons ──────────────────────────────────────────────────────── */
     QPushButton {{
-        background: {TEXT_PRIMARY};
-        color: white;
+        background: {BUTTON_PRIMARY};
+        color: #ffffff;
         border: none;
         border-radius: {RADIUS_SM};
-        padding: 7px 16px;
+        padding: 6px 14px;
         font-size: {SZ_BASE};
         font-weight: 500;
     }}
     QPushButton:hover {{
-        background: {TEXT_SECONDARY};
+        background: {BUTTON_PRIMARY_HOVER};
     }}
     QPushButton:pressed {{
-        background: #18181b;
+        background: {BUTTON_PRIMARY_PRESSED};
     }}
     QPushButton:disabled {{
-        background: {CONTENT_SECONDARY_BG};
+        background: {INPUT_BG};
         color: {TEXT_MUTED};
     }}
     QPushButton[secondary="true"] {{
-        background: {CONTENT_BG};
+        background: {INPUT_BG};
         color: {TEXT_PRIMARY};
         border: 1px solid {BORDER};
     }}
     QPushButton[secondary="true"]:hover {{
-        background: {CONTENT_SECONDARY_BG};
+        background: {SIDEBAR_HOVER_BG};
+        border-color: {ACCENT_BLUE};
     }}
     QPushButton[secondary="true"]:disabled {{
         background: {CONTENT_SECONDARY_BG};
         color: {TEXT_MUTED};
-        border-color: {BORDER};
+        border-color: {BORDER_SUBTLE};
     }}
-    /* ── Inputs ───────────────────────────────────────────────────────── */
     QLineEdit, QTextEdit, QPlainTextEdit {{
         border: 1px solid {BORDER};
         border-radius: {RADIUS_SM};
-        padding: 6px 10px;
-        background: {CONTENT_BG};
+        padding: 5px 8px;
+        background: {INPUT_BG};
         color: {TEXT_PRIMARY};
         font-size: {SZ_BASE};
-        selection-background-color: {ACCENT_BLUE};
+        selection-background-color: {SELECTION_BG};
     }}
     QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
         border-color: {ACCENT_BLUE};
@@ -264,8 +317,8 @@ def content_stylesheet() -> str:
     QSpinBox, QDoubleSpinBox {{
         border: 1px solid {BORDER};
         border-radius: {RADIUS_SM};
-        padding: 5px 8px;
-        background: {CONTENT_BG};
+        padding: 4px 8px;
+        background: {INPUT_BG};
         color: {TEXT_PRIMARY};
     }}
     QSpinBox:focus, QDoubleSpinBox:focus {{
@@ -274,19 +327,18 @@ def content_stylesheet() -> str:
     QDateEdit {{
         border: 1px solid {BORDER};
         border-radius: {RADIUS_SM};
-        padding: 5px 8px;
-        background: {CONTENT_BG};
+        padding: 4px 8px;
+        background: {INPUT_BG};
         color: {TEXT_PRIMARY};
     }}
     QDateEdit:focus {{
         border-color: {ACCENT_BLUE};
     }}
-    /* ── Combo boxes ──────────────────────────────────────────────────── */
     QComboBox {{
         border: 1px solid {BORDER};
         border-radius: {RADIUS_SM};
-        padding: 6px 10px;
-        background: {CONTENT_BG};
+        padding: 5px 8px;
+        background: {INPUT_BG};
         color: {TEXT_PRIMARY};
     }}
     QComboBox:focus {{
@@ -297,13 +349,13 @@ def content_stylesheet() -> str:
         width: 20px;
     }}
     QComboBox QAbstractItemView {{
-        background: {CONTENT_BG};
+        background: {CONTENT_SECONDARY_BG};
         border: 1px solid {BORDER};
-        selection-background-color: {CONTENT_SECONDARY_BG};
+        selection-background-color: {SELECTION_BG};
         selection-color: {TEXT_PRIMARY};
         padding: 2px;
+        color: {TEXT_PRIMARY};
     }}
-    /* ── Lists ────────────────────────────────────────────────────────── */
     QListWidget {{
         border: 1px solid {BORDER};
         border-radius: {RADIUS_SM};
@@ -312,43 +364,49 @@ def content_stylesheet() -> str:
         outline: none;
     }}
     QListWidget::item {{
-        padding: 6px 10px;
+        padding: 5px 8px;
     }}
     QListWidget::item:selected {{
-        background: {CONTENT_SECONDARY_BG};
+        background: {SELECTION_BG};
         color: {TEXT_PRIMARY};
     }}
     QListWidget::item:hover:!selected {{
-        background: #f9f9f9;
+        background: {SIDEBAR_HOVER_BG};
     }}
-    /* ── Tables ───────────────────────────────────────────────────────── */
     QTableWidget, QTableView {{
         border: 1px solid {BORDER};
         border-radius: {RADIUS_SM};
         background: {CONTENT_BG};
         color: {TEXT_PRIMARY};
-        gridline-color: {CONTENT_SECONDARY_BG};
+        gridline-color: {BORDER_SUBTLE};
         outline: none;
-        alternate-background-color: #fafafa;
+        alternate-background-color: {CONTENT_SECONDARY_BG};
     }}
     QTableWidget::item, QTableView::item {{
-        padding: 5px 8px;
+        padding: 4px 8px;
     }}
     QTableWidget::item:selected, QTableView::item:selected {{
-        background: {CONTENT_SECONDARY_BG};
+        background: {SELECTION_BG};
         color: {TEXT_PRIMARY};
     }}
     QHeaderView::section {{
         background: {CONTENT_SECONDARY_BG};
         color: {TEXT_SECONDARY};
         border: none;
-        border-right: 1px solid {BORDER};
+        border-right: 1px solid {BORDER_SUBTLE};
         border-bottom: 1px solid {BORDER};
         padding: 5px 8px;
         font-weight: 600;
         font-size: {SZ_SM};
     }}
-    /* ── Group boxes ──────────────────────────────────────────────────── */
+    QLabel#FormFieldLabel {{
+        color: {TEXT_PRIMARY};
+        font-size: {SZ_SM};
+        font-weight: 500;
+        background: transparent;
+        padding: 0px;
+        min-height: 16px;
+    }}
     QGroupBox {{
         border: 1px solid {BORDER};
         border-radius: {RADIUS};
@@ -364,51 +422,66 @@ def content_stylesheet() -> str:
         padding: 0 4px;
         color: {TEXT_SECONDARY};
     }}
-    /* ── Splitters ────────────────────────────────────────────────────── */
     QSplitter::handle {{
         background: {BORDER};
     }}
     QSplitter::handle:horizontal {{
-        width: 1px;
+        width: 4px;
+    }}
+    QSplitter::handle:horizontal:hover {{
+        background: {ACCENT_BLUE};
     }}
     QSplitter::handle:vertical {{
-        height: 1px;
+        height: 4px;
     }}
-    /* ── Scrollbars ───────────────────────────────────────────────────── */
+    QSplitter::handle:vertical:hover {{
+        background: {ACCENT_BLUE};
+    }}
     QScrollBar:vertical {{
-        width: 7px;
-        background: transparent;
+        width: 10px;
+        background: {CONTENT_BG};
         margin: 0;
     }}
     QScrollBar::handle:vertical {{
-        background: {BORDER_DARK};
-        border-radius: 3px;
-        min-height: 20px;
+        background: {INPUT_BG};
+        border-radius: 4px;
+        min-height: 24px;
+        margin: 2px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: #4e4e4e;
     }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
     QScrollBar:horizontal {{
-        height: 7px;
-        background: transparent;
+        height: 10px;
+        background: {CONTENT_BG};
         margin: 0;
     }}
     QScrollBar::handle:horizontal {{
-        background: {BORDER_DARK};
-        border-radius: 3px;
-        min-width: 20px;
+        background: {INPUT_BG};
+        border-radius: 4px;
+        min-width: 24px;
+        margin: 2px;
+    }}
+    QScrollBar::handle:horizontal:hover {{
+        background: #4e4e4e;
     }}
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
-    /* ── Status bar ───────────────────────────────────────────────────── */
+    QScrollArea {{
+        background: transparent;
+        border: none;
+    }}
     QStatusBar {{
-        background: {CONTENT_SECONDARY_BG};
+        background: {ACCENT_BLUE};
         border-top: 1px solid {BORDER};
-        color: {TEXT_MUTED};
+        color: #ffffff;
         font-size: {SZ_SM};
     }}
     QStatusBar QLabel {{
         background: transparent;
         font-size: {SZ_SM};
+        color: #ffffff;
     }}
-    /* ── Check / radio ────────────────────────────────────────────────── */
     QCheckBox {{
         spacing: 6px;
         color: {TEXT_PRIMARY};
@@ -417,24 +490,23 @@ def content_stylesheet() -> str:
     QCheckBox::indicator {{
         width: 15px;
         height: 15px;
-        border: 1px solid {BORDER_DARK};
+        border: 1px solid {BORDER};
         border-radius: 3px;
-        background: {CONTENT_BG};
+        background: {INPUT_BG};
     }}
     QCheckBox::indicator:checked {{
-        background: {TEXT_PRIMARY};
-        border-color: {TEXT_PRIMARY};
+        background: {ACCENT_BLUE};
+        border-color: {ACCENT_BLUE};
     }}
     QRadioButton {{
         spacing: 6px;
         color: {TEXT_PRIMARY};
         background: transparent;
     }}
-    /* ── Tool tips ────────────────────────────────────────────────────── */
     QToolTip {{
-        background: {TEXT_PRIMARY};
-        color: white;
-        border: none;
+        background: {CONTENT_SECONDARY_BG};
+        color: {TEXT_PRIMARY};
+        border: 1px solid {BORDER};
         border-radius: {RADIUS_SM};
         padding: 4px 8px;
         font-size: {SZ_SM};
@@ -443,12 +515,11 @@ def content_stylesheet() -> str:
 
 
 def badge_style(kind: str) -> str:
-    """Inline style for a status badge label."""
     colours = {
-        "info":    (ACCENT_BLUE,  "#eff6ff", "#dbeafe"),
-        "success": (ACCENT_GREEN, "#f0fdf4", "#dcfce7"),
-        "warning": (ACCENT_AMBER, "#fffbeb", "#fef3c7"),
-        "error":   (ACCENT_RED,   "#fef2f2", "#fee2e2"),
+        "info":    (ACCENT_BLUE,  CONTENT_SECONDARY_BG, BORDER),
+        "success": (ACCENT_GREEN, CONTENT_SECONDARY_BG, BORDER),
+        "warning": (ACCENT_AMBER, CONTENT_SECONDARY_BG, BORDER),
+        "error":   (ACCENT_RED,   CONTENT_SECONDARY_BG, BORDER),
         "neutral": (TEXT_MUTED,   CONTENT_SECONDARY_BG, BORDER),
     }
     fg, bg, border = colours.get(kind, colours["neutral"])
