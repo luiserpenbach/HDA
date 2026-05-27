@@ -1592,8 +1592,9 @@ hda/
 │   │   ├── base.py           ← BasePage, MetricCard, InfoBanner
 │   │   ├── test_ingestion.py ← Browse / Ingest / Edit Metadata
 │   │   ├── single_test_analysis.py ← CSV load, steady window, analysis
+│   │   ├── campaign_analysis.py    ← SPC, summary, reports
 │   │   ├── configurations.py ← saved_configs CRUD + diff
-│   │   └── placeholders.py   ← Stub pages for Batch / Campaign / System / Tools
+│   │   └── placeholders.py   ← Stub pages for Batch / System / Tools
 │   └── workers.py            ← QRunnable workers (v3 stack; not nav entry)
 └── domain/ persistence/ services/   ← v3 stack (parallel to nav app's core/ usage)
 ```
@@ -1611,7 +1612,7 @@ QMainWindow
 │       ├── [0] TestIngestionPage          (implemented)
 │       ├── [1] SingleTestAnalysisPage     (implemented)
 │       ├── [2] BatchAnalysisPage          (placeholder)
-│       ├── [3] CampaignAnalysisPage       (placeholder)
+│       ├── [3] CampaignAnalysisPage       (implemented)
 │       ├── [4] SystemAnalysisPage         (placeholder)
 │       ├── [5] AnalysisToolsPage          (placeholder)
 │       └── [6] ConfigurationsPage         (implemented)
@@ -1800,7 +1801,7 @@ All I/O goes through `core.test_metadata` and `core.metadata_manager` — the sa
 
 1. **Configurations** — **Done** (`configurations.py`): `SavedConfigManager`, list/edit/create, JSON diff, "Use in Analysis" handoff
 2. **Single Test Analysis** — **Done** (`single_test_analysis.py`): `core.integrated_analysis`, pyqtgraph steady window, Test Explorer handoff via `load_test_from_path()`
-3. **Campaign Analysis** — wraps `core.spc` + `core.campaign_manager_v2` (per-campaign SQLite; see `hda/README.md` § Campaign Analysis plan)
+3. **Campaign Analysis** — **Done** (`campaign_analysis.py`): I-MR / X-bar/R SPC, summary table, HTML/Excel/CSV export
 4. **Batch Analysis** — wraps `core.batch_analysis`
 5. **Analysis Tools** / **System Analysis** — lower priority; build after the above
 

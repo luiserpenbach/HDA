@@ -25,15 +25,6 @@ class BatchAnalysisPage(_PlaceholderPage):
         )
 
 
-class CampaignAnalysisPage(_PlaceholderPage):
-    def __init__(self, parent=None):
-        super().__init__(
-            "Campaign Analysis",
-            "SPC control charts, capability indices, and trend analysis across a campaign",
-            parent,
-        )
-
-
 class SystemAnalysisPage(_PlaceholderPage):
     def __init__(self, parent=None):
         super().__init__(
@@ -50,5 +41,3 @@ class AnalysisToolsPage(_PlaceholderPage):
             "Anomaly detection, test comparison, and operating envelope analysis",
             parent,
         )
-
-
