@@ -42,6 +42,11 @@ from hda.ui.pages.placeholders import (
 from hda.ui.pages.test_ingestion import TestIngestionPage
 from hda.ui.style import content_stylesheet
 
+try:
+    from core import __version__ as CORE_VERSION
+except ImportError:
+    CORE_VERSION = "2.5.0"
+
 
 class HDAMainWindow(QMainWindow):
     """Navigation-based main window for the HDA Qt desktop application."""
@@ -81,13 +86,14 @@ class HDAMainWindow(QMainWindow):
         ]
         for page in self._pages:
             self._stack.addWidget(page)
+            page.status_message.connect(self._set_status)
 
         # ── Status bar ─────────────────────────────────────────────────────
         self._status_lbl = QLabel("Ready.")
         self._status_lbl.setContentsMargins(4, 0, 0, 0)
         bar = QStatusBar()
         bar.addWidget(self._status_lbl, 1)
-        self._version_lbl = QLabel("HDA v2.4.0")
+        self._version_lbl = QLabel(f"HDA v{CORE_VERSION}")
         bar.addPermanentWidget(self._version_lbl)
         self.setStatusBar(bar)
 
@@ -100,6 +106,11 @@ class HDAMainWindow(QMainWindow):
         test_page = self._pages[0]
         if isinstance(test_page, TestIngestionPage):
             test_page.open_in_analysis_requested.connect(self._on_open_in_analysis)
+
+        # Wire Configurations "Use in Analysis" handoff
+        config_page = self._pages[6]
+        if isinstance(config_page, ConfigurationsPage):
+            config_page.use_in_analysis_requested.connect(self._on_use_in_analysis)
 
         # ── Restore state ──────────────────────────────────────────────────
         self._restore_geometry()
@@ -125,9 +136,23 @@ class HDAMainWindow(QMainWindow):
         page.set_context(self._nav.test_root(), self._nav.program())
 
     def _on_open_in_analysis(self, path: str) -> None:
-        """Switch to Single Test Analysis and pre-select the test path."""
+        """Switch to Single Test Analysis and load the test folder."""
         self._nav._on_nav_clicked(1)
-        self._status_lbl.setText(f"Test path: {path}")
+        sta = self._pages[1]
+        if isinstance(sta, SingleTestAnalysisPage):
+            sta.load_test_from_path(path)
+
+    def _on_use_in_analysis(self, config_id: str) -> None:
+        """Switch to Single Test Analysis with the selected configuration."""
+        self._nav._on_nav_clicked(1)
+        sta = self._pages[1]
+        if isinstance(sta, SingleTestAnalysisPage):
+            sta.set_active_config(config_id)
+        self._set_status(f"Configuration '{config_id}' selected for analysis.")
+
+    def _set_status(self, message: str) -> None:
+        if message:
+            self._status_lbl.setText(message)
 
     # ---------------------------------------------------------------- settings
 

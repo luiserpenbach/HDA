@@ -442,6 +442,7 @@ class BrowseTab(QWidget):
     open_in_analysis_requested = Signal(str)   # test path
     edit_metadata_requested    = Signal(str)   # test path
     campaign_context_changed   = Signal(str, str)  # (system_name, campaign_id)
+    status_message             = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -521,14 +522,17 @@ class BrowseTab(QWidget):
         self._btn_open.setEnabled(False)
         self._btn_edit_meta.setEnabled(False)
         self._banner.show_message("Scanning…", "info")
+        self.status_message.emit(f"Scanning {program}…")
 
         worker = _ScanWorker(root_path, program)
         worker.signals.structure_ready.connect(self._on_scan_structure)
         worker.signals.systems_ready.connect(self._on_scan_systems)
-        worker.signals.error.connect(
-            lambda e: self._banner.show_message(f"Scan error: {e}", "error")
-        )
+        worker.signals.error.connect(self._on_scan_error)
         QThreadPool.globalInstance().start(worker)
+
+    def _on_scan_error(self, error: str) -> None:
+        self._banner.show_message(f"Scan error: {error}", "error")
+        self.status_message.emit(f"Scan error: {error}")
 
     def _on_scan_structure(self, structure: Dict[str, Any]) -> None:
         info = structure["program_info"].get(self._program, {})
@@ -541,6 +545,9 @@ class BrowseTab(QWidget):
     def _on_scan_systems(self, systems: List[Dict[str, Any]]) -> None:
         self._panel_systems.populate(systems, "name", self._system_info)
         self._panel_systems.set_action_enabled(bool(self._program))
+        self.status_message.emit(
+            f"Loaded {len(systems)} system(s) for {self._program}."
+        )
 
     def _system_info(self, label: QLabel, items: List[Dict[str, Any]]) -> None:
         label.setText(f"{len(items)} system(s)")
@@ -1537,8 +1544,13 @@ class TestIngestionPage(BasePage):
             self.open_in_analysis_requested.emit
         )
         self._browse_tab.campaign_context_changed.connect(self._on_campaign_context_changed)
+        self._browse_tab.status_message.connect(self.status_message.emit)
         self._ingest_tab.test_created.connect(self._on_test_created)
         self._tabs.currentChanged.connect(self._on_tab_changed)
+
+        sc_refresh = QShortcut(QKeySequence("F5"), self)
+        sc_refresh.setContext(Qt.WidgetWithChildrenShortcut)
+        sc_refresh.activated.connect(self._refresh_browse)
 
     # ---- no-context placeholder ─────────────────────────────────────────────
 
@@ -1639,6 +1651,12 @@ class TestIngestionPage(BasePage):
 
     def _on_test_created(self, _test_id: str) -> None:
         if self._test_root and self._program:
+            self._browse_tab.refresh(Path(self._test_root), self._program)
+
+    def _refresh_browse(self) -> None:
+        """Refresh browse tab (F5)."""
+        if self._test_root and self._program:
+            self.status_message.emit("Refreshing test folder…")
             self._browse_tab.refresh(Path(self._test_root), self._program)
 
     # ---- public helpers ─────────────────────────────────────────────────────

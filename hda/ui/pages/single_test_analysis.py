@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hda.test_type_utils import normalize_test_type
 from hda.ui.pages.base import BasePage, InfoBanner, MetricCard
 from hda.ui.style import (
     ACCENT_AMBER,
@@ -96,6 +97,9 @@ _HF_ROLES: List[Tuple[str, str, bool]] = [
     ("thrust",              "Thrust",                False),
     ("upstream_pressure",   "Upstream pressure",     False),
 ]
+
+# Main page class exported for main_window registration
+__all__ = ["SingleTestAnalysisPage"]
 
 
 # ===========================================================================
@@ -381,6 +385,8 @@ class SingleTestAnalysisPage(BasePage):
         self._region_updating = False           # recursion guard
         self._config_id: str = ""
         self._file_path: str = ""
+        self._test_folder_path: str = ""
+        self._pending_config_id: str = ""
 
         # ── Main splitter ────────────────────────────────────────────────────
         splitter = QSplitter(Qt.Horizontal)
@@ -428,9 +434,11 @@ class SingleTestAnalysisPage(BasePage):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
-        # Keyboard shortcut
-        sc = QShortcut(QKeySequence("F5"), self)
-        sc.activated.connect(self._run_analysis)
+        # Keyboard shortcuts
+        sc_run = QShortcut(QKeySequence("F5"), self)
+        sc_run.activated.connect(self._run_analysis)
+        sc_open = QShortcut(QKeySequence("Ctrl+O"), self)
+        sc_open.activated.connect(self._browse_csv)
 
     # ------------------------------------------------------------------ panels
 
@@ -453,6 +461,7 @@ class SingleTestAnalysisPage(BasePage):
         lay.addWidget(_divider())
 
         self._browse_btn = QPushButton("Browse CSV…")
+        self._browse_btn.setToolTip("Open a CSV file (Ctrl+O)")
         self._browse_btn.clicked.connect(self._browse_csv)
         lay.addWidget(self._browse_btn)
 
@@ -676,15 +685,26 @@ class SingleTestAnalysisPage(BasePage):
         if not path:
             return
         self._settings.setValue("sta/last_csv_dir", str(Path(path).parent))
+        self._load_csv_path(path)
+
+    def _load_csv_path(self, path: str) -> None:
+        """Start background load of a CSV file path."""
+        self._test_folder_path = ""
         self._file_path = path
         self._file_label.setText(Path(path).name)
         self._info_label.setText("Loading…")
         self._banner.show_message("Loading CSV…", "info")
+        self.status_message.emit(f"Loading {Path(path).name}…")
 
         worker = _LoadWorker(path)
         worker.signals.loaded.connect(self._on_csv_loaded)
-        worker.signals.failed.connect(lambda e: self._banner.show_message(f"Load failed: {e}", "error"))
+        worker.signals.failed.connect(self._on_csv_load_failed)
         QThreadPool.globalInstance().start(worker)
+
+    @Slot(str)
+    def _on_csv_load_failed(self, error: str) -> None:
+        self._banner.show_message(f"Load failed: {error}", "error")
+        self.status_message.emit(f"Load failed: {error}")
 
     @Slot(object, str, list)
     def _on_csv_loaded(self, df, time_col: str, numeric_cols: List[str]) -> None:
@@ -744,8 +764,15 @@ class SingleTestAnalysisPage(BasePage):
                 self._add_region(lo, hi)
 
         self._rebuild_plot()
+
+        if self._test_folder_path:
+            self._apply_test_folder_metadata(self._test_folder_path)
+
         self._banner.show_message(
             f"Loaded {Path(self._file_path).name} — {rows:,} rows, {len(numeric_cols)} channels.", "success"
+        )
+        self.status_message.emit(
+            f"Loaded {Path(self._file_path).name} — {rows:,} rows, {len(numeric_cols)} channels."
         )
 
     @Slot()
@@ -824,20 +851,25 @@ class SingleTestAnalysisPage(BasePage):
         method = self._detect_method.currentText()
         config["preferred_method"] = method
         self._banner.show_message("Detecting steady state…", "info")
+        self.status_message.emit("Detecting steady state…")
         worker = _DetectWorker(self._df, config)
         worker.signals.detected.connect(self._on_detected)
-        worker.signals.failed.connect(lambda e: self._banner.show_message(e, "warning"))
+        worker.signals.failed.connect(self._on_detect_failed)
         QThreadPool.globalInstance().start(worker)
+
+    @Slot(str)
+    def _on_detect_failed(self, error: str) -> None:
+        self._banner.show_message(error, "warning")
+        self.status_message.emit(error)
 
     @Slot(float, float, str)
     def _on_detected(self, start: float, end: float, method: str) -> None:
         self._ss_start.setValue(start)
         self._ss_end.setValue(end)
         self._add_region(start, end)
-        self._banner.show_message(
-            f"Steady state: {start:.3f}–{end:.3f} s  ({end - start:.2f} s, method: {method})",
-            "success",
-        )
+        msg = f"Steady state: {start:.3f}–{end:.3f} s  ({end - start:.2f} s, method: {method})"
+        self._banner.show_message(msg, "success")
+        self.status_message.emit(msg)
 
     # ------------------------------------------------------------------ slots: run
 
@@ -867,6 +899,7 @@ class SingleTestAnalysisPage(BasePage):
         time_unit = self._time_unit_combo.currentText()
 
         self._banner.show_message("Running analysis…", "info")
+        self.status_message.emit(f"Running analysis for {test_id}…")
         self._run_btn.setEnabled(False)
         self._results.hide()
 
@@ -890,10 +923,12 @@ class SingleTestAnalysisPage(BasePage):
         self._run_btn.setEnabled(True)
         n = len(result.measurements)
         status = "passed" if result.passed_qc else "FAILED QC"
+        msg = f"Analysis complete — {n} metrics, QC {status}."
         self._banner.show_message(
-            f"Analysis complete — {n} metrics, QC {status}.",
+            msg,
             "success" if result.passed_qc else "error",
         )
+        self.status_message.emit(msg)
         self._results.populate(result)
         self._results.show()
 
@@ -901,11 +936,65 @@ class SingleTestAnalysisPage(BasePage):
     def _on_analysis_failed(self, error: str) -> None:
         self._run_btn.setEnabled(True)
         self._banner.show_message(f"Analysis failed: {error}", "error")
+        self.status_message.emit(f"Analysis failed: {error}")
+
+    # ------------------------------------------------------------------ public API
+
+    def load_test_from_path(self, folder_path: str) -> None:
+        """Load a test folder from Test Explorer (CSV + metadata prefill)."""
+        from core.test_metadata import find_raw_data_file, load_test_from_folder
+
+        folder = Path(folder_path)
+        if not folder.is_dir():
+            self._banner.show_message(f"Test folder not found: {folder_path}", "error")
+            self.status_message.emit(f"Test folder not found: {folder_path}")
+            return
+
+        test_data = load_test_from_folder(folder)
+        csv_path = test_data.get("raw_data_file")
+        if not csv_path:
+            csv_path_obj = find_raw_data_file(folder)
+            csv_path = str(csv_path_obj) if csv_path_obj else None
+
+        if not csv_path:
+            self._banner.show_message(
+                f"No CSV found in {folder.name} — check raw_data/ or upload manually.",
+                "warning",
+            )
+            self.status_message.emit(f"No CSV in {folder.name}")
+            metadata = test_data.get("metadata") or {}
+            test_id = metadata.get("test_id") or folder.name
+            self._test_id_edit.setText(test_id)
+            if metadata.get("operator"):
+                self._operator_edit.setText(str(metadata["operator"]))
+            self._test_folder_path = str(folder)
+            self._select_config_for_metadata(metadata)
+            return
+
+        self._test_folder_path = str(folder)
+        metadata = test_data.get("metadata") or {}
+        test_id = metadata.get("test_id") or folder.name
+        self._test_id_edit.setText(test_id)
+        if metadata.get("operator"):
+            self._operator_edit.setText(str(metadata["operator"]))
+        self._select_config_for_metadata(metadata)
+        self._load_csv_path(csv_path)
+
+    def set_active_config(self, config_id: str) -> None:
+        """Select a saved configuration (from Configurations page handoff)."""
+        if not config_id:
+            return
+        self._pending_config_id = config_id
+        if self._config_combo.count() == 0:
+            self._reload_config_list()
+        self._apply_config_selection(config_id)
 
     # ------------------------------------------------------------------ lifecycle
 
     def on_context_changed(self) -> None:
         self._reload_config_list()
+        if self._pending_config_id:
+            self._apply_config_selection(self._pending_config_id)
 
     def _reload_config_list(self) -> None:
         try:
@@ -931,10 +1020,80 @@ class SingleTestAnalysisPage(BasePage):
                 if self._config_combo.itemData(i) == prev_id:
                     self._config_combo.setCurrentIndex(i)
                     break
-        if self._config_combo.count() > 0:
+        if self._pending_config_id:
+            self._apply_config_selection(self._pending_config_id)
+        elif self._config_combo.count() > 0:
             self._on_config_changed(self._config_combo.currentIndex())
+
+    def _apply_config_selection(self, config_id: str) -> None:
+        for i in range(self._config_combo.count()):
+            if self._config_combo.itemData(i) == config_id:
+                self._config_combo.setCurrentIndex(i)
+                self._on_config_changed(i)
+                return
+
+    def _select_config_for_metadata(self, metadata: dict) -> None:
+        """Pick a saved config matching test metadata test_type."""
+        test_type = normalize_test_type(str(metadata.get("test_type", "")))
+        if self._config_combo.count() == 0:
+            self._reload_config_list()
+
+        preferred = metadata.get("active_config") or metadata.get("config_name")
+        if preferred:
+            self._apply_config_selection(str(preferred))
+
+        if self._config_id:
+            cfg = self._load_config_obj()
+            if cfg and normalize_test_type(cfg.test_type) == test_type:
+                return
+
+        for i in range(self._config_combo.count()):
+            tid = self._config_combo.itemData(i)
+            cfg = self._load_config_obj_by_id(tid) if tid else None
+            if cfg and normalize_test_type(cfg.test_type) == test_type:
+                self._config_combo.setCurrentIndex(i)
+                return
+
+    def _load_config_obj_by_id(self, config_id: str):
+        if not config_id:
+            return None
+        try:
+            from core.saved_configs import SavedConfigManager
+            mgr = SavedConfigManager(str(Path(__file__).resolve().parents[3] / "saved_configs"))
+            return mgr.get_template(config_id)
+        except Exception:
+            return None
+
+    def _apply_test_folder_metadata(self, folder_path: str) -> None:
+        """After CSV load, auto-map sensor roles from the active config."""
+        config = self._build_analysis_config()
+        if not config:
+            return
+        roles = config.get("sensor_roles") or config.get("columns") or {}
+        col_set = set(self._numeric_cols)
+        for role, sensor in roles.items():
+            if role not in self._role_combos:
+                continue
+            if sensor in col_set:
+                idx = self._role_combos[role].findText(sensor)
+                if idx >= 0:
+                    self._role_combos[role].setCurrentIndex(idx)
+
+        channel_config = config.get("channel_config") or {}
+        for ch_id, sensor in channel_config.items():
+            if ch_id in col_set:
+                for role, combo in self._role_combos.items():
+                    if combo.currentText():
+                        continue
+                    if sensor in col_set:
+                        idx = combo.findText(sensor)
+                        if idx >= 0:
+                            combo.setCurrentIndex(idx)
+                            break
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
         if self._config_combo.count() == 0:
             self._reload_config_list()
+        if self._pending_config_id:
+            self._apply_config_selection(self._pending_config_id)
