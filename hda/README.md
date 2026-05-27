@@ -49,7 +49,7 @@ The `hda/` package contains **two UI architectures** that coexist:
 | **Shell** | `HDAMainWindow` — sidebar nav + page stack | Campaign dashboard + detail panel |
 | **Analysis** | `core/` (`integrated_analysis`, `campaign_manager_v2`) | `hda/domain` + `hda/services` |
 | **Campaign DB** | Per-campaign SQLite in `campaigns/` | Single `hda.db` (WAL) |
-| **Status** | 3 pages implemented (Test Explorer, Single Test Analysis, Configurations) | ~260 unit tests; ingest/reanalyze pipeline complete |
+| **Status** | 4 pages implemented (Test Explorer, Single Test Analysis, Campaign Analysis, Configurations) | ~260 unit tests; ingest/reanalyze pipeline complete |
 
 **Recommended path:** extend the **nav app** using `core/` for analysis until Campaign Analysis is built; selectively reuse v3 widgets (steady preview, hardware analytics) as components.
 
@@ -67,7 +67,9 @@ The nav app opens **Hopper Data Studio** with Test Root / Program context in the
 - **Single Test Analysis** — CSV load, pyqtgraph steady window, full P0 analysis
 - **Configurations** — edit `saved_configs/` JSON; **Use in Analysis** handoff
 
-Placeholder pages (Batch, Campaign, System, Tools) direct users to Streamlit until implemented.
+- **Campaign Analysis** — SPC (I-MR, X-bar/R), filters, HTML/Excel/CSV export
+
+Placeholder pages (Batch, System, Tools) direct users to Streamlit until implemented.
 
 Logs: `~/.hda/logs/hda.log` (rotating). Version shown in status bar matches `core.__version__` (currently 2.5.0). Package semver is `3.0.0.dev0`.
 
@@ -119,9 +121,9 @@ trigger a re-run.
 
 ### Nav app (priority)
 
-1. **Campaign Analysis page** — see plan below (wraps `core.spc` + `campaign_manager_v2`)
-2. **Batch Analysis page** — wraps `core.batch_analysis.run_batch_analysis()`
-3. **System Analysis** / **Analysis Tools** — port Streamlit page logic
+1. **Batch Analysis page** — wraps `core.batch_analysis.run_batch_analysis()`
+2. **System Analysis** / **Analysis Tools** — port Streamlit page logic
+3. Campaign plots tab (correlation, multi-parameter overlay) — optional enhancement to `campaign_analysis.py`
 
 ### v3 stack (selective adoption)
 
@@ -131,26 +133,10 @@ trigger a re-run.
 3. Date-range / campaign multi-select filters on analytics.
 4. Reuse `steady_state_preview.py` + `ReanalyzeWorker` inside Single Test Analysis.
 
-## Campaign Analysis — implementation plan
+## Campaign Analysis (implemented)
 
-**Decision:** the nav app uses **per-campaign SQLite** (`campaigns/*.db` via `core.campaign_manager_v2`) to match Streamlit and existing campaign data. Migration to single `hda.db` is deferred until SPC parity is proven on the legacy path.
+Implemented in `hda/ui/pages/campaign_analysis.py`. Uses per-campaign SQLite (`campaigns/*.db` via `core.campaign_manager_v2`).
 
-**Page:** replace `CampaignAnalysisPage` placeholder in `hda/ui/pages/placeholders.py` with `campaign_analysis.py`.
+**Tabs:** Summary (data table + filters) · SPC (I-MR, X-bar/R, pyqtgraph, violations table) · Reports (HTML, Excel, CSV)
 
-**UI sections** (mirror `pages/4_Analysis_by_Campaign.py`):
-
-| Tab | Core modules | Qt widgets |
-|-----|--------------|------------|
-| Campaign picker | `get_available_campaigns`, `get_campaign_data` | Combo + refresh worker |
-| Summary | campaign metadata, test table | `QTableView` + export actions |
-| SPC | `create_imr_chart`, `create_xbar_r_chart`, CUSUM/EWMA | pyqtgraph or matplotlib embed |
-| Reports | `generate_campaign_report`, `export_campaign_excel` | Background `QRunnable` + file dialog |
-
-**Workers:** `_CampaignLoadWorker`, `_SPCWorker`, `_ReportWorker` — all call `core/` only (no Streamlit).
-
-**Acceptance criteria:**
-
-- Select campaign from `campaigns/` directory; load test results without blocking UI
-- I-MR chart with control limits and Western Electric violation markers
-- Export HTML report and Excel via existing `core.export` / `core.reporting`
-- Status bar feedback during load and report generation
+**Workers:** `_CampaignListWorker`, `_CampaignLoadWorker`, `_SPCWorker`, `_ReportWorker` — all call `core/` only.
