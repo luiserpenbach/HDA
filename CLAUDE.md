@@ -1591,9 +1591,11 @@ hda/
 │   ├── pages/
 │   │   ├── base.py           ← BasePage, MetricCard, InfoBanner
 │   │   ├── test_ingestion.py ← Browse / Ingest / Edit Metadata
-│   │   └── placeholders.py   ← Stub pages for unimplemented sections
-│   └── workers.py            ← QRunnable background workers (analysis pipeline)
-└── domain/ persistence/ services/   ← Business logic (unchanged)
+│   │   ├── single_test_analysis.py ← CSV load, steady window, analysis
+│   │   ├── configurations.py ← saved_configs CRUD + diff
+│   │   └── placeholders.py   ← Stub pages for Batch / Campaign / System / Tools
+│   └── workers.py            ← QRunnable workers (v3 stack; not nav entry)
+└── domain/ persistence/ services/   ← v3 stack (parallel to nav app's core/ usage)
 ```
 
 Window structure:
@@ -1606,13 +1608,13 @@ QMainWindow
 │   │   ├── PROGRAM    — combo + new-program button
 │   │   └── NAVIGATION — nav item buttons (one per page)
 │   └── QStackedWidget (fills remaining width)
-│       ├── [0] TestIngestionPage
-│       ├── [1] SingleTestAnalysisPage  (TBD)
-│       ├── [2] BatchAnalysisPage       (TBD)
-│       ├── [3] CampaignAnalysisPage    (TBD)
-│       ├── [4] SystemAnalysisPage      (TBD)
-│       ├── [5] AnalysisToolsPage       (TBD)
-│       └── [6] ConfigurationsPage      (TBD)
+│       ├── [0] TestIngestionPage          (implemented)
+│       ├── [1] SingleTestAnalysisPage     (implemented)
+│       ├── [2] BatchAnalysisPage          (placeholder)
+│       ├── [3] CampaignAnalysisPage       (placeholder)
+│       ├── [4] SystemAnalysisPage         (placeholder)
+│       ├── [5] AnalysisToolsPage          (placeholder)
+│       └── [6] ConfigurationsPage         (implemented)
 └── QStatusBar — activity message (left) + version (right)
 ```
 
@@ -1796,16 +1798,21 @@ All I/O goes through `core.test_metadata` and `core.metadata_manager` — the sa
 
 ### Planned Pages (implementation order)
 
-1. **Configurations** — `core.saved_configs.SavedConfigManager`; list / edit / create testbench JSON configs; config diff viewer
-2. **Single Test Analysis** — wraps `core.integrated_analysis.analyze_cold_flow_test()` / `analyze_hot_fire_test()`; uses `pyqtgraph` for the time-series preview with interactive steady-state window
-3. **Campaign Analysis** — wraps `core.spc`; I-MR and X-bar/R charts; Western Electric violations highlighted inline in the plot
-4. **Batch Analysis** — wraps `core.batch_analysis`; folder picker → progress table → result table; export actions
+1. **Configurations** — **Done** (`configurations.py`): `SavedConfigManager`, list/edit/create, JSON diff, "Use in Analysis" handoff
+2. **Single Test Analysis** — **Done** (`single_test_analysis.py`): `core.integrated_analysis`, pyqtgraph steady window, Test Explorer handoff via `load_test_from_path()`
+3. **Campaign Analysis** — wraps `core.spc` + `core.campaign_manager_v2` (per-campaign SQLite; see `hda/README.md` § Campaign Analysis plan)
+4. **Batch Analysis** — wraps `core.batch_analysis`
 5. **Analysis Tools** / **System Analysis** — lower priority; build after the above
+
+Cross-page wiring (nav app):
+- Test Explorer **Open in Analysis** → Single Test Analysis loads CSV + metadata from test folder
+- Configurations **Use in Analysis** → Single Test Analysis selects the saved config
+- Pages emit `status_message` → main window status bar
 
 ---
 
-**Last Updated**: 2026-05-19
-**Codebase Version**: 2.4.0
+**Last Updated**: 2026-05-27
+**Codebase Version**: 2.5.0 (core/ + Streamlit); Qt package 3.0.0-dev
 **Maintained by**: AI assistants working with HDA
 
 For questions or issues, refer to recent git commits and test files for examples.

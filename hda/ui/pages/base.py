@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QFrame,
     QLabel,
@@ -153,7 +154,11 @@ class BasePage(QWidget):
       1. Call super().__init__(title, description, ...)
       2. Add content widgets to self.content_layout
       3. Override on_context_changed() to react to root/program updates
+
+    Emit ``status_message`` for activity updates shown in the main window status bar.
     """
+
+    status_message = Signal(str)
 
     def __init__(
         self,

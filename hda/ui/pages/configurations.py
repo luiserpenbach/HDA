@@ -269,6 +269,7 @@ class _ConfigListPanel(QWidget):
 class _ConfigEditorWidget(QWidget):
     config_saved   = Signal(str)   # config_id (also fires after clone)
     config_deleted = Signal(str)   # config_id
+    use_in_analysis_requested = Signal(str)   # config_id
 
     def __init__(
         self, manager: SavedConfigManager, parent: Optional[QWidget] = None
@@ -315,6 +316,8 @@ class _ConfigEditorWidget(QWidget):
 
         self._btn_save   = QPushButton("Save Changes")
         self._btn_revert = _secondary_btn("Revert")
+        self._btn_use    = _secondary_btn("Use in Analysis")
+        self._btn_use.setToolTip("Open Single Test Analysis with this configuration selected")
         self._btn_clone  = _secondary_btn("Clone")
         self._btn_export = _secondary_btn("Export…")
         self._btn_delete = _secondary_btn("Delete")
@@ -323,12 +326,13 @@ class _ConfigEditorWidget(QWidget):
             f"QPushButton[secondary='true']:hover {{ background: #fef2f2; }}"
         )
 
-        for btn in (self._btn_save, self._btn_revert, self._btn_clone,
+        for btn in (self._btn_save, self._btn_revert, self._btn_use, self._btn_clone,
                     self._btn_export, self._btn_delete):
             hdr_row.addWidget(btn)
 
         self._btn_save.clicked.connect(self._save)
         self._btn_revert.clicked.connect(self._revert)
+        self._btn_use.clicked.connect(self._use_in_analysis)
         self._btn_clone.clicked.connect(self._clone)
         self._btn_export.clicked.connect(self._export)
         self._btn_delete.clicked.connect(self._delete)
@@ -677,6 +681,7 @@ class _ConfigEditorWidget(QWidget):
         self._btn_save.setEnabled(editable)
         self._btn_revert.setEnabled(editable)
         self._btn_delete.setEnabled(editable)
+        self._btn_use.setEnabled(bool(self._config_id))
         # Clone and Export always available
         self._btn_clone.setEnabled(True)
         self._btn_export.setEnabled(True)
@@ -749,6 +754,25 @@ class _ConfigEditorWidget(QWidget):
             self._update_json_panel()
             self._banner.show_message("Reverted to saved version.", "info")
 
+    def _use_in_analysis(self) -> None:
+        if not self._config_id:
+            return
+        if self._is_dirty:
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                "This configuration has unsaved changes. Save before opening in analysis?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if reply == QMessageBox.Cancel:
+                return
+            if reply == QMessageBox.Save:
+                self._save()
+                if self._is_dirty:
+                    return
+        self.use_in_analysis_requested.emit(self._config_id)
+
     def _clone(self) -> None:
         if not self._config_id:
             return
@@ -815,6 +839,8 @@ class _ConfigEditorWidget(QWidget):
 class ConfigurationsPage(BasePage):
     """Manage testbench hardware configurations stored in saved_configs/."""
 
+    use_in_analysis_requested = Signal(str)
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
             title="Configurations",
@@ -846,7 +872,15 @@ class ConfigurationsPage(BasePage):
         self._editor.config_saved.connect(
             lambda cid: self._list_panel.refresh(select_id=cid)
         )
+        self._editor.config_saved.connect(
+            lambda cid: self.status_message.emit(f"Saved configuration '{cid}'.")
+        )
         self._editor.config_deleted.connect(lambda _cid: self._list_panel.refresh())
+        self._editor.use_in_analysis_requested.connect(self._on_use_in_analysis)
+
+    def _on_use_in_analysis(self, config_id: str) -> None:
+        self.status_message.emit(f"Opening analysis with config '{config_id}'…")
+        self.use_in_analysis_requested.emit(config_id)
 
     # ---- new / import ───────────────────────────────────────────────────────
 
