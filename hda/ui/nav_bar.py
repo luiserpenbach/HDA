@@ -32,15 +32,13 @@ from PySide6.QtWidgets import (
 )
 
 from hda.ui.style import (
-    BORDER,
+    BORDER_SUBTLE,
     SIDEBAR_BG,
     SIDEBAR_BORDER,
+    SIDEBAR_ACTIVE_TEXT,
     SZ_XS,
     SZ_SM,
-    SZ_BASE,
     TEXT_MUTED,
-    TEXT_PRIMARY,
-    TEXT_SECONDARY,
     nav_stylesheet,
 )
 
@@ -65,7 +63,7 @@ def _divider() -> QFrame:
     f.setObjectName("NavDivider")
     f.setFrameShape(QFrame.HLine)
     f.setFixedHeight(1)
-    f.setStyleSheet(f"background: {BORDER}; border: none;")
+    f.setStyleSheet(f"background: {BORDER_SUBTLE}; border: none;")
     return f
 
 
@@ -84,12 +82,12 @@ class NavBar(QWidget):
     test_root_changed = Signal(str)
     program_changed = Signal(str)
 
-    _MIN_WIDTH = 180
+    _MIN_WIDTH = 160
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setMinimumWidth(self._MIN_WIDTH)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         # Reliable background via QPalette (stylesheet alone can leave gaps)
         palette = self.palette()
@@ -146,11 +144,13 @@ class NavBar(QWidget):
 
         title = QLabel("Hopper Data Studio")
         title.setObjectName("AppTitle")
+        title.setWordWrap(True)
         title.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 15px; font-weight: 700; background: transparent;"
+            f"color: {SIDEBAR_ACTIVE_TEXT}; font-size: 15px; font-weight: 600; background: transparent;"
         )
         subtitle = QLabel("Rocket propulsion data analysis")
         subtitle.setObjectName("AppSubtitle")
+        subtitle.setWordWrap(True)
         subtitle.setStyleSheet(
             f"color: {TEXT_MUTED}; font-size: {SZ_SM}; background: transparent;"
         )
@@ -228,6 +228,7 @@ class NavBar(QWidget):
             btn.setObjectName("NavItem")
             btn.setCursor(Qt.PointingHandCursor)
             btn.setProperty("active", "false")
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
             btn.clicked.connect(lambda _chk=False, i=idx: self._on_nav_clicked(i))
             lay.addWidget(btn)
             self._nav_buttons.append(btn)

@@ -18,7 +18,9 @@ import numpy as np
 
 try:
     import pyqtgraph as pg
-    pg.setConfigOptions(antialias=True, background="w", foreground="k")
+    from hda.ui.style import PLOT_BG, PLOT_FG, configure_pyqtgraph
+
+    configure_pyqtgraph()
     _PG_OK = True
 except Exception:
     _PG_OK = False
@@ -63,9 +65,10 @@ from hda.ui.style import (
     ACCENT_GREEN,
     ACCENT_RED,
     BORDER,
-    CONTENT_BG,
     CONTENT_SECONDARY_BG,
     FONT_FAMILY,
+    PLOT_BG,
+    PLOT_FG,
     SZ_BASE,
     SZ_SM,
     SZ_XS,
@@ -98,8 +101,9 @@ _HF_ROLES: List[Tuple[str, str, bool]] = [
     ("upstream_pressure",   "Upstream pressure",     False),
 ]
 
-# Main page class exported for main_window registration
-__all__ = ["SingleTestAnalysisPage"]
+STA_PANEL_MIN = 260
+STA_PANEL_MAX = 520
+STA_PANEL_DEFAULT = 320
 
 
 # ===========================================================================
@@ -273,16 +277,38 @@ def _divider() -> QFrame:
     return line
 
 
-def _form_row(label: str, widget: QWidget) -> QHBoxLayout:
-    row = QHBoxLayout()
-    row.setContentsMargins(0, 0, 0, 0)
-    row.setSpacing(6)
-    lbl = QLabel(label)
-    lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {SZ_SM}; background: transparent;")
-    lbl.setFixedWidth(140)
-    row.addWidget(lbl)
-    row.addWidget(widget, 1)
-    return row
+def _form_row(
+    label: str,
+    widget: QWidget,
+    *,
+    optional: bool = False,
+    required: bool = False,
+) -> QVBoxLayout:
+    """Label above control — stays readable at any panel width."""
+    col = QVBoxLayout()
+    col.setContentsMargins(0, 6, 0, 0)
+    col.setSpacing(5)
+    lbl = QLabel()
+    lbl.setObjectName("FormFieldLabel")
+    lbl.setWordWrap(True)
+    lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+    if optional:
+        lbl.setText(
+            f'{label} <span style="color:{TEXT_MUTED}; font-weight:400;">(optional)</span>'
+        )
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+    elif required:
+        lbl.setText(
+            f'{label} <span style="color:{ACCENT_RED}; font-weight:600;">*</span>'
+        )
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+    else:
+        lbl.setText(label)
+        lbl.setTextFormat(Qt.TextFormat.PlainText)
+    col.addWidget(lbl)
+    widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    col.addWidget(widget)
+    return col
 
 
 # ===========================================================================
@@ -387,15 +413,16 @@ class SingleTestAnalysisPage(BasePage):
         self._file_path: str = ""
         self._test_folder_path: str = ""
         self._pending_config_id: str = ""
+        self._splitter_initialized = False
 
-        # ── Main splitter ────────────────────────────────────────────────────
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setHandleWidth(1)
-        splitter.setStyleSheet(f"QSplitter::handle {{ background: {BORDER}; }}")
-        self.content_layout.addWidget(splitter, 1)
+        # ── Main splitter (left controls ↔ plot) ─────────────────────────────
+        self._splitter = QSplitter(Qt.Horizontal)
+        self._splitter.setHandleWidth(4)
+        self._splitter.setChildrenCollapsible(False)
+        self.content_layout.addWidget(self._splitter, 1)
 
-        # Left panel (scrollable controls)
-        splitter.addWidget(self._build_left_panel())
+        left_panel = self._build_left_panel()
+        self._splitter.addWidget(left_panel)
 
         # Right panel (plot + results)
         right = QWidget()
@@ -408,8 +435,12 @@ class SingleTestAnalysisPage(BasePage):
 
         if _PG_OK:
             self._plot = pg.PlotWidget()
-            self._plot.setBackground("w")
-            self._plot.showGrid(x=True, y=True, alpha=0.25)
+            self._plot.setBackground(PLOT_BG)
+            self._plot.showGrid(x=True, y=True, alpha=0.35)
+            self._plot.getAxis("bottom").setPen(PLOT_FG)
+            self._plot.getAxis("left").setPen(PLOT_FG)
+            self._plot.getAxis("bottom").setTextPen(PLOT_FG)
+            self._plot.getAxis("left").setTextPen(PLOT_FG)
             self._plot.setLabel("bottom", "Time", units="s")
             self._plot.addLegend(offset=(10, 10))
             self._plot.setSizePolicy(
@@ -429,10 +460,10 @@ class SingleTestAnalysisPage(BasePage):
         self._results.hide()
         right_lay.addWidget(self._results, 2)
 
-        splitter.addWidget(right)
-        splitter.setSizes([340, 900])
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        self._splitter.addWidget(right)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.splitterMoved.connect(self._save_splitter_state)
 
         # Keyboard shortcuts
         sc_run = QShortcut(QKeySequence("F5"), self)
@@ -443,18 +474,27 @@ class SingleTestAnalysisPage(BasePage):
     # ------------------------------------------------------------------ panels
 
     def _build_left_panel(self) -> QWidget:
+        container = QWidget()
+        container.setMinimumWidth(STA_PANEL_MIN)
+        container.setMaximumWidth(STA_PANEL_MAX)
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setFixedWidth(340)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet(
-            f"QScrollArea {{ background: {CONTENT_BG}; border: none; border-right: 1px solid {BORDER}; }}"
+            f"QScrollArea {{ background: transparent; border: none; "
+            f"border-right: 1px solid {BORDER}; }}"
         )
 
         inner = QWidget()
+        inner.setMinimumWidth(STA_PANEL_MIN - 24)
         lay = QVBoxLayout(inner)
         lay.setContentsMargins(12, 4, 12, 16)
-        lay.setSpacing(2)
+        lay.setSpacing(6)
 
         # ── Data ────────────────────────────────────────────────────────────
         lay.addWidget(_section("Data"))
@@ -462,6 +502,7 @@ class SingleTestAnalysisPage(BasePage):
 
         self._browse_btn = QPushButton("Browse CSV…")
         self._browse_btn.setToolTip("Open a CSV file (Ctrl+O)")
+        self._browse_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._browse_btn.clicked.connect(self._browse_csv)
         lay.addWidget(self._browse_btn)
 
@@ -484,6 +525,7 @@ class SingleTestAnalysisPage(BasePage):
         lay.addWidget(_divider())
 
         self._config_combo = QComboBox()
+        self._config_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._config_combo.currentIndexChanged.connect(self._on_config_changed)
         lay.addWidget(self._config_combo)
 
@@ -504,10 +546,9 @@ class SingleTestAnalysisPage(BasePage):
         self._time_unit_combo.addItems(["ms", "s", "μs"])
         lay.addLayout(_form_row("Time unit", self._time_unit_combo))
 
-        resample_row = QHBoxLayout()
-        resample_row.setContentsMargins(0, 0, 0, 0)
-        self._resample_chk = QCheckBox("Resample to")
+        self._resample_chk = QCheckBox("Enable resampling")
         self._resample_chk.setStyleSheet(f"font-size: {SZ_SM}; background: transparent;")
+        self._resample_chk.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._resample_hz = QDoubleSpinBox()
         self._resample_hz.setRange(1, 10000)
         self._resample_hz.setValue(100)
@@ -515,9 +556,8 @@ class SingleTestAnalysisPage(BasePage):
         self._resample_hz.setDecimals(0)
         self._resample_hz.setEnabled(False)
         self._resample_chk.toggled.connect(self._resample_hz.setEnabled)
-        resample_row.addWidget(self._resample_chk)
-        resample_row.addWidget(self._resample_hz, 1)
-        lay.addLayout(resample_row)
+        lay.addWidget(self._resample_chk)
+        lay.addLayout(_form_row("Rate", self._resample_hz))
 
         # ── Plot channels ───────────────────────────────────────────────────
         lay.addWidget(_section("Plot channels"))
@@ -540,7 +580,7 @@ class SingleTestAnalysisPage(BasePage):
         self._role_box = QWidget()
         self._role_layout = QVBoxLayout(self._role_box)
         self._role_layout.setContentsMargins(0, 0, 0, 0)
-        self._role_layout.setSpacing(3)
+        self._role_layout.setSpacing(10)
         lay.addWidget(self._role_box)
         self._rebuild_role_combos("cold_flow")
 
@@ -548,16 +588,14 @@ class SingleTestAnalysisPage(BasePage):
         lay.addWidget(_section("Steady state"))
         lay.addWidget(_divider())
 
-        detect_row = QHBoxLayout()
-        detect_row.setContentsMargins(0, 0, 0, 0)
         self._detect_method = QComboBox()
         self._detect_method.addItems(["cv", "ml", "derivative", "simple"])
-        detect_row.addWidget(self._detect_method, 1)
+        lay.addLayout(_form_row("Detection method", self._detect_method))
+
         self._detect_btn = QPushButton("Auto-detect")
-        self._detect_btn.setFixedWidth(90)
+        self._detect_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._detect_btn.clicked.connect(self._auto_detect)
-        detect_row.addWidget(self._detect_btn)
-        lay.addLayout(detect_row)
+        lay.addWidget(self._detect_btn)
 
         self._ss_start = QDoubleSpinBox()
         self._ss_start.setRange(0, 100000)
@@ -593,12 +631,14 @@ class SingleTestAnalysisPage(BasePage):
         lay.addWidget(self._skip_qc_chk)
 
         self._run_btn = QPushButton("Run Analysis  (F5)")
+        self._run_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._run_btn.clicked.connect(self._run_analysis)
         lay.addWidget(self._run_btn)
 
         lay.addStretch()
         scroll.setWidget(inner)
-        return scroll
+        outer.addWidget(scroll)
+        return container
 
     # ------------------------------------------------------------------ region
 
@@ -836,8 +876,11 @@ class SingleTestAnalysisPage(BasePage):
         for key, label, required in roles:
             combo = QComboBox()
             combo.addItems(current_cols)
-            suffix = "" if required else " (opt)"
-            self._role_layout.addLayout(_form_row(label + suffix, combo))
+            combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            if required:
+                self._role_layout.addLayout(_form_row(label, combo, required=True))
+            else:
+                self._role_layout.addLayout(_form_row(label, combo, optional=True))
             self._role_combos[key] = combo
 
     # ------------------------------------------------------------------ slots: steady state
@@ -1097,3 +1140,19 @@ class SingleTestAnalysisPage(BasePage):
             self._reload_config_list()
         if self._pending_config_id:
             self._apply_config_selection(self._pending_config_id)
+        if not self._splitter_initialized:
+            self._restore_splitter_state()
+            self._splitter_initialized = True
+
+    def _save_splitter_state(self, *_pos: int) -> None:
+        self._settings.setValue("sta/splitter", self._splitter.saveState())
+
+    def _restore_splitter_state(self) -> None:
+        state = self._settings.value("sta/splitter")
+        if state is not None:
+            try:
+                self._splitter.restoreState(state)
+                return
+            except Exception:
+                pass
+        self._splitter.setSizes([STA_PANEL_DEFAULT, 900])

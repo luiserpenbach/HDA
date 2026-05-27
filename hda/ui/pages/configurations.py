@@ -323,7 +323,7 @@ class _ConfigEditorWidget(QWidget):
         self._btn_delete = _secondary_btn("Delete")
         self._btn_delete.setStyleSheet(
             f"QPushButton[secondary='true'] {{ color: {ACCENT_RED}; border-color: {ACCENT_RED}; }}"
-            f"QPushButton[secondary='true']:hover {{ background: #fef2f2; }}"
+            f"QPushButton[secondary='true']:hover {{ background: {CONTENT_SECONDARY_BG}; }}"
         )
 
         for btn in (self._btn_save, self._btn_revert, self._btn_use, self._btn_clone,
@@ -659,15 +659,15 @@ class _ConfigEditorWidget(QWidget):
             self._hdr_badge.setText("Cold Flow")
             self._hdr_badge.setStyleSheet(
                 f"font-size: {SZ_SM}; font-weight: 600; padding: 2px 8px; "
-                f"border-radius: 3px; background: #eff6ff; color: {ACCENT_BLUE}; "
-                "border: 1px solid #bfdbfe;"
+                f"border-radius: 3px; background: {CONTENT_SECONDARY_BG}; color: {ACCENT_BLUE}; "
+                f"border: 1px solid {BORDER};"
             )
         else:
             self._hdr_badge.setText("Hot Fire")
             self._hdr_badge.setStyleSheet(
                 f"font-size: {SZ_SM}; font-weight: 600; padding: 2px 8px; "
-                f"border-radius: 3px; background: #fffbeb; color: {ACCENT_AMBER}; "
-                "border: 1px solid #fde68a;"
+                f"border-radius: 3px; background: {CONTENT_SECONDARY_BG}; color: {ACCENT_AMBER}; "
+                f"border: 1px solid {BORDER};"
             )
 
     def _update_edit_mode(self) -> None:

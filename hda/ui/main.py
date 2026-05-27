@@ -16,6 +16,8 @@ from PySide6.QtWidgets import QApplication
 
 from hda.ui.logging_setup import get_logger, setup_logging
 from hda.ui.main_window import HDAMainWindow
+from hda.ui.style import apply_app_font
+from hda.ui.wheel_guard import install_wheel_guard
 
 
 _log = get_logger("ui.main")
@@ -31,6 +33,8 @@ def main(
     _log.info("starting HDA desktop ui")
 
     app = QApplication(argv if argv is not None else sys.argv)
+    apply_app_font(app)
+    install_wheel_guard(app)
     app.setApplicationName("Hopper Data Studio")
     app.setOrganizationName("Hopper Propulsion Systems")
     app.setApplicationVersion("2.4.0")
