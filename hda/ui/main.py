@@ -12,15 +12,39 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QObject, QEvent
+from PySide6.QtWidgets import (
+    QApplication,
+    QAbstractSpinBox,
+    QComboBox,
+    QDateEdit,
+    QSlider,
+    QTimeEdit,
+)
 
 from hda.ui.logging_setup import get_logger, setup_logging
 from hda.ui.main_window import HDAMainWindow
 from hda.ui.style import apply_app_font
-from hda.ui.wheel_guard import install_wheel_guard
 
 
 _log = get_logger("ui.main")
+
+
+class _NoWheelOnInputsFilter(QObject):
+    """Drop wheel events on value inputs so scrolling never changes them."""
+
+    _TYPES = (
+        QAbstractSpinBox,
+        QComboBox,
+        QSlider,
+        QDateEdit,
+        QTimeEdit,
+    )
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Wheel and isinstance(obj, self._TYPES):
+            return True
+        return False
 
 
 def main(
@@ -34,7 +58,8 @@ def main(
 
     app = QApplication(argv if argv is not None else sys.argv)
     apply_app_font(app)
-    install_wheel_guard(app)
+    _wheel_blocker = _NoWheelOnInputsFilter(app)
+    app.installEventFilter(_wheel_blocker)
     app.setApplicationName("Hopper Data Studio")
     app.setOrganizationName("Hopper Propulsion Systems")
     app.setApplicationVersion("2.4.0")

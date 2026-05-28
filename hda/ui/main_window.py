@@ -35,10 +35,10 @@ from PySide6.QtWidgets import (
 from hda.ui.nav_bar import NavBar
 from hda.ui.pages.base import BasePage
 from hda.ui.pages.campaign_analysis import CampaignAnalysisPage
+from hda.ui.pages.analysis_tools import AnalysisToolsPage
 from hda.ui.pages.configurations import ConfigurationsPage
 from hda.ui.pages.single_test_analysis import SingleTestAnalysisPage
 from hda.ui.pages.placeholders import (
-    AnalysisToolsPage,
     BatchAnalysisPage,
     SystemAnalysisPage,
 )

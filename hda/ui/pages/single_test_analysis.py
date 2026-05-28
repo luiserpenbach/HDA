@@ -53,12 +53,19 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from hda.preprocessing import (
+    detect_time_unit,
+    preview_time_seconds,
+    run_preprocessing_pipeline,
+)
 from hda.test_type_utils import normalize_test_type
 from hda.ui.pages.base import BasePage, InfoBanner, MetricCard
+from hda.ui.plot_panels import PlotDockWorkspace, PlotRenderContext
 from hda.ui.style import (
     ACCENT_AMBER,
     ACCENT_BLUE,
@@ -78,12 +85,16 @@ from hda.ui.style import (
 )
 
 # ---------------------------------------------------------------------------
-# Colours for plot traces (cycles through these)
+# Colours for plot traces (legacy — panels use hda.ui.plot_panels.TRACE_COLORS)
 # ---------------------------------------------------------------------------
-_TRACE_COLORS = [
-    "#3b82f6", "#ef4444", "#16a34a", "#d97706",
-    "#8b5cf6", "#ec4899", "#06b6d4", "#84cc16",
-    "#f97316", "#6366f1",
+
+# Time unit options: (label, internal key)
+_TIME_UNIT_OPTIONS: List[Tuple[str, str]] = [
+    ("Unix timestamp (ms)", "unix_ms"),
+    ("Unix timestamp (s)", "unix_s"),
+    ("Relative ms", "ms"),
+    ("Relative s", "s"),
+    ("Relative μs", "us"),
 ]
 
 # Cold-flow sensor role labels (name → display label)
@@ -106,15 +117,17 @@ STA_PANEL_MAX = 520
 STA_PANEL_DEFAULT = 320
 
 
+from hda.plot_utils import default_steady_window
 # ===========================================================================
 # Background workers
 # ===========================================================================
 
 class _Sigs(QObject):
-    loaded   = Signal(object, str, list)  # (df, time_col, numeric_cols)
-    detected = Signal(float, float, str)  # (start_s, end_s, method)
-    finished = Signal(object)             # AnalysisResult
-    failed   = Signal(str)
+    loaded       = Signal(object, str, list)    # (df, time_col, numeric_cols)
+    preprocessed = Signal(object, object, object)  # (df, stats, df_before_trim)
+    detected     = Signal(float, float, str)    # (start_s, end_s, method)
+    finished     = Signal(object)               # AnalysisResult
+    failed       = Signal(str)
 
 
 class _LoadWorker(QRunnable):
@@ -167,6 +180,23 @@ class _DetectWorker(QRunnable):
             self.signals.failed.emit(str(exc))
 
 
+class _PreprocessWorker(QRunnable):
+    def __init__(self, df, options: dict) -> None:
+        super().__init__()
+        self.signals = _Sigs()
+        self._df = df
+        self._options = options
+        self.setAutoDelete(True)
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            df_out, stats, df_before = run_preprocessing_pipeline(self._df, **self._options)
+            self.signals.preprocessed.emit(df_out, stats, df_before)
+        except Exception as exc:
+            self.signals.failed.emit(str(exc))
+
+
 class _AnalysisWorker(QRunnable):
     def __init__(
         self,
@@ -176,9 +206,6 @@ class _AnalysisWorker(QRunnable):
         test_type: str,
         test_id: str,
         file_path: str,
-        resample_hz: Optional[float],
-        time_col: str,
-        time_unit: str,
     ) -> None:
         super().__init__()
         self.signals = _Sigs()
@@ -188,22 +215,15 @@ class _AnalysisWorker(QRunnable):
         self._test_type = test_type
         self._test_id = test_id
         self._file_path = file_path or None
-        self._resample_hz = resample_hz
-        self._time_col = time_col
-        self._time_unit = time_unit
         self.setAutoDelete(True)
 
     @Slot()
     def run(self) -> None:
         try:
-            import pandas as pd
-            import numpy as np
             from core.integrated_analysis import (
                 analyze_cold_flow_test,
                 analyze_hot_fire_test,
             )
-
-            df = self._preprocess(self._df.copy())
 
             fn = (
                 analyze_cold_flow_test
@@ -211,7 +231,7 @@ class _AnalysisWorker(QRunnable):
                 else analyze_hot_fire_test
             )
             result = fn(
-                df=df,
+                df=self._df,
                 config=self._cfg,
                 steady_window=self._steady,
                 test_id=self._test_id,
@@ -221,38 +241,6 @@ class _AnalysisWorker(QRunnable):
             self.signals.finished.emit(result)
         except Exception as exc:
             self.signals.failed.emit(str(exc))
-
-    def _preprocess(self, df):
-        import pandas as pd
-        import numpy as np
-
-        tc = self._time_col
-        if tc and tc in df.columns:
-            df = df.sort_values(tc).reset_index(drop=True)
-            df = df.drop_duplicates(subset=[tc], keep="first")
-
-            unit = self._time_unit
-            if unit == "ms":
-                df["time_s"] = df[tc] / 1000.0
-            elif unit == "μs":
-                df["time_s"] = df[tc] / 1_000_000.0
-            else:
-                df["time_s"] = df[tc].astype(float)
-
-            df["time_s"] = df["time_s"] - df["time_s"].iloc[0]
-            df["time_ms"] = df["time_s"] * 1000.0
-
-        if self._resample_hz and self._resample_hz > 0 and "time_s" in df.columns:
-            t = df["time_s"].values
-            new_t = np.arange(t[0], t[-1], 1.0 / self._resample_hz)
-            out = {"time_s": new_t, "time_ms": new_t * 1000.0}
-            for col in df.select_dtypes(include=["number"]).columns:
-                if col in {"time_s", "time_ms"}:
-                    continue
-                out[col] = np.interp(new_t, t, df[col].values)
-            df = pd.DataFrame(out)
-
-        return df
 
 
 # ===========================================================================
@@ -283,9 +271,10 @@ def _form_row(
     *,
     optional: bool = False,
     required: bool = False,
-) -> QVBoxLayout:
-    """Label above control — stays readable at any panel width."""
-    col = QVBoxLayout()
+) -> QWidget:
+    """Label above control in a widget row (safe to add/remove as one unit)."""
+    row = QWidget()
+    col = QVBoxLayout(row)
     col.setContentsMargins(0, 6, 0, 0)
     col.setSpacing(5)
     lbl = QLabel()
@@ -293,22 +282,15 @@ def _form_row(
     lbl.setWordWrap(True)
     lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
     if optional:
-        lbl.setText(
-            f'{label} <span style="color:{TEXT_MUTED}; font-weight:400;">(optional)</span>'
-        )
-        lbl.setTextFormat(Qt.TextFormat.RichText)
+        lbl.setText(f"{label} (optional)")
     elif required:
-        lbl.setText(
-            f'{label} <span style="color:{ACCENT_RED}; font-weight:600;">*</span>'
-        )
-        lbl.setTextFormat(Qt.TextFormat.RichText)
+        lbl.setText(f"{label} *")
     else:
         lbl.setText(label)
-        lbl.setTextFormat(Qt.TextFormat.PlainText)
     col.addWidget(lbl)
     widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     col.addWidget(widget)
-    return col
+    return row
 
 
 # ===========================================================================
@@ -397,73 +379,47 @@ class SingleTestAnalysisPage(BasePage):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
             "Single Test Analysis",
-            "Load a CSV, pick a config, map sensor roles, define the steady-state window, then run.",
+            "Load and preprocess data, then detect steady state and run analysis.",
             parent=parent,
         )
         self._settings = QSettings("HopperPropulsion", "HDA")
 
         # State
-        self._df = None                  # raw DataFrame after load
+        self._df_raw = None
+        self._df_processed = None
+        self._df_plot_source = None
+        self._trim_highlight: Optional[Tuple[float, float]] = None
+        self._preprocess_stats: dict = {}
         self._time_col: str = ""
         self._numeric_cols: List[str] = []
-        self._plot_items: Dict[str, Any] = {}   # col → PlotDataItem
-        self._region: Any = None                # LinearRegionItem
-        self._region_updating = False           # recursion guard
+        self._region_updating = False
+        self._trim_updating = False
         self._config_id: str = ""
         self._file_path: str = ""
         self._test_folder_path: str = ""
         self._pending_config_id: str = ""
-        self._splitter_initialized = False
+        self._plot_area_hosts: List[QWidget] = []
 
-        # ── Main splitter (left controls ↔ plot) ─────────────────────────────
-        self._splitter = QSplitter(Qt.Horizontal)
-        self._splitter.setHandleWidth(4)
-        self._splitter.setChildrenCollapsible(False)
-        self.content_layout.addWidget(self._splitter, 1)
+        # ── Tabbed workflow (mirrors Streamlit STA tabs) ─────────────────────
+        self._tabs = QTabWidget()
+        self.content_layout.addWidget(self._tabs, 1)
 
-        left_panel = self._build_left_panel()
-        self._splitter.addWidget(left_panel)
+        self._plot_area = self._build_plot_area()
 
-        # Right panel (plot + results)
-        right = QWidget()
-        right_lay = QVBoxLayout(right)
-        right_lay.setContentsMargins(16, 0, 0, 0)
-        right_lay.setSpacing(8)
+        pre_tab, pre_host = self._create_split_tab(self._build_preprocess_panel())
+        self._tabs.addTab(pre_tab, "Preprocessing")
+        self._plot_area_hosts.append(pre_host)
 
-        self._banner = InfoBanner(parent=right)
-        right_lay.addWidget(self._banner)
+        steady_tab, steady_host = self._create_split_tab(self._build_steady_panel())
+        self._tabs.addTab(steady_tab, "Steady State")
+        self._plot_area_hosts.append(steady_host)
+        self._add_plot_panel()
 
-        if _PG_OK:
-            self._plot = pg.PlotWidget()
-            self._plot.setBackground(PLOT_BG)
-            self._plot.showGrid(x=True, y=True, alpha=0.35)
-            self._plot.getAxis("bottom").setPen(PLOT_FG)
-            self._plot.getAxis("left").setPen(PLOT_FG)
-            self._plot.getAxis("bottom").setTextPen(PLOT_FG)
-            self._plot.getAxis("left").setTextPen(PLOT_FG)
-            self._plot.setLabel("bottom", "Time", units="s")
-            self._plot.addLegend(offset=(10, 10))
-            self._plot.setSizePolicy(
-                QSizePolicy.Expanding, QSizePolicy.Expanding
-            )
-            right_lay.addWidget(self._plot, 3)
-            self._add_region(0.0, 1.0)
-        else:
-            placeholder = QLabel("pyqtgraph not available — install it to see the plot.")
-            placeholder.setAlignment(Qt.AlignCenter)
-            placeholder.setStyleSheet(f"color: {TEXT_MUTED};")
-            right_lay.addWidget(placeholder, 3)
-            self._plot = None
+        for title in ("Analyze", "Results", "Export"):
+            self._tabs.addTab(self._placeholder_tab(title), title)
 
-        # Results (hidden until analysis runs)
-        self._results = _ResultsWidget(right)
-        self._results.hide()
-        right_lay.addWidget(self._results, 2)
-
-        self._splitter.addWidget(right)
-        self._splitter.setStretchFactor(0, 0)
-        self._splitter.setStretchFactor(1, 1)
-        self._splitter.splitterMoved.connect(self._save_splitter_state)
+        self._tabs.currentChanged.connect(self._on_workflow_tab_changed)
+        self._on_workflow_tab_changed(0)
 
         # Keyboard shortcuts
         sc_run = QShortcut(QKeySequence("F5"), self)
@@ -471,9 +427,84 @@ class SingleTestAnalysisPage(BasePage):
         sc_open = QShortcut(QKeySequence("Ctrl+O"), self)
         sc_open.activated.connect(self._browse_csv)
 
+    def _placeholder_tab(self, title: str) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.addStretch()
+        lbl = QLabel(f"{title} — coming soon.")
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: {SZ_BASE}; background: transparent;")
+        lay.addWidget(lbl)
+        lay.addStretch()
+        return w
+
+    def _create_split_tab(self, left_panel: QWidget) -> Tuple[QWidget, QWidget]:
+        tab = QWidget()
+        outer = QHBoxLayout(tab)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setHandleWidth(4)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(left_panel)
+        host = QWidget()
+        host_lay = QVBoxLayout(host)
+        host_lay.setContentsMargins(0, 0, 0, 0)
+        host_lay.setSpacing(0)
+        splitter.addWidget(host)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        outer.addWidget(splitter)
+        return tab, host
+
+    def _build_plot_area(self) -> QWidget:
+        area = QWidget()
+        lay = QVBoxLayout(area)
+        lay.setContentsMargins(16, 0, 0, 0)
+        lay.setSpacing(8)
+
+        self._banner = InfoBanner(parent=area)
+        lay.addWidget(self._banner)
+
+        self._status_lbl = QLabel("")
+        self._status_lbl.setWordWrap(True)
+        self._status_lbl.setStyleSheet(
+            f"color: {TEXT_SECONDARY}; font-size: {SZ_SM}; background: transparent;"
+        )
+        lay.addWidget(self._status_lbl)
+
+        plot_toolbar = QHBoxLayout()
+        plot_toolbar.setSpacing(8)
+        self._add_plot_btn = QPushButton("Add plot panel")
+        self._add_plot_btn.setProperty("secondary", True)
+        self._add_plot_btn.clicked.connect(self._add_plot_panel)
+        plot_toolbar.addWidget(self._add_plot_btn)
+        plot_toolbar.addStretch()
+        lay.addLayout(plot_toolbar)
+
+        self._plot_workspace = PlotDockWorkspace(area)
+        self._plot_workspace.setMinimumHeight(280)
+        self._plot_workspace.trim_lines_changed.connect(self._on_trim_lines_dragged)
+        self._plot_workspace.steady_region_changed.connect(self._on_steady_region_dragged)
+        lay.addWidget(self._plot_workspace, 3)
+
+        self._results = _ResultsWidget(area)
+        self._results.hide()
+        lay.addWidget(self._results, 2)
+        return area
+
+    def _on_workflow_tab_changed(self, index: int) -> None:
+        if index >= len(self._plot_area_hosts):
+            self._plot_area.hide()
+            return
+        host = self._plot_area_hosts[index]
+        self._plot_area.setParent(None)
+        host.layout().addWidget(self._plot_area)
+        self._plot_area.show()
+
     # ------------------------------------------------------------------ panels
 
-    def _build_left_panel(self) -> QWidget:
+    def _build_scroll_panel(self) -> Tuple[QWidget, QVBoxLayout]:
         container = QWidget()
         container.setMinimumWidth(STA_PANEL_MIN)
         container.setMaximumWidth(STA_PANEL_MAX)
@@ -489,14 +520,17 @@ class SingleTestAnalysisPage(BasePage):
             f"QScrollArea {{ background: transparent; border: none; "
             f"border-right: 1px solid {BORDER}; }}"
         )
-
         inner = QWidget()
         inner.setMinimumWidth(STA_PANEL_MIN - 24)
         lay = QVBoxLayout(inner)
         lay.setContentsMargins(12, 4, 12, 16)
         lay.setSpacing(6)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
+        return container, lay
 
-        # ── Data ────────────────────────────────────────────────────────────
+    def _build_preprocess_panel(self) -> QWidget:
+        container, lay = self._build_scroll_panel()
         lay.addWidget(_section("Data"))
         lay.addWidget(_divider())
 
@@ -540,11 +574,29 @@ class SingleTestAnalysisPage(BasePage):
         lay.addWidget(_divider())
 
         self._time_col_combo = QComboBox()
-        lay.addLayout(_form_row("Time col", self._time_col_combo))
+        lay.addWidget(_form_row("Time col", self._time_col_combo))
 
         self._time_unit_combo = QComboBox()
-        self._time_unit_combo.addItems(["ms", "s", "μs"])
-        lay.addLayout(_form_row("Time unit", self._time_unit_combo))
+        for label, key in _TIME_UNIT_OPTIONS:
+            self._time_unit_combo.addItem(label, key)
+        lay.addWidget(_form_row("Time unit", self._time_unit_combo))
+
+        self._shift_zero_chk = QCheckBox("Shift time to t = 0")
+        self._shift_zero_chk.setChecked(True)
+        self._shift_zero_chk.setStyleSheet(f"font-size: {SZ_SM}; background: transparent;")
+        self._shift_zero_chk.toggled.connect(self._on_plot_settings_changed)
+        lay.addWidget(self._shift_zero_chk)
+
+        self._mapping_chk = QCheckBox("Apply channel mapping from config")
+        self._mapping_chk.setChecked(True)
+        self._mapping_chk.setStyleSheet(f"font-size: {SZ_SM}; background: transparent;")
+        lay.addWidget(self._mapping_chk)
+
+        self._nan_method_combo = QComboBox()
+        self._nan_method_combo.addItems(
+            ["interpolate+ffill", "interpolate", "ffill", "drop", "none"]
+        )
+        lay.addWidget(_form_row("Gap filling", self._nan_method_combo))
 
         self._resample_chk = QCheckBox("Enable resampling")
         self._resample_chk.setStyleSheet(f"font-size: {SZ_SM}; background: transparent;")
@@ -557,9 +609,40 @@ class SingleTestAnalysisPage(BasePage):
         self._resample_hz.setEnabled(False)
         self._resample_chk.toggled.connect(self._resample_hz.setEnabled)
         lay.addWidget(self._resample_chk)
-        lay.addLayout(_form_row("Rate", self._resample_hz))
+        lay.addWidget(_form_row("Rate", self._resample_hz))
 
-        # ── Plot channels ───────────────────────────────────────────────────
+        self._trim_chk = QCheckBox("Trim time window")
+        self._trim_chk.setStyleSheet(f"font-size: {SZ_SM}; background: transparent;")
+        self._trim_chk.toggled.connect(self._on_trim_toggled)
+        lay.addWidget(self._trim_chk)
+        self._trim_start = QDoubleSpinBox()
+        self._trim_start.setRange(0, 1_000_000)
+        self._trim_start.setDecimals(3)
+        self._trim_start.setSuffix(" s")
+        self._trim_start.setEnabled(False)
+        self._trim_end = QDoubleSpinBox()
+        self._trim_end.setRange(0, 1_000_000)
+        self._trim_end.setDecimals(3)
+        self._trim_end.setSuffix(" s")
+        self._trim_end.setEnabled(False)
+        self._trim_chk.toggled.connect(self._trim_start.setEnabled)
+        self._trim_chk.toggled.connect(self._trim_end.setEnabled)
+        self._trim_start.valueChanged.connect(self._on_trim_spinbox_changed)
+        self._trim_end.valueChanged.connect(self._on_trim_spinbox_changed)
+        lay.addWidget(_form_row("Trim start", self._trim_start))
+        lay.addWidget(_form_row("Trim end", self._trim_end))
+
+        self._preprocess_btn = QPushButton("Run preprocessing")
+        self._preprocess_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._preprocess_btn.clicked.connect(self._run_preprocessing)
+        lay.addWidget(self._preprocess_btn)
+
+        self._save_processed_btn = QPushButton("Save processed CSV…")
+        self._save_processed_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._save_processed_btn.setEnabled(False)
+        self._save_processed_btn.clicked.connect(self._save_processed_csv)
+        lay.addWidget(self._save_processed_btn)
+
         lay.addWidget(_section("Plot channels"))
         lay.addWidget(_divider())
 
@@ -570,9 +653,23 @@ class SingleTestAnalysisPage(BasePage):
             f"QListWidget::item {{ padding: 2px 4px; }}"
         )
         self._channel_list.itemChanged.connect(self._on_channel_toggled)
-        lay.addWidget(self._channel_list)
+        lay.addWidget(_form_row("Plot template channels", self._channel_list))
+        hint = QLabel("Checked channels are used as defaults when adding a new plot panel.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: {SZ_XS}; background: transparent;"
+        )
+        lay.addWidget(hint)
 
-        # ── Sensor roles ─────────────────────────────────────────────────────
+        self._time_col_combo.currentIndexChanged.connect(self._on_plot_settings_changed)
+        self._time_unit_combo.currentIndexChanged.connect(self._on_plot_settings_changed)
+
+        lay.addStretch()
+        return container
+
+    def _build_steady_panel(self) -> QWidget:
+        container, lay = self._build_scroll_panel()
+
         lay.addWidget(_section("Sensor roles"))
         lay.addWidget(_divider())
 
@@ -584,13 +681,12 @@ class SingleTestAnalysisPage(BasePage):
         lay.addWidget(self._role_box)
         self._rebuild_role_combos("cold_flow")
 
-        # ── Steady state ────────────────────────────────────────────────────
         lay.addWidget(_section("Steady state"))
         lay.addWidget(_divider())
 
         self._detect_method = QComboBox()
         self._detect_method.addItems(["cv", "ml", "derivative", "simple"])
-        lay.addLayout(_form_row("Detection method", self._detect_method))
+        lay.addWidget(_form_row("Detection method", self._detect_method))
 
         self._detect_btn = QPushButton("Auto-detect")
         self._detect_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -603,7 +699,7 @@ class SingleTestAnalysisPage(BasePage):
         self._ss_start.setSuffix(" s")
         self._ss_start.setSingleStep(0.1)
         self._ss_start.valueChanged.connect(self._on_spinbox_changed)
-        lay.addLayout(_form_row("Start", self._ss_start))
+        lay.addWidget(_form_row("Start", self._ss_start))
 
         self._ss_end = QDoubleSpinBox()
         self._ss_end.setRange(0, 100000)
@@ -612,19 +708,18 @@ class SingleTestAnalysisPage(BasePage):
         self._ss_end.setSingleStep(0.1)
         self._ss_end.setValue(1.0)
         self._ss_end.valueChanged.connect(self._on_spinbox_changed)
-        lay.addLayout(_form_row("End", self._ss_end))
+        lay.addWidget(_form_row("End", self._ss_end))
 
-        # ── Run ─────────────────────────────────────────────────────────────
         lay.addWidget(_section("Analysis"))
         lay.addWidget(_divider())
 
         self._test_id_edit = QLineEdit()
         self._test_id_edit.setPlaceholderText("e.g. INJ-CF-042")
-        lay.addLayout(_form_row("Test ID", self._test_id_edit))
+        lay.addWidget(_form_row("Test ID", self._test_id_edit))
 
         self._operator_edit = QLineEdit()
         self._operator_edit.setPlaceholderText("your name")
-        lay.addLayout(_form_row("Operator", self._operator_edit))
+        lay.addWidget(_form_row("Operator", self._operator_edit))
 
         self._skip_qc_chk = QCheckBox("Skip QC (not recommended)")
         self._skip_qc_chk.setStyleSheet(f"font-size: {SZ_SM}; background: transparent;")
@@ -636,83 +731,209 @@ class SingleTestAnalysisPage(BasePage):
         lay.addWidget(self._run_btn)
 
         lay.addStretch()
-        scroll.setWidget(inner)
-        outer.addWidget(scroll)
         return container
 
-    # ------------------------------------------------------------------ region
+    # ------------------------------------------------------------------ plot workspace
 
-    def _add_region(self, start: float, end: float) -> None:
-        if not _PG_OK or self._plot is None:
-            return
-        if self._region is not None:
-            self._plot.removeItem(self._region)
-        self._region = pg.LinearRegionItem(
-            [start, end],
-            movable=True,
-            brush=pg.mkBrush(59, 130, 246, 25),
-            pen=pg.mkPen(color="#3b82f6", width=1),
+    def _default_channels_from_template(self) -> List[str]:
+        channel_list = getattr(self, "_channel_list", None)
+        if channel_list is None:
+            return self._numeric_cols[:3]
+        cols: List[str] = []
+        for i in range(channel_list.count()):
+            item = channel_list.item(i)
+            if item.checkState() == Qt.Checked:
+                cols.append(item.text())
+        return cols or self._numeric_cols[:3]
+
+    def _add_plot_panel(self) -> None:
+        self._plot_workspace.add_panel(
+            available_channels=self._numeric_cols,
+            default_channels=self._default_channels_from_template(),
         )
-        self._region.sigRegionChanged.connect(self._on_region_changed)
-        self._plot.addItem(self._region)
+        self._rebuild_plot()
+
+    def _plot_dataframe(self):
+        if self._df_plot_source is not None:
+            return self._df_plot_source
+        if self._df_processed is not None:
+            return self._df_processed
+        return self._df_raw
+
+    def _build_plot_context(self) -> PlotRenderContext:
+        df = self._plot_dataframe()
+        t = np.array([])
+        if df is not None:
+            if "time_s" in df.columns:
+                t = df["time_s"].values.astype(float)
+            else:
+                t = preview_time_seconds(
+                    df,
+                    self._time_col_combo.currentText(),
+                    self._selected_time_unit(),
+                    shift_to_zero=self._shift_zero_chk.isChecked(),
+                )
+
+        trim_lo = self._trim_start.value()
+        trim_hi = self._trim_end.value()
+        show_trim = self._trim_chk.isChecked()
+        highlight = self._trim_highlight is not None and self._df_plot_source is not None
+        trim_range = self._trim_highlight if highlight else None
+        if highlight and trim_range is None:
+            trim_range = (min(trim_lo, trim_hi), max(trim_lo, trim_hi))
+
+        preview_highlight = (
+            show_trim
+            and not highlight
+            and df is not None
+            and len(t) > 0
+        )
+        if preview_highlight:
+            trim_range = (min(trim_lo, trim_hi), max(trim_lo, trim_hi))
+
+        return PlotRenderContext(
+            df=df,
+            time_seconds=t,
+            available_channels=self._numeric_cols,
+            trim_range=trim_range,
+            show_trim_lines=show_trim,
+            trim_line_positions=(min(trim_lo, trim_hi), max(trim_lo, trim_hi)) if show_trim else None,
+            steady_range=(self._ss_start.value(), self._ss_end.value()),
+            highlight_trim=highlight or preview_highlight,
+        )
 
     @Slot()
-    def _on_region_changed(self) -> None:
+    def _on_trim_toggled(self, enabled: bool) -> None:
+        self._rebuild_plot()
+
+    @Slot()
+    def _on_trim_spinbox_changed(self, *_args) -> None:
+        if self._trim_updating or not self._trim_chk.isChecked():
+            return
+        self._rebuild_plot()
+
+    @Slot(float, float)
+    def _on_trim_lines_dragged(self, lo: float, hi: float) -> None:
+        if self._trim_updating:
+            return
+        lo, hi = min(lo, hi), max(lo, hi)
+        self._trim_updating = True
+        try:
+            self._trim_start.blockSignals(True)
+            self._trim_end.blockSignals(True)
+            self._trim_start.setValue(lo)
+            self._trim_end.setValue(hi)
+            self._trim_start.blockSignals(False)
+            self._trim_end.blockSignals(False)
+        finally:
+            self._trim_updating = False
+        ctx = self._build_plot_context()
+        self._plot_workspace.update_context(
+            trim_line_positions=ctx.trim_line_positions,
+            trim_range=ctx.trim_range,
+            highlight_trim=ctx.highlight_trim,
+        )
+        self._plot_workspace.render_traces()
+
+    @Slot(float, float)
+    def _on_steady_region_dragged(self, lo: float, hi: float) -> None:
         if self._region_updating:
             return
+        lo, hi = min(lo, hi), max(lo, hi)
         self._region_updating = True
         try:
-            lo, hi = self._region.getRegion()
+            self._ss_start.blockSignals(True)
+            self._ss_end.blockSignals(True)
             self._ss_start.setValue(lo)
             self._ss_end.setValue(hi)
+            self._ss_start.blockSignals(False)
+            self._ss_end.blockSignals(False)
         finally:
             self._region_updating = False
+        self._plot_workspace.update_context(steady_range=(lo, hi))
 
     @Slot()
-    def _on_spinbox_changed(self) -> None:
-        if self._region_updating or self._region is None:
+    def _on_spinbox_changed(self, *_args) -> None:
+        if self._region_updating:
             return
-        self._region_updating = True
-        try:
-            self._region.setRegion([self._ss_start.value(), self._ss_end.value()])
-        finally:
-            self._region_updating = False
+        self._plot_workspace.set_steady_region(
+            self._ss_start.value(), self._ss_end.value()
+        )
 
-    # ------------------------------------------------------------------ plot
+    def _set_steady_window_seconds(self, start_s: float, end_s: float) -> None:
+        self._ss_start.blockSignals(True)
+        self._ss_end.blockSignals(True)
+        self._ss_start.setValue(start_s)
+        self._ss_end.setValue(end_s)
+        self._ss_start.blockSignals(False)
+        self._ss_end.blockSignals(False)
+        self._plot_workspace.set_steady_region(start_s, end_s)
+
+    @Slot()
+    def _on_plot_settings_changed(self, *_args) -> None:
+        self._rebuild_plot()
 
     def _rebuild_plot(self) -> None:
-        if not _PG_OK or self._plot is None or self._df is None:
+        ctx = self._build_plot_context()
+        self._plot_workspace.update_context(
+            df=ctx.df,
+            time_seconds=ctx.time_seconds,
+            available_channels=ctx.available_channels,
+            trim_range=ctx.trim_range,
+            show_trim_lines=ctx.show_trim_lines,
+            trim_line_positions=ctx.trim_line_positions,
+            steady_range=ctx.steady_range,
+            highlight_trim=ctx.highlight_trim,
+        )
+        self._plot_workspace.refresh()
+
+    def _selected_time_unit(self) -> str:
+        data = self._time_unit_combo.currentData()
+        if data:
+            return str(data)
+        return "unix_ms"
+
+    def _set_time_unit(self, unit_key: str) -> None:
+        idx = self._time_unit_combo.findData(unit_key)
+        if idx >= 0:
+            self._time_unit_combo.setCurrentIndex(idx)
+
+    def _active_df(self):
+        return self._df_processed if self._df_processed is not None else self._df_raw
+
+    def _update_data_status_label(self) -> None:
+        df = self._active_df()
+        if df is None:
+            self._status_lbl.setText("")
             return
-
-        # Remove old items (keep region and legend)
-        for item in list(self._plot_items.values()):
-            self._plot.removeItem(item)
-        self._plot_items.clear()
-
-        time_col = self._time_col_combo.currentText()
-        if not time_col or time_col not in self._df.columns:
-            return
-
-        t = self._df[time_col].values
-
-        color_idx = 0
-        for i in range(self._channel_list.count()):
-            item = self._channel_list.item(i)
-            if item.checkState() != Qt.Checked:
-                continue
-            col = item.text()
-            if col not in self._df.columns:
-                continue
-            color = _TRACE_COLORS[color_idx % len(_TRACE_COLORS)]
-            color_idx += 1
-            pen = pg.mkPen(color=color, width=1.5)
-            pi = self._plot.plot(t, self._df[col].values, pen=pen, name=col)
-            self._plot_items[col] = pi
-
-        # Ensure region stays on top
-        if self._region is not None:
-            self._plot.removeItem(self._region)
-            self._plot.addItem(self._region)
+        rows = len(df)
+        status = "Preprocessed" if self._df_processed is not None else "Raw"
+        if self._trim_highlight and self._df_plot_source is not None:
+            status = "Preprocessed (trim preview)"
+        dur = "—"
+        plot_df = self._plot_dataframe()
+        if plot_df is None:
+            plot_df = df
+        if "time_s" in plot_df.columns and len(plot_df) > 0:
+            t = plot_df["time_s"].values.astype(float)
+            dur = f"{float(t[-1] - t[0]):.3f} s"
+        else:
+            t = preview_time_seconds(
+                plot_df,
+                self._time_col_combo.currentText(),
+                self._selected_time_unit(),
+                shift_to_zero=self._shift_zero_chk.isChecked(),
+            )
+            if len(t) > 0:
+                dur = f"{float(t[-1] - t[0]):.3f} s"
+        parts = [f"{rows:,} rows", f"Duration: {dur}", status]
+        if self._preprocess_stats:
+            rs = self._preprocess_stats.get("resample", {})
+            if rs.get("resampled_rows"):
+                parts.append(f"Resampled: {rs['resampled_rows']:,} pts")
+            if self._preprocess_stats.get("trim"):
+                parts.append("Trimmed")
+        self._status_lbl.setText("  ·  ".join(parts))
 
     # ------------------------------------------------------------------ slots: data
 
@@ -748,18 +969,18 @@ class SingleTestAnalysisPage(BasePage):
 
     @Slot(object, str, list)
     def _on_csv_loaded(self, df, time_col: str, numeric_cols: List[str]) -> None:
-        self._df = df
+        self._df_raw = df
+        self._df_processed = None
+        self._df_plot_source = None
+        self._trim_highlight = None
+        self._preprocess_stats = {}
+        self._save_processed_btn.setEnabled(False)
         self._time_col = time_col
         self._numeric_cols = numeric_cols
 
         rows, cols = df.shape
-        t_min = t_max = 0.0
-        if time_col and time_col in df.columns:
-            t_min = float(df[time_col].min())
-            t_max = float(df[time_col].max())
-        self._info_label.setText(f"{rows:,} rows × {cols} cols  |  {t_max - t_min:.1f} time units")
+        self._info_label.setText(f"{rows:,} rows × {cols} cols  ·  raw data")
 
-        # Populate time-col combo
         self._time_col_combo.blockSignals(True)
         self._time_col_combo.clear()
         time_candidates = [
@@ -775,7 +996,42 @@ class SingleTestAnalysisPage(BasePage):
                 self._time_col_combo.setCurrentIndex(idx)
         self._time_col_combo.blockSignals(False)
 
-        # Populate channel checklist (first 8 checked)
+        self._refresh_channel_list(numeric_cols)
+        self._refresh_role_combos(numeric_cols)
+
+        if time_col and time_col in df.columns:
+            detected = detect_time_unit(df[time_col])
+            self._set_time_unit(detected)
+            t = preview_time_seconds(
+                df,
+                time_col,
+                detected,
+                shift_to_zero=self._shift_zero_chk.isChecked(),
+            )
+            if len(t) > 0:
+                t_min = float(np.min(t))
+                t_max = float(np.max(t))
+                self._trim_start.setValue(t_min)
+                self._trim_end.setValue(max(t_max, t_min + 0.001))
+                lo, hi = default_steady_window(t_min, t_max)
+                self._set_steady_window_seconds(lo, hi)
+
+        self._update_data_status_label()
+        self._rebuild_plot()
+
+        if self._test_folder_path:
+            self._apply_test_folder_metadata(self._test_folder_path)
+
+        self._banner.show_message(
+            f"Loaded {Path(self._file_path).name} — {rows:,} rows, {len(numeric_cols)} channels.",
+            "success",
+        )
+        self.status_message.emit(
+            f"Loaded {Path(self._file_path).name} — {rows:,} rows, {len(numeric_cols)} channels."
+        )
+
+    def _refresh_channel_list(self, numeric_cols: List[str]) -> None:
+        self._numeric_cols = numeric_cols
         self._channel_list.blockSignals(True)
         self._channel_list.clear()
         for i, col in enumerate(numeric_cols):
@@ -785,7 +1041,7 @@ class SingleTestAnalysisPage(BasePage):
             self._channel_list.addItem(item)
         self._channel_list.blockSignals(False)
 
-        # Populate sensor role combos with empty + column names
+    def _refresh_role_combos(self, numeric_cols: List[str]) -> None:
         blank_plus_cols = [""] + numeric_cols
         for combo in self._role_combos.values():
             combo.blockSignals(True)
@@ -793,31 +1049,140 @@ class SingleTestAnalysisPage(BasePage):
             combo.addItems(blank_plus_cols)
             combo.blockSignals(False)
 
-        # Set steady-state region to middle 50%
-        if time_col and time_col in df.columns:
-            dur = t_max - t_min
-            lo = t_min + dur * 0.25
-            hi = t_min + dur * 0.75
-            self._ss_start.setValue(lo)
-            self._ss_end.setValue(hi)
-            if self._region is not None:
-                self._add_region(lo, hi)
+    @Slot()
+    def _run_preprocessing(self) -> None:
+        if self._df_raw is None:
+            self._banner.show_message("Load a CSV first.", "warning")
+            return
+        time_col = self._time_col_combo.currentText()
+        if not time_col:
+            self._banner.show_message("Select a time column.", "warning")
+            return
 
+        config = self._build_analysis_config()
+        options = {
+            "time_col": time_col,
+            "time_unit": self._selected_time_unit(),
+            "shift_to_zero": self._shift_zero_chk.isChecked(),
+            "nan_method": self._nan_method_combo.currentText(),
+            "resample_hz": self._resample_hz.value() if self._resample_chk.isChecked() else None,
+            "config": config,
+            "apply_mapping": self._mapping_chk.isChecked() and config is not None,
+        }
+        if self._trim_chk.isChecked():
+            options["trim_start_s"] = self._trim_start.value()
+            options["trim_end_s"] = self._trim_end.value()
+
+        self._preprocess_btn.setEnabled(False)
+        self._banner.show_message("Preprocessing…", "info")
+        self.status_message.emit("Preprocessing…")
+        worker = _PreprocessWorker(self._df_raw, options)
+        worker.signals.preprocessed.connect(self._on_preprocessed)
+        worker.signals.failed.connect(self._on_preprocess_failed)
+        QThreadPool.globalInstance().start(worker)
+
+    @Slot(str)
+    def _on_preprocess_failed(self, error: str) -> None:
+        self._preprocess_btn.setEnabled(True)
+        self._banner.show_message(f"Preprocessing failed: {error}", "error")
+        self.status_message.emit(f"Preprocessing failed: {error}")
+
+    @Slot(object, object, object)
+    def _on_preprocessed(self, df, stats: dict, df_before_trim=None) -> None:
+        self._preprocess_btn.setEnabled(True)
+        self._df_processed = df
+        self._preprocess_stats = stats or {}
+
+        trim_stats = (stats or {}).get("trim") or {}
+        if df_before_trim is not None and trim_stats:
+            self._df_plot_source = df_before_trim
+            self._trim_highlight = (
+                float(trim_stats.get("start_s", self._trim_start.value())),
+                float(trim_stats.get("end_s", self._trim_end.value())),
+            )
+        else:
+            self._df_plot_source = df
+            self._trim_highlight = None
+
+        time_derived = {"time_s", "time_ms"}
+        numeric_cols = [
+            c for c in df.select_dtypes(include=["number"]).columns
+            if c not in time_derived
+        ]
+        self._refresh_channel_list(numeric_cols)
+        self._refresh_role_combos(numeric_cols)
+
+        dur = float(stats.get("duration_s", 0.0) or 0.0)
+        if dur <= 0 and "time_s" in df.columns and len(df) > 0:
+            dur = float(df["time_s"].max() - df["time_s"].min())
+
+        plot_dur = dur
+        if self._df_plot_source is not None and "time_s" in self._df_plot_source.columns:
+            src_t = self._df_plot_source["time_s"]
+            if len(src_t) > 0:
+                plot_dur = float(src_t.max() - src_t.min())
+
+        if trim_stats:
+            self._trim_start.setValue(float(trim_stats.get("start_s", 0.0)))
+            self._trim_end.setValue(float(trim_stats.get("end_s", plot_dur)))
+        else:
+            self._trim_start.setValue(0.0)
+            self._trim_end.setValue(max(plot_dur, 0.001))
+        if "time_s" in df.columns and len(df) > 0:
+            t_min = float(df["time_s"].min())
+            t_max = float(df["time_s"].max())
+            lo, hi = default_steady_window(t_min, t_max)
+            self._set_steady_window_seconds(lo, hi)
+
+        self._save_processed_btn.setEnabled(True)
+        self._update_data_status_label()
         self._rebuild_plot()
 
-        if self._test_folder_path:
-            self._apply_test_folder_metadata(self._test_folder_path)
+        rows = stats.get("final_rows", len(df))
+        msg = f"Preprocessing complete — {rows:,} rows ready for analysis."
+        self._banner.show_message(msg, "success")
+        self.status_message.emit(msg)
 
-        self._banner.show_message(
-            f"Loaded {Path(self._file_path).name} — {rows:,} rows, {len(numeric_cols)} channels.", "success"
+    @Slot()
+    def _save_processed_csv(self) -> None:
+        if self._df_processed is None:
+            self._banner.show_message("Run preprocessing first.", "warning")
+            return
+
+        default_dir = str(Path(self._file_path).parent) if self._file_path else ""
+        default_name = "processed_data.csv"
+        if self._test_folder_path:
+            proc_dir = Path(self._test_folder_path) / "processed"
+            proc_dir.mkdir(parents=True, exist_ok=True)
+            default_dir = str(proc_dir)
+            default_name = "data.csv"
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save processed CSV",
+            str(Path(default_dir) / default_name),
+            "CSV files (*.csv);;All files (*)",
         )
-        self.status_message.emit(
-            f"Loaded {Path(self._file_path).name} — {rows:,} rows, {len(numeric_cols)} channels."
-        )
+        if not path:
+            return
+        try:
+            out = self._df_processed.copy()
+            if "time_s" in out.columns:
+                out["time_s"] = out["time_s"].round(3)
+            if "time_ms" in out.columns:
+                out["time_ms"] = (out["time_s"] * 1000.0).round(1)
+            out.to_csv(path, index=False, float_format="%.3f")
+            msg = f"Saved processed data to {Path(path).name}"
+            self._banner.show_message(msg, "success")
+            self.status_message.emit(msg)
+        except Exception as exc:
+            self._banner.show_message(f"Save failed: {exc}", "error")
+            self.status_message.emit(f"Save failed: {exc}")
 
     @Slot()
     def _on_channel_toggled(self, _item: QListWidgetItem) -> None:
-        self._rebuild_plot()
+        # Template channels only apply when adding new plot panels.
+        pass
 
     # ------------------------------------------------------------------ slots: config
 
@@ -834,6 +1199,15 @@ class SingleTestAnalysisPage(BasePage):
         self._config_type_lbl.setStyleSheet(
             f"color: {color}; font-size: {SZ_XS}; font-weight: 600; background: transparent;"
         )
+
+        cfg_dict = cfg.to_config() if cfg else {}
+        rate = (cfg_dict.get("settings") or {}).get("sample_rate_hz", 100)
+        self._resample_hz.setValue(float(rate))
+        channel_config = cfg_dict.get("channel_config") or cfg_dict.get("columns") or {}
+        has_mapping = bool(channel_config)
+        self._mapping_chk.setEnabled(has_mapping)
+        if not has_mapping:
+            self._mapping_chk.setChecked(False)
 
     def _load_config_obj(self):
         if not self._config_id:
@@ -878,24 +1252,25 @@ class SingleTestAnalysisPage(BasePage):
             combo.addItems(current_cols)
             combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             if required:
-                self._role_layout.addLayout(_form_row(label, combo, required=True))
+                self._role_layout.addWidget(_form_row(label, combo, required=True))
             else:
-                self._role_layout.addLayout(_form_row(label, combo, optional=True))
+                self._role_layout.addWidget(_form_row(label, combo, optional=True))
             self._role_combos[key] = combo
 
     # ------------------------------------------------------------------ slots: steady state
 
     @Slot()
     def _auto_detect(self) -> None:
-        if self._df is None:
-            self._banner.show_message("Load a CSV first.", "warning")
+        df = self._df_processed
+        if df is None:
+            self._banner.show_message("Run preprocessing on the Preprocessing tab first.", "warning")
             return
         config = self._build_analysis_config() or {}
         method = self._detect_method.currentText()
         config["preferred_method"] = method
         self._banner.show_message("Detecting steady state…", "info")
         self.status_message.emit("Detecting steady state…")
-        worker = _DetectWorker(self._df, config)
+        worker = _DetectWorker(df, config)
         worker.signals.detected.connect(self._on_detected)
         worker.signals.failed.connect(self._on_detect_failed)
         QThreadPool.globalInstance().start(worker)
@@ -907,9 +1282,7 @@ class SingleTestAnalysisPage(BasePage):
 
     @Slot(float, float, str)
     def _on_detected(self, start: float, end: float, method: str) -> None:
-        self._ss_start.setValue(start)
-        self._ss_end.setValue(end)
-        self._add_region(start, end)
+        self._set_steady_window_seconds(start, end)
         msg = f"Steady state: {start:.3f}–{end:.3f} s  ({end - start:.2f} s, method: {method})"
         self._banner.show_message(msg, "success")
         self.status_message.emit(msg)
@@ -918,8 +1291,11 @@ class SingleTestAnalysisPage(BasePage):
 
     @Slot()
     def _run_analysis(self) -> None:
-        if self._df is None:
-            self._banner.show_message("Load a CSV first.", "warning")
+        if self._df_processed is None:
+            self._banner.show_message(
+                "Run preprocessing on the Preprocessing tab before analysis.",
+                "warning",
+            )
             return
 
         config = self._build_analysis_config()
@@ -935,27 +1311,18 @@ class SingleTestAnalysisPage(BasePage):
             self._banner.show_message("Steady-state end must be after start.", "warning")
             return
 
-        resample_hz: Optional[float] = (
-            self._resample_hz.value() if self._resample_chk.isChecked() else None
-        )
-        time_col = self._time_col_combo.currentText()
-        time_unit = self._time_unit_combo.currentText()
-
         self._banner.show_message("Running analysis…", "info")
         self.status_message.emit(f"Running analysis for {test_id}…")
         self._run_btn.setEnabled(False)
         self._results.hide()
 
         worker = _AnalysisWorker(
-            df=self._df,
+            df=self._df_processed,
             config=config,
             steady_s=steady,
             test_type=test_type,
             test_id=test_id,
             file_path=self._file_path,
-            resample_hz=resample_hz,
-            time_col=time_col,
-            time_unit=time_unit,
         )
         worker.signals.finished.connect(self._on_analysis_done)
         worker.signals.failed.connect(self._on_analysis_failed)
@@ -1140,19 +1507,3 @@ class SingleTestAnalysisPage(BasePage):
             self._reload_config_list()
         if self._pending_config_id:
             self._apply_config_selection(self._pending_config_id)
-        if not self._splitter_initialized:
-            self._restore_splitter_state()
-            self._splitter_initialized = True
-
-    def _save_splitter_state(self, *_pos: int) -> None:
-        self._settings.setValue("sta/splitter", self._splitter.saveState())
-
-    def _restore_splitter_state(self) -> None:
-        state = self._settings.value("sta/splitter")
-        if state is not None:
-            try:
-                self._splitter.restoreState(state)
-                return
-            except Exception:
-                pass
-        self._splitter.setSizes([STA_PANEL_DEFAULT, 900])
