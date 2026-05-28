@@ -1,142 +1,138 @@
-# HDA v3 — Qt6 / PySide6 rewrite
+# HDA Desktop (Qt / PySide6)
 
-This package is the new Hopper Data Studio, built alongside the existing
-Streamlit app in `core/` and `pages/`. The Streamlit code is **untouched**;
-v3 will be developed in parallel and replace it when feature-complete.
+Native desktop UI for Hopper Data Studio. It runs **alongside** the Streamlit app
+(`app.py` + `pages/`) and uses the same **`core/`** analysis engine, campaign
+databases, and saved configs.
 
-## Why a rewrite
+## Quick start
 
-A deep audit of the Streamlit app surfaced architectural issues that cannot
-be fixed incrementally: implicit session-state coupling, full-page reruns,
-business logic in pages, race-prone state transitions, per-campaign SQLite
-files that block cross-campaign analytics, missing structured logging, and
-SPC bugs that affect every campaign chart. v3 addresses these from the
-ground up.
-
-## Layered architecture
-
-```
-domain/       pure-python core. No I/O, no Qt, no DB.
-persistence/  SQLite (WAL) + migrations + repositories. One hda.db.
-services/     orchestration, threading, watch-folder.
-ui/           PySide6 widgets (added in a later commit).
-```
-
-**Hard rules** (enforced by import discipline + a future CI check):
-
-- `domain/` may not import `persistence/`, `services/`, or `ui/`.
-- `services/` may not import `ui/`.
-- Only `ui/` owns the Qt event loop.
-
-## Workflow primitives
-
-| Concept | Where | Notes |
-|---|---|---|
-| Single test belongs to a campaign | `domain.types.Campaign` | Single-test "ad-hoc" campaigns are first-class. |
-| Cross-campaign part tracking | `persistence` schema | Single `hda.db` with `hardware(part_number, serial_number)` indexed for filtering across campaigns. |
-| Plugin-aware metadata at ingest | `domain.types.TestMetadata.extra` | Plugin-declared fields persist into traceability. |
-| Frictionless ingest | `services.IngestService.enqueue` | Watch folder, drag-drop, dialog, CLI all converge here. |
-| Calculated channels & measurements | `domain.derived` | Declarative specs + a `FormulaLibrary` registry. Participate in QC and traceability. |
-| TestRun lifecycle | `domain.state.TestState` + `transition()` | DAG of legal transitions. Replaces session-state races. |
-
-## Two Qt stacks (nav app vs v3)
-
-The `hda/` package contains **two UI architectures** that coexist:
-
-| | **Nav app** (current entry point) | **v3 stack** (tested, not wired to entry) |
-|---|---|---|
-| **Launch** | `python -m hda` or `hda` | Legacy widgets: `dashboard.py`, `detail_panel.py`, `analytics_window.py` |
-| **Shell** | `HDAMainWindow` — sidebar nav + page stack | Campaign dashboard + detail panel |
-| **Analysis** | `core/` (`integrated_analysis`, `campaign_manager_v2`) | `hda/domain` + `hda/services` |
-| **Campaign DB** | Per-campaign SQLite in `campaigns/` | Single `hda.db` (WAL) |
-| **Status** | 4 pages implemented (Test Explorer, Single Test Analysis, Campaign Analysis, Configurations) | ~260 unit tests; ingest/reanalyze pipeline complete |
-
-**Recommended path:** extend the **nav app** using `core/` for analysis until Campaign Analysis is built; selectively reuse v3 widgets (steady preview, hardware analytics) as components.
-
-## Launching the desktop app (nav app)
+From the repo root:
 
 ```bash
-pip install -e .          # from repo root; installs PySide6 + pyqtgraph
-python -m hda             # or: hda
-hda --log-dir /var/log/hda   # optional log directory override
+pip install -e ".[dev]"    # PySide6, pyqtgraph, scipy, pytest
+python -m hda                # or: hda
+hda --log-dir C:/logs/hda    # optional log directory
 ```
 
-The nav app opens **Hopper Data Studio** with Test Root / Program context in the sidebar. Implemented pages:
+Logs default to `~/.hda/logs/hda.log` (rotating). Status bar shows `core.__version__`
+(analysis engine); package semver is `hda.__version__` (`3.0.0-dev`).
 
-- **Test Explorer** — browse/ingest/edit metadata (filesystem via `core.test_metadata`)
-- **Single Test Analysis** — CSV load, pyqtgraph steady window, full P0 analysis
-- **Configurations** — edit `saved_configs/` JSON; **Use in Analysis** handoff
+**Streamlit-only install** (no desktop): `pip install -r requirements.txt`
 
-- **Campaign Analysis** — SPC (I-MR, X-bar/R), filters, HTML/Excel/CSV export
+## Architecture
 
-Placeholder pages (Batch, System, Tools) direct users to Streamlit until implemented.
+Two UI stacks coexist in `hda/`:
 
-Logs: `~/.hda/logs/hda.log` (rotating). Version shown in status bar matches `core.__version__` (currently 2.5.0). Package semver is `3.0.0.dev0`.
+| | **Nav app** (entry point) | **v3 stack** (parallel, tested) |
+|---|---|---|
+| Launch | `python -m hda` | Legacy: `dashboard.py`, `detail_panel.py`, `analytics_window.py` |
+| Analysis | `core/` (`integrated_analysis`, `campaign_manager_v2`, …) | `hda/domain` + `hda/services` |
+| Campaign DB | Per-campaign SQLite in `campaigns/` | Single `hda.db` (WAL) in v3 schema |
+| Status | **Primary daily UI** | ~260 unit tests; ingest/reanalyze pipeline |
 
-### Archived v3 dashboard launcher
+**Recommended:** extend the nav app with `core/` until v3 migration is planned.
+Reuse v3 widgets (steady preview, hardware analytics) as components where useful.
 
-An earlier prototype used `hda --db PATH --campaign NAME` to open a campaign-scoped test list (`dashboard.py` + `detail_panel.py`). That CLI is **not** exposed by `hda/__main__.py` today. The v3 stack remains in the repo for unit tests and future integration; see sections below for hardware analytics and steady-state preview behaviour.
+```
+hda/
+├── __main__.py              CLI → hda.ui.main
+├── preprocessing.py         Shared CSV time/resample/trim pipeline (STA)
+├── plot_utils.py            Plot window helpers
+├── campaign_helpers.py      Campaign page filters / metric discovery
+├── analysis_tools_helpers.py Table + column helpers for Analysis Tools
+├── ui/
+│   ├── main_window.py       Resizable nav + page stack
+│   ├── nav_bar.py           Test root, program, navigation
+│   ├── style.py             VS Code Dark+ tokens + stylesheets
+│   ├── plot_panels.py       Dockable multi-panel pyqtgraph workspace
+│   └── pages/
+│       ├── test_ingestion.py      Test Explorer
+│       ├── single_test_analysis.py
+│       ├── campaign_analysis.py
+│       ├── analysis_tools.py
+│       ├── configurations.py
+│       └── placeholders.py        Batch + System Analysis stubs
+├── domain/                  Pure Python (v3)
+├── persistence/             SQLite repositories (v3)
+└── services/                Ingest / analysis orchestration (v3)
+```
 
-## Running the tests
+**Import rules (v3 layers):** `domain/` → no I/O/Qt; `services/` → no Qt; only `ui/` owns the event loop.
+
+## Implemented pages
+
+| Nav item | Module | Summary |
+|---|---|---|
+| Test Explorer | `test_ingestion.py` | Browse / ingest / edit metadata via `core.test_metadata` |
+| Single Test Analysis | `single_test_analysis.py` | Tabbed preprocess → steady state → analysis; dockable plot panels; trim lines; SVG export per panel |
+| Batch Analysis | `placeholders.py` | Stub → use Streamlit or upcoming port |
+| Campaign Analysis | `campaign_analysis.py` | SPC (I-MR, X-bar/R), filters, HTML/Excel/CSV reports |
+| System Analysis | `placeholders.py` | Stub |
+| Analysis Tools | `analysis_tools.py` | Anomaly detection, comparison, transient, frequency, operating envelope |
+| Configurations | `configurations.py` | Edit `saved_configs/`; **Use in Analysis** handoff to STA |
+
+### Single Test Analysis highlights
+
+- **Preprocessing tab:** time unit auto-detect (incl. Unix ms), gap fill, resample, trim with red draggable bounds + dimmed preview; save processed CSV
+- **Plot workspace:** add unlimited dockable panels; per-panel sensor toggles; synced trim/steady overlays; SVG export
+- **Steady State tab:** auto-detect, draggable region, sensor roles, run analysis via `core.integrated_analysis`
+- Handoffs: Test Explorer → STA; Configurations → STA with active config
+
+### Analysis Tools highlights
+
+Wraps P2 `core/` modules with background workers and pyqtgraph charts:
+
+1. **Anomaly Detection** — CSV upload, multi-channel, severity plot bands  
+2. **Data Comparison** — campaign test compare, golden reference, regression, correlation, campaign-vs-campaign  
+3. **Transient Analysis** — phase segmentation, startup/shutdown metrics  
+4. **Frequency Analysis** — PSD, harmonics, resonance  
+5. **Operating Envelope** — O/F vs Pc scatter + envelope rectangle  
+
+Press **F5** on Analysis Tools or Campaign Analysis to refresh the campaign list.
+
+## Design system
+
+Theme: **VS Code Dark+** (`hda/ui/style.py`).
+
+- Call `content_stylesheet()` once on the main window central widget  
+- Call `nav_stylesheet()` + `QPalette` on `NavBar`  
+- Call `configure_pyqtgraph()` before creating plots  
+- Call `apply_app_font()` once in `main.py`  
+- No P0/P1/P2 badges in user-facing UI  
+- Heavy work in `QRunnable` workers — never block the UI thread  
+
+Scroll wheel on spinboxes/combos is suppressed globally (`main.py`) to avoid accidental value changes while scrolling.
+
+## Tests
 
 ```bash
-QT_QPA_PLATFORM=offscreen python -m pytest hda/tests/
+# Desktop package (needs PySide6)
+pip install -e ".[dev]"
+python -m pytest hda/tests/ -q
+
+# Headless CI
+QT_QPA_PLATFORM=offscreen python -m pytest hda/tests/ -q
 ```
 
-260 tests passing as of this commit (one skipped where Qt widgets
-cannot load — desktops are fine, libEGL-less containers skip
-gracefully).
+Also run the shared integrity suite from repo root:
 
-## Hardware analytics (cross-campaign)
+```bash
+pip install -r requirements.txt
+python -m pytest tests/ -q
+```
 
-Toolbar action **Hardware Analytics… (Ctrl+H)** opens a separate window
-that filters by `part_number` / `serial_number` / `measurement_name` and
-plots the measurement value with error bars across **every campaign that
-hardware appeared in**. Powered by a single indexed join on the v3
-single-DB schema (``MeasurementsRepository.hardware_history``) — the
-multi-database UNION the legacy app needed is gone.
+## v3 stack (not the nav entry point)
 
-The status bar shows ``n / mean / std / cv / range`` for the currently
-filtered set; the table below the plot lists each test_run with its
-campaign, serial, persisted timestamp, value, and uncertainty.
+The v3 dashboard/analytics windows support:
 
-## Interactive steady-state preview
+- **Hardware Analytics (Ctrl+H)** — cross-campaign part/serial history from single `hda.db`
+- **Steady-state preview + reanalyze** — draggable window, `ReanalyzeWorker`, state machine edges
 
-Selecting a persisted test in the dashboard opens the **steady-state
-window** preview in the detail panel: the chosen channel plotted with a
-draggable shaded region marking the steady window. Drag either handle
-and a stats readout updates live (mean, std, n, CV%) for every channel
-— microsecond-fast because ``window_stats`` is pure numpy and the
-preprocessed DataFrame is held in an in-memory LRU cache.
+These remain available for tests and selective reuse; they are not opened by `python -m hda` today.
 
-Click **Apply window** to commit the new bounds. The detail panel
-spawns a ``ReanalyzeWorker`` that re-runs QC + plugin compute + derived
-measurements and atomically replaces the persisted measurements + qc
-findings + steady-window fields. State machine has dedicated edges
-``PERSISTED → STEADY_DETECTED`` and ``QC_FAILED → STEADY_DETECTED``
-gated behind ``AnalysisService.reanalyze`` so accidental code paths can't
-trigger a re-run.
+## Roadmap
 
-## Next commits (in order)
-
-### Nav app (priority)
-
-1. **Batch Analysis page** — wraps `core.batch_analysis.run_batch_analysis()`
-2. **System Analysis** / **Analysis Tools** — port Streamlit page logic
-3. Campaign plots tab (correlation, multi-parameter overlay) — optional enhancement to `campaign_analysis.py`
-
-### v3 stack (selective adoption)
-
-1. Watch folder + drag-and-drop ingest in the UI.
-2. SPC charts on the analytics screen (I-MR control limits + Western
-   Electric rules), built on the existing cross-campaign query.
-3. Date-range / campaign multi-select filters on analytics.
-4. Reuse `steady_state_preview.py` + `ReanalyzeWorker` inside Single Test Analysis.
-
-## Campaign Analysis (implemented)
-
-Implemented in `hda/ui/pages/campaign_analysis.py`. Uses per-campaign SQLite (`campaigns/*.db` via `core.campaign_manager_v2`).
-
-**Tabs:** Summary (data table + filters) · SPC (I-MR, X-bar/R, pyqtgraph, violations table) · Reports (HTML, Excel, CSV)
-
-**Workers:** `_CampaignListWorker`, `_CampaignLoadWorker`, `_SPCWorker`, `_ReportWorker` — all call `core/` only.
+1. **Batch Analysis** — `core.batch_analysis.run_batch_analysis()`  
+2. **System Analysis** — cross-campaign system metrics  
+3. STA tabs: Analyze / Results / Export (currently placeholders inside STA)  
+4. Optional: adopt v3 steady preview inside STA; v3 single-DB migration (long term)

@@ -1,8 +1,7 @@
 """Left navigation bar.
 
-Visual design: light zinc-50 sidebar — a subtle off-white, not a dark rail.
-The background is set via QPalette (most reliable) rather than stylesheet alone.
-A thin border-right is drawn in paintEvent.
+Visual design: VS Code Dark+ sidebar (#252526) with subtle borders.
+Background is set via QPalette + nav_stylesheet() for reliable painting.
 
 Signals
 -------

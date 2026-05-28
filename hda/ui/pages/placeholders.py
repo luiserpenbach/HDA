@@ -1,4 +1,4 @@
-"""Placeholder pages for navigation items not yet implemented."""
+"""Placeholder pages for nav items not yet ported to Qt."""
 from __future__ import annotations
 
 from hda.ui.pages.base import BasePage, InfoBanner

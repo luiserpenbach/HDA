@@ -1,29 +1,24 @@
 """Single Test Analysis page for the HDA Qt desktop UI.
 
-Pipeline (left panel drives everything):
-  1. Load CSV  →  detect time column, list numeric channels
-  2. Pick config  →  badge shows test type
-  3. Map sensor roles  →  tell analysis which column is upstream_pressure, mass_flow, etc.
-  4. Choose plot channels  →  live time-series via pyqtgraph
-  5. Detect / set steady-state window  →  draggable LinearRegionItem on the plot
-  6. Run analysis  →  AnalysisResult with QC, measurements, traceability
+Workflow:
+  1. Load CSV (or handoff from Test Explorer)
+  2. Preprocess — time axis, resample, trim, channel mapping
+  3. Inspect data — dockable pyqtgraph panels, trim lines, steady region
+  4. Run analysis — core.integrated_analysis with full P0 integrity
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
 try:
-    import pyqtgraph as pg
-    from hda.ui.style import PLOT_BG, PLOT_FG, configure_pyqtgraph
+    from hda.ui.style import configure_pyqtgraph
 
     configure_pyqtgraph()
-    _PG_OK = True
 except Exception:
-    _PG_OK = False
+    pass
 
 from PySide6.QtCore import (
     QObject,
@@ -35,7 +30,7 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -73,9 +68,6 @@ from hda.ui.style import (
     ACCENT_RED,
     BORDER,
     CONTENT_SECONDARY_BG,
-    FONT_FAMILY,
-    PLOT_BG,
-    PLOT_FG,
     SZ_BASE,
     SZ_SM,
     SZ_XS,
@@ -83,10 +75,6 @@ from hda.ui.style import (
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
-
-# ---------------------------------------------------------------------------
-# Colours for plot traces (legacy — panels use hda.ui.plot_panels.TRACE_COLORS)
-# ---------------------------------------------------------------------------
 
 # Time unit options: (label, internal key)
 _TIME_UNIT_OPTIONS: List[Tuple[str, str]] = [

@@ -1,7 +1,7 @@
 # CLAUDE.md - AI Assistant Guide for Hopper Data Studio
 
-**Version**: 2.4.0
-**Last Updated**: 2026-02-05
+**Version**: 2.5.0
+**Last Updated**: 2026-05-27
 **Purpose**: Comprehensive guide for AI assistants working with the HDA codebase
 
 ---
@@ -106,7 +106,7 @@ HDA/
 ├── .streamlit/
 │   └── config.toml                 # Streamlit config (max upload 1GB, theme)
 ├── core/                           # Business logic (NO UI code here)
-│   ├── __init__.py                     # Module exports, __version__ = "2.4.0"
+│   ├── __init__.py                     # Module exports, __version__ = "2.5.0"
 │   │
 │   ├── [P0] traceability.py           # SHA-256 hashing, audit trails
 │   ├── [P0] uncertainty.py            # Error propagation (analytical + Monte Carlo)
@@ -551,7 +551,7 @@ def create_imr_chart(
 
 **Three separate version numbers**:
 
-1. **Application Version**: `__version__ = "2.4.0"` in `core/__init__.py`
+1. **Application Version**: `__version__ = "2.5.0"` in `core/__init__.py`
    - Semantic versioning (major.minor.patch)
    - Update when adding features or fixing bugs
 
@@ -1570,9 +1570,9 @@ HDA ships two UIs that coexist in the same repo:
 
 3. **Clean chrome, dense data** — minimal decoration. No priority labels (P0/P1/P2) visible anywhere in the UI — those are internal dev classifications only. No emoji. Information density > empty space.
 
-4. **Single consistent theme** — pure white/light-zinc throughout. No dark sidebar. The nav bar uses `#f8fafc` (barely off-white) with a subtle border. Both nav and content share the same light palette so there is no jarring contrast switch.
+4. **Single consistent theme** — VS Code Dark+ throughout (`#1e1e1e` content, `#252526` sidebar). Nav and content share the same dark palette.
 
-5. **State is persistent** — window geometry, last-used test root, selected program, splitter positions — all in `QSettings`. The app opens exactly where the user left it.
+5. **State is persistent** — window geometry, nav splitter, last-used test root, selected program — all in `QSettings`. The app opens where the user left off.
 
 6. **Background everything heavy** — file system scans, analysis, report generation — all run in `QRunnable` workers on the global thread pool. The UI stays responsive.
 
@@ -1583,18 +1583,24 @@ HDA ships two UIs that coexist in the same repo:
 ```
 hda/
 ├── __main__.py               ← CLI entry point (python -m hda)
+├── preprocessing.py          ← Shared STA preprocess pipeline (time, resample, trim)
+├── plot_utils.py             ← Steady-window helpers
+├── campaign_helpers.py       ← Campaign Analysis filters / metrics
+├── analysis_tools_helpers.py ← Analysis Tools table + column helpers
 ├── ui/
-│   ├── style.py              ← Design tokens + stylesheet builders
-│   ├── nav_bar.py            ← Left sidebar: context + navigation
+│   ├── style.py              ← VS Code Dark+ tokens + stylesheets
+│   ├── nav_bar.py            ← Test root, program, navigation (resizable splitter)
 │   ├── main_window.py        ← HDAMainWindow: nav + QStackedWidget
-│   ├── main.py               ← QApplication setup
+│   ├── main.py               ← QApplication, wheel guard on inputs
+│   ├── plot_panels.py        ← Dockable multi-panel pyqtgraph workspace
 │   ├── pages/
 │   │   ├── base.py           ← BasePage, MetricCard, InfoBanner
-│   │   ├── test_ingestion.py ← Browse / Ingest / Edit Metadata
-│   │   ├── single_test_analysis.py ← CSV load, steady window, analysis
+│   │   ├── test_ingestion.py ← Test Explorer
+│   │   ├── single_test_analysis.py ← Preprocess, plots, steady state, analysis
 │   │   ├── campaign_analysis.py    ← SPC, summary, reports
+│   │   ├── analysis_tools.py       ← Anomaly, comparison, transient, frequency, envelope
 │   │   ├── configurations.py ← saved_configs CRUD + diff
-│   │   └── placeholders.py   ← Stub pages for Batch / System / Tools
+│   │   └── placeholders.py   ← Batch Analysis, System Analysis stubs
 │   └── workers.py            ← QRunnable workers (v3 stack; not nav entry)
 └── domain/ persistence/ services/   ← v3 stack (parallel to nav app's core/ usage)
 ```
@@ -1602,8 +1608,8 @@ hda/
 Window structure:
 ```
 QMainWindow
-├── central QWidget  (content_stylesheet applied once here)
-│   ├── NavBar (224 px fixed)
+├── QSplitter (nav | content)
+│   ├── NavBar (200–400 px, resizable)
 │   │   ├── App title
 │   │   ├── TEST ROOT  — folder picker + browse button
 │   │   ├── PROGRAM    — combo + new-program button
@@ -1614,9 +1620,9 @@ QMainWindow
 │       ├── [2] BatchAnalysisPage          (placeholder)
 │       ├── [3] CampaignAnalysisPage       (implemented)
 │       ├── [4] SystemAnalysisPage         (placeholder)
-│       ├── [5] AnalysisToolsPage          (placeholder)
+│       ├── [5] AnalysisToolsPage          (implemented)
 │       └── [6] ConfigurationsPage         (implemented)
-└── QStatusBar — activity message (left) + version (right)
+└── QStatusBar — activity message (left) + core version (right)
 ```
 
 ---
@@ -1626,36 +1632,25 @@ QMainWindow
 #### Critical rules
 
 1. **Call `content_stylesheet()` exactly once** — on the `central` widget in `main_window.py`. All child widgets inherit it. Never re-apply it on sub-widgets or pages.
-2. **Call `nav_stylesheet()` exactly once** — on the `NavBar` widget. Its background is set separately via `QPalette.Window` + `setAutoFillBackground(True)` so the rect is always filled regardless of stylesheet inheritance quirks.
-3. **Never use dark colours in the nav bar.** The sidebar is light zinc (`#f8fafc`), not dark. Dark/light mixing looks catastrophic.
+2. **Call `nav_stylesheet()` exactly once** — on the `NavBar` widget. Its background is set separately via `QPalette.Window` + `setAutoFillBackground(True)`.
+3. **Call `configure_pyqtgraph()` before creating plot widgets** — typically at module import in plot pages.
+4. **Call `apply_app_font()` once** in `main.py` (Segoe UI Variable fallback chain).
 
-#### Colour tokens
+#### Colour tokens (VS Code Dark+)
 
 ```python
-# Sidebar
-SIDEBAR_BG = "#f8fafc"          # barely off-white
-SIDEBAR_BORDER = "#e2e8f0"      # subtle right edge
-SIDEBAR_TEXT = "#3f3f46"
-SIDEBAR_HOVER_BG = "#f1f5f9"
-SIDEBAR_ACTIVE_BG = "#eff6ff"   # blue-50 — active page
-SIDEBAR_ACTIVE_TEXT = "#1d4ed8" # blue-700
-
-# Content
-CONTENT_BG = "#ffffff"
-CONTENT_SECONDARY_BG = "#f4f4f5"
-BORDER = "#e4e4e7"
-TEXT_PRIMARY = "#09090b"
-TEXT_MUTED = "#71717a"
-ACCENT_BLUE = "#3b82f6"
+SIDEBAR_BG = "#252526"
+CONTENT_BG = "#1e1e1e"
+BORDER = "#3c3c3c"
+TEXT_PRIMARY = "#cccccc"
+TEXT_MUTED = "#858585"
+ACCENT_BLUE = "#007acc"
+PLOT_BG = "#1e1e1e"
 ```
 
 #### Typography
 
-All fonts: `Inter, Segoe UI, system-ui, sans-serif`  
-Page title: `SZ_2XL` (22 px), weight 700  
-Section labels in nav: `SZ_XS` (10 px), weight 700, letter-spacing  
-Body text: `SZ_BASE` (13 px)  
-Muted: `SZ_SM` (11 px)
+Fonts: `Segoe UI Variable`, `Segoe UI`, system-ui. Page title `SZ_2XL` (20 px). Body `SZ_BASE` (13 px).
 
 #### Never put priority badges on page headers
 
@@ -1764,6 +1759,7 @@ QThreadPool.globalInstance().start(worker)
 | Key | Type | Description |
 |-----|------|-------------|
 | `main/geometry` | `QByteArray` | Window size and position |
+| `main/nav_splitter` | `QByteArray` | Nav vs content split state |
 | `ctx/test_root` | `str` | Last-used test root folder |
 | `ctx/program` | `str` | Last-selected program name |
 
@@ -1797,13 +1793,44 @@ All I/O goes through `core.test_metadata` and `core.metadata_manager` — the sa
 
 ---
 
-### Planned Pages (implementation order)
+### Single Test Analysis (`hda/ui/pages/single_test_analysis.py`)
 
-1. **Configurations** — **Done** (`configurations.py`): `SavedConfigManager`, list/edit/create, JSON diff, "Use in Analysis" handoff
-2. **Single Test Analysis** — **Done** (`single_test_analysis.py`): `core.integrated_analysis`, pyqtgraph steady window, Test Explorer handoff via `load_test_from_path()`
-3. **Campaign Analysis** — **Done** (`campaign_analysis.py`): I-MR / X-bar/R SPC, summary table, HTML/Excel/CSV export
-4. **Batch Analysis** — wraps `core.batch_analysis`
-5. **Analysis Tools** / **System Analysis** — lower priority; build after the above
+Tabbed workflow mirroring Streamlit STA:
+
+**Preprocessing** — CSV load, config, time unit (Unix ms auto-detect), gap fill, resample, trim with red draggable lines and dimmed preview; save processed CSV via `hda/preprocessing.py`.
+
+**Steady State** — sensor roles, auto-detect, draggable steady region synced across plots, run analysis via `core.integrated_analysis`.
+
+**Plot workspace** (`hda/ui/plot_panels.py`) — dockable multi-panel pyqtgraph; per-panel sensor menu; SVG export; shared trim/steady overlays.
+
+Internal STA tabs Analyze / Results / Export are still placeholders.
+
+Handoffs: `load_test_from_path()` from Test Explorer; `set_active_config()` from Configurations.
+
+---
+
+### Campaign Analysis (`hda/ui/pages/campaign_analysis.py`)
+
+Wraps `core.spc`, `core.campaign_manager_v2`, `core.reporting`, `core.export`. Tabs: Summary, SPC (pyqtgraph control charts), Reports. Background workers for load/SPC/export. F5 refreshes campaign list.
+
+---
+
+### Analysis Tools (`hda/ui/pages/analysis_tools.py`)
+
+Wraps P2 `core/` modules. Five tabs: Anomaly Detection, Data Comparison, Transient Analysis, Frequency Analysis, Operating Envelope. CSV upload tabs use `QRunnable` workers; campaign tabs use `campaigns/*.db`. See `hda/README.md` for detail.
+
+---
+
+### Planned / stub pages
+
+| Page | Status |
+|------|--------|
+| Configurations | **Done** |
+| Single Test Analysis | **Done** (Analyze/Results/Export sub-tabs TBD) |
+| Campaign Analysis | **Done** |
+| Analysis Tools | **Done** |
+| Batch Analysis | Stub — `core.batch_analysis` |
+| System Analysis | Stub — cross-campaign system view |
 
 Cross-page wiring (nav app):
 - Test Explorer **Open in Analysis** → Single Test Analysis loads CSV + metadata from test folder
