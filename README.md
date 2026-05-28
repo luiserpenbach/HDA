@@ -1,202 +1,127 @@
 # Hopper Data Studio
 
-A Streamlit-based web application for analyzing rocket propulsion test data with built-in engineering integrity systems.
+Engineering-grade analysis for rocket propulsion test data — cold flow, hot fire, and campaign SPC — with traceability, uncertainty, and QC built in.
 
-## Overview
+Two UIs share the same **`core/`** engine:
 
-Hopper Data Studio provides comprehensive analysis tools for cold flow and hot fire testing with emphasis on:
-- **Data Traceability** - SHA-256 hashing and audit trails
-- **Uncertainty Quantification** - Full error propagation for all metrics
-- **Quality Control** - Pre-analysis data validation
+| UI | Launch | Best for |
+|---|---|---|
+| **Desktop (Qt)** | `pip install -e .` then `python -m hda` | Daily test-stand work, dense plots, keyboard workflows |
+| **Streamlit (web)** | `pip install -r requirements.txt` then `streamlit run app.py` | Remote access, sharing via URL |
+
+See [`hda/README.md`](hda/README.md) for the desktop app (pages, plot panels, workers, tests).
+
+## Engineering integrity (P0)
+
+- **Traceability** — SHA-256 hashing and audit trails on every analysis
+- **Uncertainty** — error propagation for all metrics (no naked numbers)
+- **QC** — blocking checks before analysis runs
+- **Config validation** — dataclass schemas for hardware + metadata
+- **Campaign manager** — SQLite per campaign with full traceability fields
 
 ## Features
 
-### Core Engineering Integrity (P0)
-- **Traceability** - Cryptographic verification and audit trails
-- **Uncertainty** - Error propagation for all metrics
-- **QC Checks** - Pre-analysis data quality validation
-- **Config Validation** - Schema validation for configurations
-- **Campaign Manager** - SQLite database with full traceability
+### Analysis & reporting (P1)
 
-### Analysis & Reporting (P1)
-- **SPC** - Statistical Process Control, control charts, capability indices
-- **Reporting** - HTML reports with full traceability
-- **Batch Analysis** - Multi-file parallel processing
-- **Export** - CSV, Excel, JSON with metadata
+- SPC control charts and capability indices
+- HTML / Excel / CSV campaign reports and export
+- Batch multi-file processing (Streamlit; Qt stub)
 
-### Advanced Features (P2)
-- **Anomaly Detection** - Multi-type detection with sensor health
-- **Data Comparison** - Test-to-test and golden reference comparison
-- **Saved Configurations** - Reusable testbench configurations
+### Advanced (P2)
+
+- Anomaly detection, test comparison, transient & frequency analysis
+- Operating envelope visualization
+- Available in Streamlit **Analysis Tools** and Qt **Analysis Tools** page
 
 ## Installation
 
+### Streamlit app
+
 ```bash
-# Clone repository
 git clone <repo-url>
 cd HDA
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Run application
 streamlit run app.py
 ```
 
-### Optional: CoolProp for accurate fluid properties
+### Desktop app
+
 ```bash
-pip install CoolProp>=6.4.1
+pip install -e ".[dev]"
+python -m hda
 ```
 
-## Project Structure
+Optional fluid properties: `pip install CoolProp>=6.4.1`
+
+## Project structure
 
 ```
 HDA/
-├── app.py                      # Main Streamlit entry point
-├── requirements.txt            # Python dependencies
-├── core/                       # Engineering integrity modules
-│   ├── traceability.py        # SHA-256 hashing, audit trails
-│   ├── uncertainty.py         # Error propagation
-│   ├── qc_checks.py           # Quality control validation
-│   ├── config_validation.py   # Config schema validation
-│   ├── campaign_manager_v2.py # SQLite database with traceability
-│   ├── integrated_analysis.py # High-level analysis API
-│   ├── spc.py                 # Statistical Process Control
-│   ├── reporting.py           # HTML report generation
-│   ├── batch_analysis.py      # Multi-file processing
-│   ├── export.py              # Data export
-│   ├── advanced_anomaly.py    # Anomaly detection
-│   ├── comparison.py          # Test comparison
-│   └── saved_configs.py       # Configuration management
-├── pages/                      # Streamlit pages
-│   ├── 1_Single_Test_Analysis.py
-│   ├── 2_Campaign_Management.py
-│   ├── 3_SPC_Analysis.py
-│   ├── 4_Batch_Processing.py
-│   ├── 5_Reports_Export.py
-│   ├── 6_Anomaly_Detection.py
-│   ├── 7_Data_Comparison.py
-│   └── 8_Saved_Configurations.py
-├── configs/                    # Example configuration files
-├── saved_configs/              # Saved testbench configurations
-├── campaigns/                  # SQLite campaign databases
-└── tests/                      # Test suite
+├── app.py                      # Streamlit entry
+├── requirements.txt            # Streamlit + core dependencies
+├── pyproject.toml              # Desktop package (hda), PySide6, pyqtgraph
+├── core/                       # Shared analysis engine (P0/P1/P2)
+│   ├── integrated_analysis.py
+│   ├── campaign_manager_v2.py
+│   ├── spc.py, reporting.py, batch_analysis.py
+│   ├── advanced_anomaly.py, comparison.py, transient_analysis.py
+│   └── plugin_modules/         # cold_flow, hot_fire plugins
+├── pages/                      # Streamlit pages (1_Test_Explorer … 7_Configurations)
+├── hda/                        # Qt desktop UI + v3 domain stack
+│   ├── ui/pages/               # Test Explorer, STA, Campaign, Tools, Configs
+│   ├── preprocessing.py        # STA preprocess pipeline
+│   └── ui/plot_panels.py       # Dockable plot workspace
+├── saved_configs/              # Testbench JSON configs
+├── campaigns/                  # Per-campaign SQLite (*.db)
+└── tests/                      # core/ test suite
 ```
 
-## Quick Start
-
-### Complete Cold Flow Analysis
+## Quick start (Python API)
 
 ```python
 from core.integrated_analysis import analyze_cold_flow_test
-from core.campaign_manager_v2 import save_to_campaign, create_campaign
+from core.campaign_manager_v2 import create_campaign, save_to_campaign
 
-# Create campaign (once)
-create_campaign("INJ_Acceptance_Q1", "cold_flow")
-
-# Analyze a test
 result = analyze_cold_flow_test(
     df=df,
     config=config,
-    steady_window=(1500, 5000),
+    steady_window=(1.5, 5.0),  # seconds on time_s axis
     test_id="INJ-CF-001",
     file_path="test_data.csv",
-    metadata={'part': 'INJ-V1', 'serial_num': 'SN-001'}
 )
 
-# Check results
-print(f"QC Passed: {result.passed_qc}")
-print(f"Cd: {result.measurements['Cd']}")  # 0.654 ± 0.018 (2.8%)
-
-# Save to campaign
-record = result.to_database_record('cold_flow')
+print(result.passed_qc, result.measurements["Cd"])
+record = result.to_database_record("cold_flow")
 save_to_campaign("INJ_Acceptance_Q1", record)
-```
-
-### Statistical Process Control
-
-```python
-from core.spc import create_imr_chart
-from core.campaign_manager_v2 import get_campaign_data
-
-df = get_campaign_data("INJ_Acceptance_Q1")
-
-analysis = create_imr_chart(
-    df,
-    parameter='avg_cd_CALC',
-    usl=0.70,
-    lsl=0.60,
-)
-
-print(f"In Control: {analysis.n_violations == 0}")
-print(f"Cpk: {analysis.capability.cpk:.2f}")
-```
-
-### Generate Reports
-
-```python
-from core.reporting import generate_test_report, save_report
-
-html = generate_test_report(
-    test_id='CF-001',
-    test_type='cold_flow',
-    measurements=result.measurements,
-    traceability=result.traceability,
-    qc_report={'passed': True, 'summary': {'passed': 5}, 'checks': []},
-)
-save_report(html, 'reports/CF-001_report.html')
 ```
 
 ## Configuration
 
-### Active Configuration (Testbench Hardware)
+- **Active config** (`saved_configs/`) — testbench hardware, channels, uncertainties
+- **Test metadata** (`metadata.json` per test folder) — geometry, fluid, part/serial
 
-Stored in `saved_configs/`, contains:
-- Sensor mappings and channel IDs
-- Calibration uncertainties
-- Processing settings
-
-Changes only when testbench is modified or recalibrated.
-
-### Test Metadata (Test Article Properties)
-
-Provided per test via `metadata.json` or UI entry:
-- Geometry (orifice area, throat area)
-- Fluid properties
-- Part/serial numbers
-
-```json
-{
-  "part_number": "INJ-B1-03",
-  "serial_number": "SN-2024-045",
-  "geometry": {
-    "orifice_area_mm2": 3.14159
-  },
-  "fluid": {
-    "name": "nitrogen",
-    "gamma": 1.4
-  }
-}
-```
+See `CLAUDE.md` for full conventions and both UI architectures.
 
 ## Testing
 
 ```bash
-# Run all tests
-python -m pytest tests/ -v
+# Core integrity + analysis
+python -m pytest tests/ -q
 
-# Individual test suites
-python tests/test_p0_components.py  # Core integrity
-python tests/test_p1_components.py  # Analysis & reporting
-python tests/test_p2_components.py  # Advanced features
+# Desktop package (requires PySide6)
+pip install -e ".[dev]"
+python -m pytest hda/tests/ -q
 ```
 
 ## Version
 
-- **Application Version**: 2.3.0
-- **Schema Version**: 3 (campaign database)
-- **Processing Version**: 2.0.0+integrity
+| Component | Version |
+|-----------|---------|
+| `core` (analysis engine) | 2.5.0 |
+| Streamlit app | tracks `core` |
+| Qt package (`hda`) | 3.0.0-dev |
+| Campaign DB schema | 2 (`SCHEMA_VERSION` in `campaign_manager_v2.py`) |
 
 ## License
 
-Internal use only - Hopper Propulsion Systems
+Internal use only — Hopper Propulsion Systems
