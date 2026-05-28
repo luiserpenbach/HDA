@@ -32,12 +32,3 @@ class SystemAnalysisPage(_PlaceholderPage):
             "Cross-campaign system-level performance analysis",
             parent,
         )
-
-
-class AnalysisToolsPage(_PlaceholderPage):
-    def __init__(self, parent=None):
-        super().__init__(
-            "Analysis Tools",
-            "Anomaly detection, test comparison, and operating envelope analysis",
-            parent,
-        )
