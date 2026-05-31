@@ -125,6 +125,23 @@ class TestCampaignManager:
 
         print("[PASS] Created hot fire campaign with correct columns")
 
+    def test_create_campaign_adds_performance_indexes(self):
+        """Test that core query indexes are created for new campaigns."""
+        db_path = create_campaign('index_test', 'hot_fire')
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        c.execute("PRAGMA index_list(test_results)")
+        indexes = {row[1] for row in c.fetchall()}
+        conn.close()
+
+        assert 'idx_test_results_test_timestamp' in indexes
+        assert 'idx_test_results_qc_passed' in indexes
+        assert 'idx_test_results_part_serial' in indexes
+        assert 'idx_test_results_pc' in indexes
+        assert 'idx_test_results_of' in indexes
+
+        print("[PASS] Performance indexes created")
+
     def test_create_duplicate_campaign_fails(self):
         """Test that creating duplicate campaign raises error."""
         create_campaign('duplicate_test', 'cold_flow')

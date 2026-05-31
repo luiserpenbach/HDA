@@ -329,14 +329,48 @@ def detect_steady_state_auto(
         >>> print(f"Detected using {method}: {start:.2f} - {end:.2f}")
     """
     # Get appropriate signal column for detection
+    explicit_signal = config.get('steady_state_signal_col')
+    if explicit_signal and explicit_signal in df.columns:
+        signal_col = explicit_signal
+    else:
     # Support both sensor_roles (v2.4.0+) and columns (legacy)
-    columns = config.get('sensor_roles', config.get('columns', {}))
-    signal_col = (
-        columns.get('upstream_pressure') or
-        columns.get('chamber_pressure') or
-        columns.get('pressure') or
-        next((col for col in df.columns if 'pressure' in col.lower()), None)
+        columns = config.get('sensor_roles', config.get('columns', {}))
+        signal_col = (
+            columns.get('upstream_pressure') or
+            columns.get('chamber_pressure') or
+            columns.get('pressure') or
+            next((col for col in df.columns if 'pressure' in col.lower()), None)
+        )
+
+    settings = config.get('settings', {}) if isinstance(config, dict) else {}
+    cv_window_size = int(
+        settings.get('steady_state_window_size', settings.get('cv_window_size', 50))
     )
+    cv_threshold = float(
+        settings.get('steady_state_cv_threshold', settings.get('cv_threshold', 0.02))
+    )
+    derivative_threshold = float(
+        settings.get(
+            'steady_state_derivative_threshold',
+            settings.get('derivative_threshold', 0.1),
+        )
+    )
+    ml_contamination = float(
+        settings.get('steady_state_ml_contamination', settings.get('ml_contamination', 0.3))
+    )
+    min_samples = int(settings.get('steady_state_min_samples', 10))
+
+    def _valid_window(start: Optional[float], end: Optional[float]) -> bool:
+        if start is None or end is None:
+            return False
+        ok, _msg = validate_steady_window(
+            df,
+            start_time=float(start),
+            end_time=float(end),
+            time_col=time_col,
+            min_samples=min_samples,
+        )
+        return ok
 
     methods = [preferred_method, 'cv', 'derivative', 'simple']
     methods = list(dict.fromkeys(methods))  # Remove duplicates while preserving order
@@ -344,8 +378,14 @@ def detect_steady_state_auto(
     for method in methods:
         try:
             if method == 'cv' and signal_col:
-                start, end = detect_steady_state_cv(df, signal_col, time_col=time_col)
-                if start is not None and end is not None:
+                start, end = detect_steady_state_cv(
+                    df,
+                    signal_col,
+                    window_size=cv_window_size,
+                    cv_threshold=cv_threshold,
+                    time_col=time_col,
+                )
+                if _valid_window(start, end):
                     return start, end, 'cv'
 
             elif method == 'ml':
@@ -355,18 +395,29 @@ def detect_steady_state_auto(
                     if col != time_col and df[col].dtype in ['float64', 'int64']
                 ][:5]  # Limit to 5 sensors
                 if signal_cols:
-                    start, end = detect_steady_state_ml(df, signal_cols, time_col=time_col)
-                    if start is not None and end is not None:
+                    start, end = detect_steady_state_ml(
+                        df,
+                        signal_cols,
+                        time_col=time_col,
+                        contamination=ml_contamination,
+                    )
+                    if _valid_window(start, end):
                         return start, end, 'ml'
 
             elif method == 'derivative' and signal_col:
-                start, end = detect_steady_state_derivative(df, signal_col, time_col=time_col)
-                if start is not None and end is not None:
+                start, end = detect_steady_state_derivative(
+                    df,
+                    signal_col,
+                    time_col=time_col,
+                    derivative_threshold=derivative_threshold,
+                )
+                if _valid_window(start, end):
                     return start, end, 'derivative'
 
             elif method == 'simple':
                 start, end = detect_steady_state_simple(df, config, time_col=time_col)
-                return start, end, 'simple'
+                if _valid_window(start, end):
+                    return start, end, 'simple'
 
         except Exception:
             # Continue to next method on failure

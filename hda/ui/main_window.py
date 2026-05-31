@@ -129,6 +129,9 @@ class HDAMainWindow(QMainWindow):
         test_page = self._pages[0]
         if isinstance(test_page, TestIngestionPage):
             test_page.open_in_analysis_requested.connect(self._on_open_in_analysis)
+        sta_page = self._pages[1]
+        if isinstance(sta_page, SingleTestAnalysisPage):
+            sta_page.campaign_saved.connect(self._on_campaign_saved)
 
         # Wire Configurations "Use in Analysis" handoff
         config_page = self._pages[6]
@@ -172,6 +175,15 @@ class HDAMainWindow(QMainWindow):
         if isinstance(sta, SingleTestAnalysisPage):
             sta.set_active_config(config_id)
         self._set_status(f"Configuration '{config_id}' selected for analysis.")
+
+    def _on_campaign_saved(self, campaign_name: str) -> None:
+        """Switch to Campaign Analysis and preselect saved campaign."""
+        self._nav._on_nav_clicked(3)
+        page = self._pages[3]
+        if isinstance(page, CampaignAnalysisPage):
+            page.mark_opened_from_sta(campaign_name)
+            page.select_campaign(campaign_name, refresh=True)
+        self._set_status(f"Opened Campaign Analysis for '{campaign_name}'.")
 
     def _set_status(self, message: str) -> None:
         if message:

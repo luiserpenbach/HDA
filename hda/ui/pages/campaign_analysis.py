@@ -340,6 +340,8 @@ class CampaignAnalysisPage(BasePage):
         self._df = None
         self._filtered_df = None
         self._last_spc: Optional[SPCAnalysis] = None
+        self._pending_select_campaign: str = ""
+        self._opened_from_sta_name: str = ""
 
         # ── Toolbar ───────────────────────────────────────────────────────────
         toolbar = QHBoxLayout()
@@ -541,10 +543,31 @@ class CampaignAnalysisPage(BasePage):
         worker.signals.failed.connect(self._on_error)
         QThreadPool.globalInstance().start(worker)
 
+    def mark_opened_from_sta(self, campaign_name: str) -> None:
+        """Set context note for campaign opened from STA save handoff."""
+        self._opened_from_sta_name = (campaign_name or "").strip()
+
+    def select_campaign(self, campaign_name: str, refresh: bool = True) -> None:
+        """Select a campaign in the combo (optionally refreshing list first)."""
+        name = (campaign_name or "").strip()
+        if not name:
+            return
+        self._pending_select_campaign = name
+        if refresh:
+            self.refresh_campaigns()
+            return
+        for i in range(self._campaign_combo.count()):
+            if self._campaign_combo.itemData(i) == name:
+                self._campaign_combo.setCurrentIndex(i)
+                self._on_campaign_selected(i)
+                self._pending_select_campaign = ""
+                return
+
     @Slot(list)
     def _on_campaigns_loaded(self, campaigns: List[Dict[str, Any]]) -> None:
         self._campaigns = campaigns
         prev = self._campaign_name
+        pending = self._pending_select_campaign
         self._campaign_combo.blockSignals(True)
         self._campaign_combo.clear()
         if not campaigns:
@@ -562,6 +585,13 @@ class CampaignAnalysisPage(BasePage):
             self._campaign_combo.addItem(f"{name}  ({count} tests)", userData=name)
 
         self._campaign_combo.blockSignals(False)
+
+        if pending:
+            for i in range(self._campaign_combo.count()):
+                if self._campaign_combo.itemData(i) == pending:
+                    self._campaign_combo.setCurrentIndex(i)
+                    self._pending_select_campaign = ""
+                    return
 
         if prev:
             for i in range(self._campaign_combo.count()):
@@ -602,6 +632,9 @@ class CampaignAnalysisPage(BasePage):
 
         n = len(self._filtered_df) if self._filtered_df is not None else 0
         msg = f"Loaded {self._campaign_name} — {n} test(s)."
+        if self._opened_from_sta_name and self._opened_from_sta_name == self._campaign_name:
+            msg = f"{msg} Opened from STA save."
+            self._opened_from_sta_name = ""
         self._banner.show_message(msg, "success" if n else "warning")
         self.status_message.emit(msg)
 

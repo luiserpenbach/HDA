@@ -19,7 +19,7 @@ SUMMARY_COLUMNS = [
     "avg_isp_s",
     "avg_p_up_bar",
     "avg_mf_g_s",
-    "avg_p_c_bar",
+    "avg_pc_bar",
     "avg_of_ratio",
 ]
 

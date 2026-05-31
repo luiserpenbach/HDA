@@ -8,8 +8,9 @@ Workflow:
 """
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -42,6 +43,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QInputDialog,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -61,6 +63,7 @@ from hda.preprocessing import (
 from hda.test_type_utils import normalize_test_type
 from hda.ui.pages.base import BasePage, InfoBanner, MetricCard
 from hda.ui.plot_panels import PlotDockWorkspace, PlotRenderContext
+from hda.ui.igniter_analyze_panel import IgniterAnalyzePanel, IgniterResultsPanel
 from hda.ui.style import (
     ACCENT_AMBER,
     ACCENT_BLUE,
@@ -93,12 +96,23 @@ _CF_ROLES: List[Tuple[str, str, bool]] = [
     ("temperature",         "Temperature",            False),
 ]
 _HF_ROLES: List[Tuple[str, str, bool]] = [
-    ("chamber_pressure",    "Chamber pressure",      True),
-    ("oxidizer_flow",       "Oxidizer mass flow",    True),
-    ("fuel_flow",           "Fuel mass flow",        True),
-    ("thrust",              "Thrust",                False),
-    ("upstream_pressure",   "Upstream pressure",     False),
+    ("chamber_pressure",    "Chamber pressure",       True),
+    ("mass_flow_ox",        "Oxidizer mass flow",     True),
+    ("mass_flow_fuel",      "Fuel mass flow",         False),
+    ("thrust",              "Thrust",                 False),
+    ("upstream_pressure",   "Fuel upstream pressure", False),
 ]
+
+_ROLE_HINTS: Dict[str, Tuple[str, ...]] = {
+    "upstream_pressure": ("up", "upstream", "supply", "tank", "pt", "press"),
+    "downstream_pressure": ("down", "downstream", "back", "pt", "press"),
+    "chamber_pressure": ("pc", "chamber", "comb", "pressure", "pt"),
+    "mass_flow": ("mf", "flow", "mdot", "fm"),
+    "mass_flow_ox": ("ox", "oxid", "n2o", "flow", "mdot", "fm"),
+    "mass_flow_fuel": ("fuel", "eth", "ipa", "rp", "flow", "mdot", "fm"),
+    "temperature": ("temp", "therm", "tc", "tt"),
+    "thrust": ("thrust", "load", "force"),
+}
 
 STA_PANEL_MIN = 260
 STA_PANEL_MAX = 520
@@ -159,7 +173,12 @@ class _DetectWorker(QRunnable):
     def run(self) -> None:
         try:
             from core.steady_state_detection import detect_steady_state_auto
-            start, end, method = detect_steady_state_auto(self._df, self._cfg)
+            preferred = str(self._cfg.get("preferred_method", "cv"))
+            start, end, method = detect_steady_state_auto(
+                self._df,
+                self._cfg,
+                preferred_method=preferred,
+            )
             if start is None or end is None:
                 self.signals.failed.emit("No steady state found — adjust detection parameters.")
             else:
@@ -194,6 +213,7 @@ class _AnalysisWorker(QRunnable):
         test_type: str,
         test_id: str,
         file_path: str,
+        skip_qc: bool,
     ) -> None:
         super().__init__()
         self.signals = _Sigs()
@@ -203,6 +223,7 @@ class _AnalysisWorker(QRunnable):
         self._test_type = test_type
         self._test_id = test_id
         self._file_path = file_path or None
+        self._skip_qc = skip_qc
         self.setAutoDelete(True)
 
     @Slot()
@@ -224,9 +245,65 @@ class _AnalysisWorker(QRunnable):
                 steady_window=self._steady,
                 test_id=self._test_id,
                 file_path=self._file_path,
-                skip_qc=False,
+                skip_qc=self._skip_qc,
             )
             self.signals.finished.emit(result)
+        except Exception as exc:
+            self.signals.failed.emit(str(exc))
+
+
+class _IgniterReportSignals(QObject):
+    file_saved = Signal(str)
+    failed = Signal(str)
+
+
+class _IgniterReportWorker(QRunnable):
+    def __init__(
+        self,
+        *,
+        path: str,
+        test_id: str,
+        result: Any,
+        metadata: Dict[str, Any],
+        config: Dict[str, Any],
+        traceability: Dict[str, Any],
+        steady_window_s: Tuple[float, float],
+        df: Any,
+        sensor_roles: Dict[str, str],
+    ) -> None:
+        super().__init__()
+        self.signals = _IgniterReportSignals()
+        self._path = path
+        self._test_id = test_id
+        self._result = result
+        self._metadata = metadata
+        self._config = config
+        self._traceability = traceability
+        self._steady_window_s = steady_window_s
+        self._df = df
+        self._sensor_roles = sensor_roles
+        self.setAutoDelete(True)
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            from core.igniter_reporting import (
+                generate_igniter_hotfire_report,
+                save_igniter_hotfire_report,
+            )
+
+            html = generate_igniter_hotfire_report(
+                test_id=self._test_id,
+                result=self._result,
+                metadata=self._metadata,
+                config=self._config,
+                traceability=self._traceability,
+                steady_window_s=self._steady_window_s,
+                df=self._df,
+                sensor_roles=self._sensor_roles,
+            )
+            out = save_igniter_hotfire_report(html, self._path)
+            self.signals.file_saved.emit(str(out))
         except Exception as exc:
             self.signals.failed.emit(str(exc))
 
@@ -363,6 +440,7 @@ class _ResultsWidget(QWidget):
 
 class SingleTestAnalysisPage(BasePage):
     """Full single-test analysis pipeline in a native Qt UI."""
+    campaign_saved = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
@@ -385,8 +463,11 @@ class SingleTestAnalysisPage(BasePage):
         self._config_id: str = ""
         self._file_path: str = ""
         self._test_folder_path: str = ""
+        self._test_metadata: Dict[str, Any] = {}
         self._pending_config_id: str = ""
         self._plot_area_hosts: List[QWidget] = []
+        self._last_analysis_result = None
+        self._last_igniter_result = None
 
         # ── Tabbed workflow (mirrors Streamlit STA tabs) ─────────────────────
         self._tabs = QTabWidget()
@@ -403,15 +484,39 @@ class SingleTestAnalysisPage(BasePage):
         self._plot_area_hosts.append(steady_host)
         self._add_plot_panel()
 
-        for title in ("Analyze", "Results", "Export"):
-            self._tabs.addTab(self._placeholder_tab(title), title)
+        self._igniter_panel = IgniterAnalyzePanel()
+        analyze_tab, analyze_host = self._create_split_tab(self._igniter_panel)
+        self._tabs.addTab(analyze_tab, "Analyze")
+        self._plot_area_hosts.append(analyze_host)
+        self._analyze_tab_idx = self._tabs.indexOf(analyze_tab)
+
+        self._igniter_results_tab = IgniterResultsPanel()
+        results_tab = QWidget()
+        results_lay = QVBoxLayout(results_tab)
+        results_lay.setContentsMargins(0, 0, 0, 0)
+        results_lay.addWidget(self._igniter_results_tab)
+        self._tabs.addTab(results_tab, "Results")
+        self._results_tab_idx = self._tabs.indexOf(results_tab)
+
+        self._tabs.addTab(self._placeholder_tab("Export"), "Export")
+
+        self._igniter_panel.bind_page(
+            get_processed_df=lambda: self._df_processed,
+            get_steady_window=lambda: (self._ss_start.value(), self._ss_end.value()),
+            get_sensor_roles=self._current_sensor_roles,
+            get_metadata=lambda: self._test_metadata,
+        )
+        self._igniter_panel.analysis_finished.connect(self._on_igniter_analysis_done)
+        self._igniter_panel.save_requested.connect(self._save_result_to_campaign)
+        self._igniter_panel.report_requested.connect(self._export_igniter_report)
+        self._igniter_panel.status_message.connect(self.status_message.emit)
 
         self._tabs.currentChanged.connect(self._on_workflow_tab_changed)
         self._on_workflow_tab_changed(0)
 
         # Keyboard shortcuts
         sc_run = QShortcut(QKeySequence("F5"), self)
-        sc_run.activated.connect(self._run_analysis)
+        sc_run.activated.connect(self._run_active_analysis)
         sc_open = QShortcut(QKeySequence("Ctrl+O"), self)
         sc_open.activated.connect(self._browse_csv)
 
@@ -479,6 +584,10 @@ class SingleTestAnalysisPage(BasePage):
         self._results = _ResultsWidget(area)
         self._results.hide()
         lay.addWidget(self._results, 2)
+
+        self._igniter_results_plot = IgniterResultsPanel(area)
+        self._igniter_results_plot.hide()
+        lay.addWidget(self._igniter_results_plot, 2)
         return area
 
     def _on_workflow_tab_changed(self, index: int) -> None:
@@ -668,6 +777,9 @@ class SingleTestAnalysisPage(BasePage):
         self._role_layout.setSpacing(10)
         lay.addWidget(self._role_box)
         self._rebuild_role_combos("cold_flow")
+        self._role_status_banner = InfoBanner(parent=self._role_box)
+        self._role_status_banner.hide()
+        lay.addWidget(self._role_status_banner)
 
         lay.addWidget(_section("Steady state"))
         lay.addWidget(_divider())
@@ -675,6 +787,12 @@ class SingleTestAnalysisPage(BasePage):
         self._detect_method = QComboBox()
         self._detect_method.addItems(["cv", "ml", "derivative", "simple"])
         lay.addWidget(_form_row("Detection method", self._detect_method))
+
+        self._detect_sensor_combo = QComboBox()
+        self._detect_sensor_combo.setToolTip(
+            "Primary sensor used for CV/derivative steady-state detection."
+        )
+        lay.addWidget(_form_row("Detection sensor", self._detect_sensor_combo, optional=True))
 
         self._detect_btn = QPushButton("Auto-detect")
         self._detect_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -698,25 +816,30 @@ class SingleTestAnalysisPage(BasePage):
         self._ss_end.valueChanged.connect(self._on_spinbox_changed)
         lay.addWidget(_form_row("End", self._ss_end))
 
-        lay.addWidget(_section("Analysis"))
-        lay.addWidget(_divider())
+        self._steady_analysis_box = QWidget()
+        analysis_lay = QVBoxLayout(self._steady_analysis_box)
+        analysis_lay.setContentsMargins(0, 0, 0, 0)
+        analysis_lay.setSpacing(6)
+        analysis_lay.addWidget(_section("Analysis"))
+        analysis_lay.addWidget(_divider())
 
         self._test_id_edit = QLineEdit()
         self._test_id_edit.setPlaceholderText("e.g. INJ-CF-042")
-        lay.addWidget(_form_row("Test ID", self._test_id_edit))
+        analysis_lay.addWidget(_form_row("Test ID", self._test_id_edit))
 
         self._operator_edit = QLineEdit()
         self._operator_edit.setPlaceholderText("your name")
-        lay.addWidget(_form_row("Operator", self._operator_edit))
+        analysis_lay.addWidget(_form_row("Operator", self._operator_edit))
 
         self._skip_qc_chk = QCheckBox("Skip QC (not recommended)")
         self._skip_qc_chk.setStyleSheet(f"font-size: {SZ_SM}; background: transparent;")
-        lay.addWidget(self._skip_qc_chk)
+        analysis_lay.addWidget(self._skip_qc_chk)
 
         self._run_btn = QPushButton("Run Analysis  (F5)")
         self._run_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._run_btn.clicked.connect(self._run_analysis)
-        lay.addWidget(self._run_btn)
+        analysis_lay.addWidget(self._run_btn)
+        lay.addWidget(self._steady_analysis_box)
 
         lay.addStretch()
         return container
@@ -1031,11 +1154,26 @@ class SingleTestAnalysisPage(BasePage):
 
     def _refresh_role_combos(self, numeric_cols: List[str]) -> None:
         blank_plus_cols = [""] + numeric_cols
-        for combo in self._role_combos.values():
+        prev = {role: combo.currentText() for role, combo in self._role_combos.items()}
+        for role, combo in self._role_combos.items():
             combo.blockSignals(True)
             combo.clear()
             combo.addItems(blank_plus_cols)
+            previous = prev.get(role, "")
+            if previous and previous in numeric_cols:
+                combo.setCurrentText(previous)
             combo.blockSignals(False)
+        prev_sensor = self._detect_sensor_combo.currentText() if hasattr(self, "_detect_sensor_combo") else ""
+        if hasattr(self, "_detect_sensor_combo"):
+            self._detect_sensor_combo.blockSignals(True)
+            self._detect_sensor_combo.clear()
+            self._detect_sensor_combo.addItems(blank_plus_cols)
+            if prev_sensor and prev_sensor in numeric_cols:
+                self._detect_sensor_combo.setCurrentText(prev_sensor)
+            self._detect_sensor_combo.blockSignals(False)
+        self._auto_suggest_role_assignments(prefer_empty_only=True)
+        self._auto_select_detection_sensor(prefer_existing=True)
+        self._validate_role_mapping()
 
     @Slot()
     def _run_preprocessing(self) -> None:
@@ -1196,6 +1334,44 @@ class SingleTestAnalysisPage(BasePage):
         self._mapping_chk.setEnabled(has_mapping)
         if not has_mapping:
             self._mapping_chk.setChecked(False)
+        self._update_igniter_tab_state(test_type)
+        # Keep steady tab clean for igniter/hot-fire workflow.
+        self._steady_analysis_box.setVisible(test_type != "hot_fire")
+        self._auto_suggest_role_assignments(prefer_empty_only=True)
+        self._validate_role_mapping()
+
+    @Slot()
+    def _run_active_analysis(self) -> None:
+        """F5: run analysis for the active workflow context."""
+        cfg = self._build_analysis_config() or {}
+        test_type = normalize_test_type(str(cfg.get("test_type", "cold_flow")))
+        if test_type == "hot_fire" and self._tabs.isTabEnabled(self._analyze_tab_idx):
+            if self._tabs.currentIndex() != self._analyze_tab_idx:
+                self._tabs.setCurrentIndex(self._analyze_tab_idx)
+            self._igniter_panel.run_analysis()
+            return
+        current = self._tabs.currentIndex()
+        if current == self._analyze_tab_idx and self._tabs.isTabEnabled(self._analyze_tab_idx):
+            self._igniter_panel.run_analysis()
+            return
+        self._run_analysis()
+
+    def _update_igniter_tab_state(self, test_type: str) -> None:
+        """
+        Show igniter-specific Analyze/Results tabs only for hot-fire configs.
+        """
+        enabled = test_type == "hot_fire"
+        self._tabs.setTabEnabled(self._analyze_tab_idx, enabled)
+        self._tabs.setTabEnabled(self._results_tab_idx, enabled)
+        if enabled:
+            self._tabs.setTabToolTip(self._analyze_tab_idx, "")
+            self._tabs.setTabToolTip(self._results_tab_idx, "")
+        else:
+            tip = "Igniter analysis is available for hot-fire configurations."
+            self._tabs.setTabToolTip(self._analyze_tab_idx, tip)
+            self._tabs.setTabToolTip(self._results_tab_idx, tip)
+            if self._tabs.currentIndex() in (self._analyze_tab_idx, self._results_tab_idx):
+                self._tabs.setCurrentIndex(1)
 
     def _load_config_obj(self):
         if not self._config_id:
@@ -1221,7 +1397,19 @@ class SingleTestAnalysisPage(BasePage):
         }
         if roles:
             config["sensor_roles"] = roles
+        if self._test_metadata.get("sensor_roles"):
+            merged = dict(self._test_metadata["sensor_roles"])
+            merged.update(roles)
+            config["sensor_roles"] = merged
+        if self._test_metadata:
+            config["metadata"] = self._test_metadata
         return config
+
+    def _current_sensor_roles(self) -> Dict[str, str]:
+        config = self._build_analysis_config()
+        if not config:
+            return {}
+        return dict(config.get("sensor_roles") or config.get("columns") or {})
 
     def _rebuild_role_combos(self, test_type: str) -> None:
         # Clear existing
@@ -1239,11 +1427,100 @@ class SingleTestAnalysisPage(BasePage):
             combo = QComboBox()
             combo.addItems(current_cols)
             combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            combo.currentTextChanged.connect(self._on_role_mapping_changed)
             if required:
                 self._role_layout.addWidget(_form_row(label, combo, required=True))
             else:
                 self._role_layout.addWidget(_form_row(label, combo, optional=True))
             self._role_combos[key] = combo
+        self._auto_suggest_role_assignments(prefer_empty_only=True)
+        self._validate_role_mapping()
+
+    @Slot()
+    def _on_role_mapping_changed(self, *_args) -> None:
+        self._validate_role_mapping()
+
+    def _required_roles_for_current_config(self) -> List[str]:
+        cfg = self._build_analysis_config() or {}
+        test_type = normalize_test_type(str(cfg.get("test_type", "cold_flow")))
+        defs = _HF_ROLES if test_type == "hot_fire" else _CF_ROLES
+        return [role for role, _label, required in defs if required]
+
+    def _guess_column_for_role(self, role: str, available: List[str], used: Set[str]) -> Optional[str]:
+        hints = _ROLE_HINTS.get(role, ())
+        if not hints:
+            return None
+        ranked: List[Tuple[int, str]] = []
+        for col in available:
+            if col in used:
+                continue
+            low = col.lower()
+            score = 0
+            for h in hints:
+                if h in low:
+                    score += 1
+            if score > 0:
+                ranked.append((score, col))
+        if not ranked:
+            return None
+        ranked.sort(key=lambda x: (-x[0], x[1]))
+        return ranked[0][1]
+
+    def _auto_suggest_role_assignments(self, *, prefer_empty_only: bool) -> None:
+        if not self._numeric_cols or not self._role_combos:
+            return
+        used = {c.currentText() for c in self._role_combos.values() if c.currentText()}
+        for role, combo in self._role_combos.items():
+            if prefer_empty_only and combo.currentText():
+                continue
+            guess = self._guess_column_for_role(role, self._numeric_cols, used)
+            if guess and combo.findText(guess) >= 0:
+                combo.setCurrentText(guess)
+                used.add(guess)
+
+    def _auto_select_detection_sensor(self, *, prefer_existing: bool) -> None:
+        if not hasattr(self, "_detect_sensor_combo"):
+            return
+        if not self._numeric_cols:
+            return
+        if prefer_existing and self._detect_sensor_combo.currentText():
+            return
+        preferred_roles = (
+            "chamber_pressure",
+            "upstream_pressure",
+            "mass_flow_ox",
+            "mass_flow",
+        )
+        for role in preferred_roles:
+            combo = self._role_combos.get(role)
+            if combo and combo.currentText():
+                self._detect_sensor_combo.setCurrentText(combo.currentText())
+                return
+        # fallback to first available numeric channel
+        self._detect_sensor_combo.setCurrentText(self._numeric_cols[0])
+
+    def _validate_role_mapping(self) -> None:
+        if not hasattr(self, "_role_status_banner"):
+            return
+        selected = {role: combo.currentText() for role, combo in self._role_combos.items()}
+        required_roles = self._required_roles_for_current_config()
+
+        missing = [r for r in required_roles if not selected.get(r)]
+        used = [c for c in selected.values() if c]
+        duplicates = sorted({c for c in used if used.count(c) > 1})
+
+        if missing:
+            msg = "Missing required sensor roles: " + ", ".join(missing)
+            self._role_status_banner.show_message(msg, "warning")
+            return
+        if duplicates:
+            msg = "Duplicate channel assignment: " + ", ".join(duplicates)
+            self._role_status_banner.show_message(msg, "warning")
+            return
+        if any(selected.values()):
+            self._role_status_banner.show_message("Sensor role mapping looks valid.", "success")
+        else:
+            self._role_status_banner.hide()
 
     # ------------------------------------------------------------------ slots: steady state
 
@@ -1256,8 +1533,15 @@ class SingleTestAnalysisPage(BasePage):
         config = self._build_analysis_config() or {}
         method = self._detect_method.currentText()
         config["preferred_method"] = method
+        detect_sensor = self._detect_sensor_combo.currentText().strip() if hasattr(self, "_detect_sensor_combo") else ""
+        if detect_sensor:
+            config["steady_state_signal_col"] = detect_sensor
+        elif method in ("cv", "derivative") and self._numeric_cols:
+            # Keep behavior deterministic for methods that rely on a single signal.
+            config["steady_state_signal_col"] = self._numeric_cols[0]
         self._banner.show_message("Detecting steady state…", "info")
-        self.status_message.emit("Detecting steady state…")
+        sensor_note = f" ({detect_sensor})" if detect_sensor else ""
+        self.status_message.emit(f"Detecting steady state via {method}{sensor_note}…")
         worker = _DetectWorker(df, config)
         worker.signals.detected.connect(self._on_detected)
         worker.signals.failed.connect(self._on_detect_failed)
@@ -1303,6 +1587,7 @@ class SingleTestAnalysisPage(BasePage):
         self.status_message.emit(f"Running analysis for {test_id}…")
         self._run_btn.setEnabled(False)
         self._results.hide()
+        self._last_analysis_result = None
 
         worker = _AnalysisWorker(
             df=self._df_processed,
@@ -1311,6 +1596,7 @@ class SingleTestAnalysisPage(BasePage):
             test_type=test_type,
             test_id=test_id,
             file_path=self._file_path,
+            skip_qc=self._skip_qc_chk.isChecked(),
         )
         worker.signals.finished.connect(self._on_analysis_done)
         worker.signals.failed.connect(self._on_analysis_failed)
@@ -1319,6 +1605,7 @@ class SingleTestAnalysisPage(BasePage):
     @Slot(object)
     def _on_analysis_done(self, result) -> None:
         self._run_btn.setEnabled(True)
+        self._last_analysis_result = result
         n = len(result.measurements)
         status = "passed" if result.passed_qc else "FAILED QC"
         msg = f"Analysis complete — {n} metrics, QC {status}."
@@ -1327,14 +1614,214 @@ class SingleTestAnalysisPage(BasePage):
             "success" if result.passed_qc else "error",
         )
         self.status_message.emit(msg)
+        self._igniter_results_plot.hide()
         self._results.populate(result)
         self._results.show()
+
+    @Slot(object)
+    def _on_igniter_analysis_done(self, result) -> None:
+        self._last_igniter_result = result
+        self._igniter_results_tab.populate(result)
+        self._igniter_results_plot.populate(result)
+        self._results.hide()
+        self._banner.show_message(
+            f"Igniter analysis — O/F={result.of_ratio:.3f}, "
+            f"c*={result.cstar_actual_m_s:.0f} m/s",
+            "success",
+        )
+        self._tabs.setCurrentIndex(3)
 
     @Slot(str)
     def _on_analysis_failed(self, error: str) -> None:
         self._run_btn.setEnabled(True)
         self._banner.show_message(f"Analysis failed: {error}", "error")
         self.status_message.emit(f"Analysis failed: {error}")
+
+    @Slot()
+    def _save_result_to_campaign(self) -> None:
+        analysis_result = self._last_analysis_result
+        igniter_result = self._last_igniter_result
+        if analysis_result is None and igniter_result is None:
+            self._banner.show_message("Run analysis first, then save to campaign.", "warning")
+            return
+
+        try:
+            from core.campaign_manager_v2 import (
+                create_campaign,
+                get_campaign_names,
+                save_to_campaign,
+            )
+        except Exception as exc:
+            self._banner.show_message(f"Campaign manager unavailable: {exc}", "error")
+            return
+
+        config = self._build_analysis_config() or {}
+        campaign_type = normalize_test_type(str(config.get("test_type", "cold_flow")))
+        existing = get_campaign_names()
+        create_label = "<Create new campaign…>"
+        choices = existing + [create_label]
+
+        campaign_name: Optional[str] = None
+        if choices:
+            picked, ok = QInputDialog.getItem(
+                self,
+                "Save to Campaign",
+                "Select campaign:",
+                choices,
+                0,
+                False,
+            )
+            if not ok:
+                return
+            campaign_name = str(picked).strip()
+        if not campaign_name:
+            return
+
+        if campaign_name == create_label:
+            suggestion = f"{campaign_type.upper()}_Campaign"
+            name, ok = QInputDialog.getText(
+                self,
+                "Create Campaign",
+                "Campaign name:",
+                text=suggestion,
+            )
+            name = name.strip()
+            if not ok or not name:
+                return
+            campaign_name = name
+            try:
+                create_campaign(campaign_name, campaign_type=campaign_type)
+            except ValueError:
+                # Campaign already exists; continue with save.
+                pass
+            except Exception as exc:
+                self._banner.show_message(f"Create campaign failed: {exc}", "error")
+                return
+
+        if analysis_result is not None:
+            record = analysis_result.to_database_record(campaign_type=campaign_type)
+            if self._test_folder_path:
+                record["test_path"] = self._test_folder_path
+            if self._file_path:
+                record["raw_data_path"] = self._file_path
+            operator = self._operator_edit.text().strip()
+            if operator and not record.get("operator"):
+                record["operator"] = operator
+            test_id_for_msg = analysis_result.test_id
+        else:
+            test_id_for_msg = self._test_id_edit.text().strip() or "IGN-HF-TEST"
+            now_iso = datetime.now().isoformat()
+            record = {
+                "test_id": test_id_for_msg,
+                "test_timestamp": now_iso,
+                "qc_passed": 1,
+                "qc_summary": "{}",
+                "avg_pc_bar": igniter_result.pc_bar,
+                "avg_mf_ox_g_s": igniter_result.mdot_n2o_g_s,
+                "avg_mf_fuel_g_s": igniter_result.mdot_eth_g_s,
+                "avg_mf_total_g_s": igniter_result.mdot_total_g_s,
+                "avg_of_ratio": igniter_result.of_ratio,
+                "avg_c_star_m_s": igniter_result.cstar_actual_m_s,
+                "eta_c_star_pct": (igniter_result.eta_cstar * 100.0) if igniter_result.eta_cstar is not None else None,
+                "comments": f"Igniter analysis ({igniter_result.oxidizer_name}/{igniter_result.fuel_name})",
+                "operator": self._operator_edit.text().strip() or self._test_metadata.get("operator", ""),
+                "part": self._test_metadata.get("part", ""),
+                "serial_num": self._test_metadata.get("serial_num", ""),
+                "raw_data_path": self._file_path or "",
+                "test_path": self._test_folder_path or "",
+            }
+
+        try:
+            save_to_campaign(campaign_name, record)
+        except Exception as exc:
+            self._banner.show_message(f"Save to campaign failed: {exc}", "error")
+            self.status_message.emit(f"Save to campaign failed: {exc}")
+            return
+
+        msg = f"Saved {test_id_for_msg} to campaign {campaign_name}."
+        self._banner.show_message(msg, "success")
+        self.status_message.emit(msg)
+        self.campaign_saved.emit(campaign_name)
+
+    @Slot()
+    def _export_igniter_report(self) -> None:
+        result = self._last_igniter_result
+        if result is None:
+            self._banner.show_message("Run igniter analysis before exporting a report.", "warning")
+            return
+
+        test_id = self._test_id_edit.text().strip() or self._test_metadata.get("test_id") or "IGN-HF-TEST"
+        default_name = f"{test_id}_igniter_report.html"
+        default_dir = str(Path(self._test_folder_path) if self._test_folder_path else Path.home())
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Igniter Advanced Report",
+            str(Path(default_dir) / default_name),
+            "HTML files (*.html)",
+        )
+        if not path:
+            return
+
+        config = self._build_analysis_config() or {}
+        metadata = dict(self._test_metadata or {})
+        metadata.setdefault("operator", self._operator_edit.text().strip())
+
+        traceability: Dict[str, Any] = {
+            "analysis_timestamp_utc": datetime.utcnow().isoformat(),
+            "analyst_username": metadata.get("operator") or "unknown",
+            "raw_data_path": self._file_path or "",
+            "config_id": self._config_id,
+            "steady_window_start_s": self._ss_start.value(),
+            "steady_window_end_s": self._ss_end.value(),
+        }
+        try:
+            from core.traceability import DataTraceability
+
+            if self._file_path and Path(self._file_path).exists():
+                traceability = DataTraceability.from_file(
+                    self._file_path,
+                    config=config,
+                    config_name=self._config_id,
+                ).to_dict()
+            elif self._df_processed is not None:
+                source_name = Path(self._file_path).name if self._file_path else "processed_dataframe"
+                traceability = DataTraceability.from_dataframe(
+                    self._df_processed,
+                    source_name=source_name,
+                    config=config,
+                    config_name=self._config_id,
+                ).to_dict()
+            traceability["steady_window_start_s"] = self._ss_start.value()
+            traceability["steady_window_end_s"] = self._ss_end.value()
+        except Exception:
+            pass
+
+        self.status_message.emit("Generating igniter advanced report…")
+        worker = _IgniterReportWorker(
+            path=path,
+            test_id=test_id,
+            result=result,
+            metadata=metadata,
+            config=config,
+            traceability=traceability,
+            steady_window_s=(self._ss_start.value(), self._ss_end.value()),
+            df=self._df_processed,
+            sensor_roles=self._current_sensor_roles(),
+        )
+        worker.signals.file_saved.connect(self._on_igniter_report_saved)
+        worker.signals.failed.connect(self._on_igniter_report_failed)
+        QThreadPool.globalInstance().start(worker)
+
+    @Slot(str)
+    def _on_igniter_report_saved(self, path: str) -> None:
+        name = Path(path).name
+        self._banner.show_message(f"Saved igniter report {name}", "success")
+        self.status_message.emit(f"Saved igniter report {name}")
+
+    @Slot(str)
+    def _on_igniter_report_failed(self, error: str) -> None:
+        self._banner.show_message(f"Igniter report export failed: {error}", "error")
+        self.status_message.emit(f"Igniter report export failed: {error}")
 
     # ------------------------------------------------------------------ public API
 
@@ -1361,6 +1848,8 @@ class SingleTestAnalysisPage(BasePage):
             )
             self.status_message.emit(f"No CSV in {folder.name}")
             metadata = test_data.get("metadata") or {}
+            self._test_metadata = metadata
+            self._igniter_panel.load_hardware_from_metadata(metadata)
             test_id = metadata.get("test_id") or folder.name
             self._test_id_edit.setText(test_id)
             if metadata.get("operator"):
@@ -1371,6 +1860,8 @@ class SingleTestAnalysisPage(BasePage):
 
         self._test_folder_path = str(folder)
         metadata = test_data.get("metadata") or {}
+        self._test_metadata = metadata
+        self._igniter_panel.load_hardware_from_metadata(metadata)
         test_id = metadata.get("test_id") or folder.name
         self._test_id_edit.setText(test_id)
         if metadata.get("operator"):
@@ -1468,26 +1959,38 @@ class SingleTestAnalysisPage(BasePage):
         if not config:
             return
         roles = config.get("sensor_roles") or config.get("columns") or {}
+        meta_roles = self._test_metadata.get("sensor_roles") or {}
+        if meta_roles:
+            roles = {**meta_roles, **roles}
         col_set = set(self._numeric_cols)
         for role, sensor in roles.items():
             if role not in self._role_combos:
                 continue
-            if sensor in col_set:
-                idx = self._role_combos[role].findText(sensor)
+            candidate = sensor
+            # Fallback when metadata stores mapped sensor names but CSV still has raw IDs.
+            if candidate not in col_set:
+                for ch_id, mapped in (config.get("channel_config") or {}).items():
+                    if mapped == sensor and ch_id in col_set:
+                        candidate = ch_id
+                        break
+            if candidate in col_set:
+                idx = self._role_combos[role].findText(candidate)
                 if idx >= 0:
                     self._role_combos[role].setCurrentIndex(idx)
 
         channel_config = config.get("channel_config") or {}
         for ch_id, sensor in channel_config.items():
-            if ch_id in col_set:
-                for role, combo in self._role_combos.items():
-                    if combo.currentText():
-                        continue
-                    if sensor in col_set:
-                        idx = combo.findText(sensor)
-                        if idx >= 0:
-                            combo.setCurrentIndex(idx)
-                            break
+            for role, combo in self._role_combos.items():
+                if combo.currentText():
+                    continue
+                candidate = sensor if sensor in col_set else ch_id
+                if candidate in col_set:
+                    idx = combo.findText(candidate)
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+                        break
+        self._auto_suggest_role_assignments(prefer_empty_only=True)
+        self._validate_role_mapping()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

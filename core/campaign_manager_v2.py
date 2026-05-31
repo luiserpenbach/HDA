@@ -17,7 +17,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 
 CAMPAIGN_DIR = "campaigns"
-SCHEMA_VERSION = 3  # Increment when schema changes
+SCHEMA_VERSION = 4  # Increment when schema changes
 
 
 # =============================================================================
@@ -127,6 +127,22 @@ PLUGIN_COLUMNS = {
     eta_isp_pct REAL,
     total_impulse_ns REAL
     """,
+}
+
+INDEX_DEFINITIONS = {
+    "base": [
+        ("idx_test_results_test_timestamp", ["test_timestamp"]),
+        ("idx_test_results_qc_passed", ["qc_passed"]),
+        ("idx_test_results_part_serial", ["part", "serial_num"]),
+    ],
+    "cold_flow": [
+        ("idx_test_results_cd", ["avg_cd_CALC"]),
+    ],
+    "hot_fire": [
+        ("idx_test_results_pc", ["avg_pc_bar"]),
+        ("idx_test_results_of", ["avg_of_ratio"]),
+        ("idx_test_results_eta_cstar", ["eta_c_star_pct"]),
+    ],
 }
 
 
@@ -287,6 +303,11 @@ MIGRATIONS = {
         'cold_flow': [],
         'hot_fire': [],
     },
+    4: {
+        # v4 migration: performance index hardening (handled via helper below)
+        'cold_flow': [],
+        'hot_fire': [],
+    },
 }
 
 
@@ -328,6 +349,23 @@ def set_schema_version(db_path: str, version: int):
     conn.close()
 
 
+def _ensure_campaign_indexes(conn: sqlite3.Connection, campaign_type: str) -> None:
+    """Create performance indexes for campaign queries if columns exist."""
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(test_results)")
+    existing_cols = {row[1] for row in c.fetchall()}
+
+    defs = list(INDEX_DEFINITIONS["base"])
+    defs.extend(INDEX_DEFINITIONS.get(campaign_type, []))
+    for index_name, columns in defs:
+        if all(col in existing_cols for col in columns):
+            cols_sql = ", ".join(columns)
+            c.execute(
+                f"CREATE INDEX IF NOT EXISTS {index_name} "
+                f"ON test_results ({cols_sql})"
+            )
+
+
 def migrate_database(db_path: str) -> Tuple[int, int]:
     """
     Migrate database to latest schema version.
@@ -336,16 +374,19 @@ def migrate_database(db_path: str) -> Tuple[int, int]:
         Tuple of (old_version, new_version)
     """
     current_version = get_schema_version(db_path)
-    
-    if current_version >= SCHEMA_VERSION:
-        return current_version, current_version
-    
-    # Get campaign type
+
+    # Open connection early so we can self-heal indexes even when up-to-date
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute("SELECT campaign_type FROM campaign_info LIMIT 1")
     result = c.fetchone()
     campaign_type = result[0] if result else 'cold_flow'
+
+    if current_version >= SCHEMA_VERSION:
+        _ensure_campaign_indexes(conn, campaign_type)
+        conn.commit()
+        conn.close()
+        return current_version, current_version
     
     # Get existing columns for plugin migration
     c.execute("PRAGMA table_info(test_results)")
@@ -372,6 +413,9 @@ def migrate_database(db_path: str) -> Tuple[int, int]:
             except sqlite3.OperationalError as e:
                 if "duplicate column" not in str(e).lower():
                     print(f"Plugin migration warning: {e}")
+
+    # Ensure query-performance indexes are present (v4 foundation hardening).
+    _ensure_campaign_indexes(conn, campaign_type)
 
     conn.commit()
     conn.close()
@@ -559,6 +603,9 @@ def create_campaign(campaign_name: str, campaign_type: str = 'cold_flow', descri
     # This supports both built-in types and plugin-registered test types
     schema_sql = build_schema_for_test_type(campaign_type)
     c.execute(schema_sql)
+
+    # Create indexes for campaign/system analysis query performance.
+    _ensure_campaign_indexes(conn, campaign_type)
 
     conn.commit()
     conn.close()
