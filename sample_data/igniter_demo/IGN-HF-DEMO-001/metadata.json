@@ -1,0 +1,44 @@
+{
+  "test_id": "IGN-HF-DEMO-001",
+  "test_type": "hot_fire",
+  "test_date": "2026-05-27",
+  "operator": "Demo Generator",
+  "part": "IGN-CP01",
+  "serial_num": "SN-DEMO-001",
+  "propellant_combination": "N2O/Ethanol",
+  "geometry": {
+    "throat_diameter_mm": 4.4,
+    "throat_area_mm2": 15.205308443374602,
+    "expansion_ratio": 1.5
+  },
+  "igniter_hardware": {
+    "throat_diameter_mm": 4.4,
+    "cd_n2o": 0.77,
+    "cd_eth": 0.77,
+    "t_n2o_c": 20.0,
+    "t_eth_c": 20.0,
+    "eta_cstar_target": 0.85,
+    "d_n2o_orifice_mm": 0.6,
+    "d_eth_orifice_mm": 0.5,
+    "p_n2o_upstream_bar": 55.0
+  },
+  "sensor_roles": {
+    "chamber_pressure": "IG-PT-01",
+    "mass_flow_ox": "OX-FM-01",
+    "mass_flow_fuel": "FU-FM-01",
+    "upstream_pressure": "FU-PT-01",
+    "thrust": "LC-01"
+  },
+  "test_conditions": {
+    "target_pc_bar": 20.0,
+    "target_of_ratio": 2.5,
+    "steady_window_s": [
+      2.0,
+      4.0
+    ]
+  },
+  "notes": [
+    "Demo igniter hot fire for HDA Qt Single Test Analysis",
+    "Expected steady averages: Pc\u224820 bar, \u1e41_N2O\u224830 g/s, \u1e41_EtOH\u224812 g/s"
+  ]
+}
