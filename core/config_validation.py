@@ -297,27 +297,29 @@ def validate_config_simple(config: Dict[str, Any], config_type: str = 'auto') ->
     if not config.get('config_name'):
         errors.append("config_name is required")
     
-    # Check fluid
-    fluid = config.get('fluid', {})
-    density = (
-        fluid.get('density_kg_m3') or 
-        fluid.get('ox_density_kg_m3') or 
-        fluid.get('fuel_density_kg_m3') or
-        fluid.get('water_density_kg_m3')
-    )
-    if not density:
-        errors.append("Fluid density is required (set density_kg_m3)")
-    elif density <= 0:
-        errors.append(f"Fluid density must be positive, got {density}")
-    
-    # Check geometry based on type
-    geometry = config.get('geometry', {})
-    columns = config.get('columns', {})
-
     # Auto-detect type
     if config_type == 'auto':
         # Can't auto-detect without columns, default to cold_flow
         config_type = 'cold_flow'
+
+    # Check fluid density where it is physically required.
+    # Cd-based cold-flow calculations require density; hot-fire does not.
+    fluid = config.get('fluid', {})
+    density = (
+        fluid.get('density_kg_m3') or
+        fluid.get('ox_density_kg_m3') or
+        fluid.get('fuel_density_kg_m3') or
+        fluid.get('water_density_kg_m3')
+    )
+    if config_type == 'cold_flow':
+        if not density:
+            errors.append("Fluid density is required (set density_kg_m3)")
+        elif density <= 0:
+            errors.append(f"Fluid density must be positive, got {density}")
+    
+    # Check geometry based on type
+    geometry = config.get('geometry', {})
+    columns = config.get('columns', {})
 
     if config_type == 'cold_flow':
         # NOTE: geometry comes from metadata, not config (as of v2.4.0)

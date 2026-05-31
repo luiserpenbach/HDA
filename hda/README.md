@@ -51,7 +51,7 @@ hda/
 │       ├── campaign_analysis.py
 │       ├── analysis_tools.py
 │       ├── configurations.py
-│       └── placeholders.py        Batch + System Analysis stubs
+│       └── placeholders.py        Batch stub + System Analysis MVP
 ├── domain/                  Pure Python (v3)
 ├── persistence/             SQLite repositories (v3)
 └── services/                Ingest / analysis orchestration (v3)
@@ -67,7 +67,7 @@ hda/
 | Single Test Analysis | `single_test_analysis.py` | Tabbed preprocess → steady state → analysis; dockable plot panels; trim lines; SVG export per panel |
 | Batch Analysis | `placeholders.py` | Stub → use Streamlit or upcoming port |
 | Campaign Analysis | `campaign_analysis.py` | SPC (I-MR, X-bar/R), filters, HTML/Excel/CSV reports |
-| System Analysis | `placeholders.py` | Stub |
+| System Analysis | `placeholders.py` | MVP: cross-campaign overview (filters, QC health, key metrics) |
 | Analysis Tools | `analysis_tools.py` | Anomaly detection, comparison, transient, frequency, operating envelope |
 | Configurations | `configurations.py` | Edit `saved_configs/`; **Use in Analysis** handoff to STA |
 
@@ -76,6 +76,7 @@ hda/
 - **Preprocessing tab:** time unit auto-detect (incl. Unix ms), gap fill, resample, trim with red draggable bounds + dimmed preview; save processed CSV
 - **Plot workspace:** add unlimited dockable panels; per-panel sensor toggles; synced trim/steady overlays; SVG export
 - **Steady State tab:** auto-detect, draggable region, sensor roles, run analysis via `core.integrated_analysis`
+- **Analyze/Results tabs:** igniter hot-fire post-test workflow (manual or steady-state averages) with c* efficiency/Cd back-calc
 - Handoffs: Test Explorer → STA; Configurations → STA with active config
 
 ### Analysis Tools highlights
@@ -133,6 +134,6 @@ These remain available for tests and selective reuse; they are not opened by `py
 ## Roadmap
 
 1. **Batch Analysis** — `core.batch_analysis.run_batch_analysis()`  
-2. **System Analysis** — cross-campaign system metrics  
-3. STA tabs: Analyze / Results / Export (currently placeholders inside STA)  
+2. **System Analysis** — deepen MVP into trend plots and part/serial drill-down  
+3. STA export workflow polish (Analyze/Results active; Export tab still placeholder)  
 4. Optional: adopt v3 steady preview inside STA; v3 single-DB migration (long term)

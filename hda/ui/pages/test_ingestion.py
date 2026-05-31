@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -671,18 +672,27 @@ class BrowseTab(QWidget):
     def _delete_test(self, test: Dict[str, Any]) -> None:
         reply = QMessageBox.question(
             self, "Delete Test",
-            f"Permanently delete test folder:\n\n{test['test_id']}\n\n"
-            "This cannot be undone.",
+            f"Move test folder to archive?\n\n{test['test_id']}\n\n"
+            "The folder will be moved to .trash_tests under the test root.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
         try:
-            shutil.rmtree(test["path"])
+            src = Path(test["path"])
+            if not src.exists():
+                raise FileNotFoundError(f"Path not found: {src}")
+            # Archive instead of hard-delete for safer first-time operations.
+            trash_root = src.parents[4] / ".trash_tests"
+            trash_root.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dst = trash_root / f"{src.name}_{stamp}"
+            shutil.move(str(src), str(dst))
         except Exception as exc:
             QMessageBox.critical(self, "Delete Failed", str(exc))
             return
+        self.status_message.emit(f"Archived {test['test_id']} to .trash_tests")
         if self._selected_campaign:
             self._on_campaign_selected(self._selected_campaign.get("campaign_id", ""))
 
