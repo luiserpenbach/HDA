@@ -207,9 +207,16 @@ CREATE TABLE campaigns (
   test_type   text NOT NULL,               -- 'cold_flow' | 'hot_fire' | 'igniter_hot_fire' | ...
   status      text NOT NULL DEFAULT 'active',  -- 'active' | 'closed'
   description text,
+  headline_metric jsonb,                   -- dashboard headline stat, campaign-manager configurable
+                                           -- e.g. {"kind":"cpk","measurement":"c_star"} or {"kind":"mean","measurement":"cd"}
   created_by  uuid NOT NULL REFERENCES users(id),
   created_at  timestamptz NOT NULL,
   UNIQUE (system_id, name)
+);
+CREATE TABLE user_programs (               -- dashboard subscriptions: which programs a user follows
+  user_id    uuid NOT NULL REFERENCES users(id),
+  program_id uuid NOT NULL REFERENCES programs(id),
+  PRIMARY KEY (user_id, program_id)
 );
 
 -- Bench channel configs, immutable, content-addressed ---------------------
@@ -632,8 +639,11 @@ React + TypeScript + Vite. **TanStack Query** for all server state (caching, inv
 
 ```
 /login
-/                      Dashboard: inbox (unassigned READY runs), recent analyses,
-                       campaign health tiles, my pending QC overrides
+/                      Dashboard, scoped to the user's subscribed programs (program
+                       switcher + "all programs" escape hatch): inbox (unassigned READY
+                       runs, program-filtered), recent analyses, campaign health cards —
+                       QC pass rate, cadence sparkline, last run, and a per-campaign
+                       configurable headline stat (campaigns.headline_metric)
 /runs                  Run explorer: filterable table (state, campaign, origin, date, text)
                        + Miller-column browse (Program → System → Campaign → Runs)
 /runs/{id}             Run detail: plot workspace, events timeline, bench review,
