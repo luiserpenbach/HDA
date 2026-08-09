@@ -1,9 +1,9 @@
-# HDA Web — Design Document
+# Metron — Design Document
 
 **Status**: Draft for review
 **Date**: 2026-08-09
 **Author**: Claude (with Luis Erpenbach)
-**Scope**: Full redesign of Hopper Data Studio as a single internal web application, replacing the Streamlit app, the Qt nav app, and the legacy `core/` engine.
+**Scope**: Full redesign of Hopper Data Studio (HDA) as **Metron** (μέτρον, "measure") — a single internal web application replacing the Streamlit app, the Qt nav app, and the legacy `core/` engine. Repo: `amphora-space/metron`.
 
 ---
 
@@ -41,11 +41,11 @@ HDA today is three generations of the same application in one repo (~61k LOC):
 
 Meanwhile, the test bench side has been rebuilt as **Spark Studio** (`amphora-space/spark-studio`, internally `tbctl`): a Raspberry-Pi-hosted FastAPI + React application that records runs as self-contained HDF5 files with content-hash provenance (`channels_sha256`, `sequence_sha256`), a JSON-lines event log, a post-run review report, and per-rate-group time series (50 Hz default, 1 kHz reserved).
 
-**HDA Web** is the fourth and final generation: one web application, hosted on a single internal server, that ingests Spark Studio runs (and legacy CSVs), and owns everything after the test: analysis, uncertainty, QC, campaigns, SPC, comparison, reporting. It lifts the v3 stack as its engine core, ports the validated analytics from `core/`, and retires everything else.
+**Metron** (μέτρον — "measure"; the name honors the tool's creed that no number ships without its uncertainty) is the fourth and final generation: one web application, hosted on a single internal server, that ingests Spark Studio runs (and legacy CSVs), and owns everything after the test: analysis, uncertainty, QC, campaigns, SPC, comparison, reporting. It lifts the v3 stack as its engine core, ports the validated analytics from `core/`, and retires everything else.
 
 ### Division of responsibility
 
-| | Spark Studio (bench) | HDA Web (analysis) |
+| | Spark Studio (bench) | Metron (analysis) |
 |---|---|---|
 | Role | Testbench control, live monitoring | Post-test truth |
 | Data | Live streams, HDF5 run files | Archived runs, permanent analytical record |
@@ -53,7 +53,7 @@ Meanwhile, the test bench side has been rebuilt as **Spark Studio** (`amphora-sp
 | Channel config | Owns the DAQ/channel definition (`channels.yaml`) | Consumes it, keyed by content hash |
 | Plotting | Live strip charts (uPlot) | Deep analysis plots (uPlot + statistical charts) |
 
-Neither application depends on the other at runtime. HDA pulls; Spark Studio never needs to know HDA exists.
+Neither application depends on the other at runtime. Metron pulls; Spark Studio never needs to know Metron exists.
 
 ---
 
@@ -100,6 +100,7 @@ Confirmed with Luis:
 | D11 | **Fresh repository** under `amphora-space`; this repo is archived after retirement | Clean history, new stack, no legacy weight |
 | D12 | **Watcher transport: REST pull from the tbctl node** (poll `GET /api/runs`, download new `.h5` + sidecar, verify, re-sync mutable metadata periodically). Filesystem-mount mode kept as an optional alternative | No shared-filesystem coupling to the Pi, survives network interruptions with plain retry, and the node already serves the API. Polling every ~30 s is plenty |
 | D13 | **UX prototyping runs in parallel with Phase 1** (§17): the core-loop and inbox workflows are validated with clickable prototypes before production frontend code | Workflow design is the hard part; Phase 1 is workflow-agnostic and need not wait |
+| D14 | **Product name: Metron** (μέτρον, "measure"); repo `amphora-space/metron` | Names the tool after its creed — nothing ships without its measure |
 
 ---
 
@@ -221,7 +222,7 @@ CREATE TABLE channel_configs (
   imported_at timestamptz NOT NULL
 );
 
--- HDA-side analysis config: uncertainty + roles overlay (see §9) ----------
+-- Metron-side analysis config: uncertainty + roles overlay (see §9) ----------
 CREATE TABLE config_overlays (
   id          uuid PRIMARY KEY,
   name        text NOT NULL,
@@ -533,11 +534,11 @@ Initial plugin set: `cold_flow`, `hot_fire`, `igniter_hot_fire` (the igniter phy
 
 ### 8.5 Derived measurements
 
-The v3 declarative system (`hda/domain/derived/`): campaign-scoped `derived_specs` name a formula from a versioned `FormulaLibrary` and map kwargs to measurement/channel names. Chains propagate uncertainty (`mf_fuel` → `of_ratio` → `c_star`). Spark Studio's `calc.*` channels are imported as-is for display, and can additionally be re-derived and verified by the formula system (a QC check flags disagreement between bench-computed and HDA-recomputed derived channels).
+The v3 declarative system (`hda/domain/derived/`): campaign-scoped `derived_specs` name a formula from a versioned `FormulaLibrary` and map kwargs to measurement/channel names. Chains propagate uncertainty (`mf_fuel` → `of_ratio` → `c_star`). Spark Studio's `calc.*` channels are imported as-is for display, and can additionally be re-derived and verified by the formula system (a QC check flags disagreement between bench-computed and Metron-recomputed derived channels).
 
 ### 8.6 QC
 
-The `QCReport`/`blocking` model from `core/qc_checks.py`, rebuilt on the v3 types: generic checks (timestamps, gaps, NaN ratio, flatline, saturation, range, sensor correlation) run for every analysis; test-type checks come from the plugin. New inputs the legacy system never had: the bench `report_json` verdicts are displayed alongside (bench review answers "did the run execute correctly", HDA QC answers "is this data analyzable" — both visible, neither substitutes).
+The `QCReport`/`blocking` model from `core/qc_checks.py`, rebuilt on the v3 types: generic checks (timestamps, gaps, NaN ratio, flatline, saturation, range, sensor correlation) run for every analysis; test-type checks come from the plugin. New inputs the legacy system never had: the bench `report_json` verdicts are displayed alongside (bench review answers "did the run execute correctly", Metron QC answers "is this data analyzable" — both visible, neither substitutes).
 
 ### 8.7 The readiness check
 
@@ -549,8 +550,8 @@ The Parameter Requirements table — the most valuable feature in the current ap
 
 Two artifacts, cleanly split (replacing four overlapping legacy modules and three validation systems):
 
-1. **Channel configs (theirs).** Imported Spark Studio `channels.yaml`, content-addressed by `channels_sha256`, immutable. Owns: hardware mapping, units, calibration, rate groups, tag namespace. HDA never edits these. Unknown hash on ingest ⇒ prompt to import that YAML version (or auto-fetch from the node); known forever after.
-2. **Config overlays (ours).** Versioned HDA documents, schema-validated with **Pydantic as a hard dependency** (the legacy app's optional-pydantic-silently-validates-nothing failure is not carried forward). An overlay contains:
+1. **Channel configs (theirs).** Imported Spark Studio `channels.yaml`, content-addressed by `channels_sha256`, immutable. Owns: hardware mapping, units, calibration, rate groups, tag namespace. Metron never edits these. Unknown hash on ingest ⇒ prompt to import that YAML version (or auto-fetch from the node); known forever after.
+2. **Config overlays (ours).** Versioned Metron documents, schema-validated with **Pydantic as a hard dependency** (the legacy app's optional-pydantic-silently-validates-nothing failure is not carried forward). An overlay contains:
    - **roles**: role → channel tag map (auto-suggested from the namespace, editable);
    - **uncertainties**: per-tag specs (`{type: rel|abs, value, unit}`) — the calibration knowledge Spark Studio doesn't carry;
    - **settings**: NaN policy, alignment defaults, steady-detection parameters, QC thresholds.
@@ -696,9 +697,9 @@ Dark-first, dense, engineering-native — continuous with the Qt app's VS Code D
 
 ## 14. Spark Studio Integration Contract
 
-What HDA depends on (and nothing more):
+What Metron depends on (and nothing more):
 
-| Contract item | HDA's use |
+| Contract item | Metron's use |
 |---|---|
 | HDF5 layout: `/groups/<rg>/{t,data}` + group attrs `tags`, `rate_hz` | Series ingestion |
 | Root attrs: `run_id`, `t_stop*`, `sample_counts`, `channels_sha256`, `sequence_sha256`, `report_json`, `user_meta` | Identity, provenance, review sync |
@@ -708,9 +709,9 @@ What HDA depends on (and nothing more):
 | File naming `<yyyymmdd-hhmmss>-<name>.h5`; `run_id` canonical | Discovery; identity comes from attrs, not filename |
 | Node REST (`GET /api/runs/…`) | Primary watcher transport (D12); filesystem share optional |
 
-Compatibility posture: the ingest parser validates against this contract and **quarantines** (visible error state, raw file kept) anything that deviates, rather than guessing. When tbctl v2's UI editors arrive, nothing changes for HDA — they round-trip through the same YAML and the sha-based provenance holds (their frozen decision D12).
+Compatibility posture: the ingest parser validates against this contract and **quarantines** (visible error state, raw file kept) anything that deviates, rather than guessing. When tbctl v2's UI editors arrive, nothing changes for Metron — they round-trip through the same YAML and the sha-based provenance holds (their frozen decision D12).
 
-Deliberately out of scope: HDA writing anything back to the bench; shared auth; a "send to analysis" button in Spark Studio (trivial later: one POST to `/api/runs/ingest`).
+Deliberately out of scope: Metron writing anything back to the bench; shared auth; a "send to analysis" button in Spark Studio (trivial later: one POST to `/api/runs/ingest`).
 
 ---
 
@@ -806,11 +807,7 @@ Multi-select batch fan-out; `/tools` (transient, frequency, anomaly) bound to ru
 
 ## 19. Open Decisions
 
-Resolved decisions have moved to the decision record (§3, D8–D13). Remaining:
-
-| # | Decision | Status |
-|---|---|---|
-| O1 | **Product name.** Candidates on the table (Amphora-internal naming): **Ember Studio** (spark ignites the test, the ember is what you study after — pairs directly with Spark Studio), **Assay** (the metallurgical term for quantitative analysis of a material's content — precise fit for what the tool does), **Plume** (what the engine leaves behind to be read), **Ostraka** (the pottery shards ancient Greeks used as written records — on-theme with Amphora, obscure in a good way), **Kiln** (where vessels are proof-fired). Repo name follows the choice (e.g. `amphora-space/ember-studio`). | Luis to pick |
+None. All decisions are recorded in §3 (D1–D14). The product is named **Metron** (D14); the repo is `amphora-space/metron`.
 
 ---
 
