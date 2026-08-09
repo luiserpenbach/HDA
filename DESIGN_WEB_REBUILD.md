@@ -94,14 +94,12 @@ Confirmed with Luis:
 | D5 | Comparison, operating envelope, and system analysis are **core scope**, not deferred | They are part of basic analysis workflow |
 | D6 | Qt and Streamlit retire as soon as each workflow is replaced | Per-workflow retirement, not big-bang |
 | D7 | Backend engine = v3 stack (`hda/domain`, `hda/persistence` design) + ported `core/` analytics | The v3 design is validated by ~290 tests; the analytics math is validated by use |
-
-Recommended, pending confirmation (see §19):
-
-| # | Recommendation |
-|---|---|
-| R1 | **PostgreSQL** for the relational store (multi-user writes on one server; SQLite WAL would limp, Postgres removes the problem class) |
-| R2 | Migrate legacy `campaigns/*.db` results into the new schema; legacy raw CSVs ingest on demand rather than in bulk |
-| R3 | Working name "HDA Web"; final product name open |
+| D8 | **PostgreSQL** for the relational store | Multi-user writes on one server; removes the SQLite write-lock problem class |
+| D9 | **No legacy data migration.** Old `campaigns/*.db` and the CSV archive stay where they are; legacy CSVs can be ingested manually on demand if ever needed | HDA is not currently in use; nothing depends on the old records |
+| D10 | **No Phase 0 legacy hotfixes.** The legacy app is not in use, so its bugs are documented (this doc, §16) but not fixed | Effort goes straight into the new implementation |
+| D11 | **Fresh repository** under `amphora-space`; this repo is archived after retirement | Clean history, new stack, no legacy weight |
+| D12 | **Watcher transport: REST pull from the tbctl node** (poll `GET /api/runs`, download new `.h5` + sidecar, verify, re-sync mutable metadata periodically). Filesystem-mount mode kept as an optional alternative | No shared-filesystem coupling to the Pi, survives network interruptions with plain retry, and the node already serves the API. Polling every ~30 s is plenty |
+| D13 | **UX prototyping runs in parallel with Phase 1** (§17): the core-loop and inbox workflows are validated with clickable prototypes before production frontend code | Workflow design is the hard part; Phase 1 is workflow-agnostic and need not wait |
 
 ---
 
@@ -128,7 +126,7 @@ One Docker Compose stack on the internal server:
 │                 └───────────────┘                           │
 └─────────────────────────────────────────────────────────────┘
           ▲ pulls .h5 / .annotations.json / channels.yaml
-          │ (filesystem share or tbctl-node REST API)
+          │ (tbctl-node REST API; filesystem share optional)
 ┌─────────┴─────────┐
 │ Spark Studio node │  (Raspberry Pi 5, test cabinet)
 └───────────────────┘
@@ -240,7 +238,7 @@ CREATE TABLE config_overlays (
 CREATE TABLE test_runs (
   id             uuid PRIMARY KEY,
   run_id         text UNIQUE NOT NULL,     -- canonical source ID (spark-studio root attr, or synthesized for CSV)
-  origin         text NOT NULL,            -- 'spark_studio' | 'csv' | 'legacy_migration'
+  origin         text NOT NULL,            -- 'spark_studio' | 'csv'
   name           text NOT NULL,
   campaign_id    uuid REFERENCES campaigns(id),   -- nullable: unassigned runs live in the inbox
   state          text NOT NULL,            -- run lifecycle, §7.3
@@ -447,9 +445,8 @@ Legacy 2 GB CSVs are converted to Parquet once at ingest (columnar, compressed, 
 
 ### 7.1 Sources
 
-1. **Spark Studio pull (primary).** A watcher (configurable: mounted share of `data/runs/`, or the node's REST API) discovers new `.h5` files. Discovery is passive and continuous; runs appear in the **Inbox** (§11.2) without anyone doing anything.
-2. **Manual upload (secondary).** `.h5` or `.csv` via the browser, for legacy data and odd sources. CSV ingest synthesizes a single `default` rate group, requires a time-column/unit confirmation step (auto-detected via the magnitude heuristic from `hda/preprocessing.py:detect_time_unit`), and gets `origin='csv'`.
-3. **Legacy migration (one-time).** §17, Phase 1.
+1. **Spark Studio pull (primary).** A watcher polls the tbctl node's REST API (~30 s interval), downloads new `.h5` files + sidecars, and re-syncs mutable metadata on a slower cycle. A filesystem-mount mode exists as an optional alternative. Discovery is passive and continuous; runs appear in the **Inbox** (§11.2) without anyone doing anything.
+2. **Manual upload (secondary).** `.h5` or `.csv` via the browser, for legacy data and odd sources. CSV ingest synthesizes a single `default` rate group, requires a time-column/unit confirmation step (auto-detected via the magnitude heuristic from `hda/preprocessing.py:detect_time_unit`), and gets `origin='csv'`. This is also the only path for old HDA-era CSVs, ingested on demand — there is no bulk legacy migration (D9).
 
 ### 7.2 The immutable / mutable split
 
@@ -560,7 +557,7 @@ Two artifacts, cleanly split (replacing four overlapping legacy modules and thre
 
 An overlay records `reviewed_for_channel_sha`. When a run arrives with a different `channels_sha256` than the overlay was reviewed against (bench recalibrated / channels changed), the analysis proceeds but carries a visible "overlay not reviewed against this bench config" flag until an engineer confirms or revises — recalibrations can never silently invalidate uncertainty assumptions again.
 
-Legacy `saved_configs/*.json` are migrated by a one-time script that splits them into a synthesized channel config + an overlay.
+(No automated migration of legacy `saved_configs/*.json` — per D9 there is no legacy migration; the handful of useful values in those files, mainly sensor uncertainties, are re-entered into overlays by hand.)
 
 ---
 
@@ -709,7 +706,7 @@ What HDA depends on (and nothing more):
 | `.annotations.json` sidecar | Review sync |
 | `configs/channels.yaml` structure (tags, kinds, units, cal, rate_groups, `calc.*` exprs) | Channel-config import, role auto-mapping, derived verification |
 | File naming `<yyyymmdd-hhmmss>-<name>.h5`; `run_id` canonical | Discovery; identity comes from attrs, not filename |
-| Optional: node REST (`GET /api/runs/…`) | Remote pull mode of the watcher |
+| Node REST (`GET /api/runs/…`) | Primary watcher transport (D12); filesystem share optional |
 
 Compatibility posture: the ingest parser validates against this contract and **quarantines** (visible error state, raw file kept) anything that deviates, rather than guessing. When tbctl v2's UI editors arrive, nothing changes for HDA — they round-trip through the same YAML and the sha-based provenance holds (their frozen decision D12).
 
@@ -753,47 +750,43 @@ All Streamlit `pages/` + `app.py`; all Qt `hda/ui/`; the remainder of `core/`; t
 
 ## 16. Testing & Numeric Parity
 
-- **Golden-file parity suite (gate for Phase 1).** A fixture set of real runs (cold flow, hot fire, igniter) analyzed by the *corrected* legacy path (post-hotfix, §17 Phase 0) with hand-verified expected values. The new engine must reproduce every measurement and uncertainty within tight tolerance. Known-wrong legacy behaviors (water-density fallback, ±0.000 uncertainties, ms/s window ambiguity) are documented as intentional differences, not parity targets.
+- **Golden-file verification suite (gate for Phase 2).** A fixture set of real runs (cold flow, hot fire, igniter) with **hand-verified expected values** — computed independently (spreadsheet / manual propagation), optionally cross-checked against the legacy code *where the legacy code is known-correct*. The new engine must reproduce every measurement and uncertainty within tight tolerance. Known-wrong legacy behaviors (water-density fallback, ±0.000 uncertainties, ms/s window ambiguity) are documented here as anti-targets: fixtures explicitly assert the *correct* value, never bug-compatible output.
 - **Engine tests**: the v3 suite comes along; ported analytics keep their existing tests, rehoused.
 - **Property tests** for uncertainty propagation (closed-form vs Jacobian vs Monte Carlo agreement on the flagship formulas).
 - **Contract tests** for Spark Studio ingest against fixture `.h5` files (including a malformed set → quarantine behavior).
 - **API tests** over a real Postgres (testcontainer); DAG transition enforcement tested at the repository layer.
 - **E2E smoke** (Playwright): login → inbox → assign → analyze → QC → save → report download, run against the compose stack in CI.
-- **Migration rehearsal**: the legacy-DB migration tool runs against copies of all real `campaigns/*.db` files in CI with row-count + spot-value assertions.
 
 ---
 
 ## 17. Delivery Phases & Retirement Criteria
 
-### Phase 0 — Stop the bleeding (legacy hotfixes, immediate)
+The legacy apps are not in daily use (D10), so there is no transition period to protect — phases optimize for reaching a usable core loop fast, with the workflow validated before it is built.
 
-1. Fix `core/uncertainty.py:353-357` (fluid falls back to water density when metadata lacks `test_fluid`).
-2. Fix the uncertainty key mismatches (`uncertainties` vs `sensor_uncertainties`; sensor-class vs sensor-ID keys) so configs stop yielding silent ±0.000.
-3. Add a loud warning when any measured metric would persist with zero uncertainty.
+### Phase 1 — Spine  ∥  UX track
 
-Results produced during the transition become trustworthy, and the parity fixtures (§16) become meaningful.
+Two parallel streams:
 
-### Phase 1 — Spine
+**1a — Spine (backend, workflow-agnostic).** Fresh repo; compose stack; Postgres schema + migration runner; auth; ingest pipeline (HDF5 + CSV → raw + Parquet + pyramids); Spark Studio watcher (REST pull); channel-config import; series API; engine core lifted from `hda/domain` with its tests.
+**Exit**: new runs appear in the inbox automatically and are plottable via the series API.
 
-Compose stack; Postgres schema + migration runner; auth; ingest pipeline (HDF5 + CSV → raw + Parquet + pyramids); Spark Studio watcher; channel-config import; legacy migration tool (`campaigns/*.db` → long-form schema; `saved_configs/` → overlays); series API; parity suite green.
-**Exit**: every historical result queryable in the new DB; new runs appear in the inbox automatically.
+**1b — UX track (frontend, workflow-critical).** 2–3 rounds of clickable prototypes of the **inbox → assign → analyze → QC → save** loop and the campaign SPC view, populated with realistic data (Spark Studio `--sim` runs). Each round: Luis walks the workflow, interaction counts and dead ends are measured against the G1 target, the flow is revised. No production frontend code before this converges.
+**Exit**: the core-loop screen design (§11.3) is validated or revised; §11 is updated to match; the API surface is adjusted where the prototypes demanded it.
 
 ### Phase 2 — The core loop
 
-`/runs`, `/runs/{id}`, `/analyses/{id}` complete (§11.3): alignment, event-seeded windowing, QC + override, plugin analysis with uncertainties, derived measurements, save, test report, sweep. Cold-flow + hot-fire + igniter plugins.
-**Exit / retirement**: Streamlit pages 1–2 and Qt Test Explorer + STA retired.
+`/runs`, `/runs/{id}`, `/analyses/{id}` built to the validated design: alignment, event-seeded windowing, QC + override, plugin analysis with uncertainties, derived measurements, save, test report, sweep. Cold-flow + hot-fire + igniter plugins. Golden-file verification suite green (§16).
+**Exit / retirement**: the new app is the tool for single-test work; Streamlit pages 1–2 and Qt Test Explorer + STA have no reason to exist.
 
 ### Phase 3 — Campaign, system & comparison
 
 `/campaigns/{id}` full tab set: results, SPC (I-MR, X̄-R, CUSUM, EWMA, WE rules, capability), trends, comparison (test/campaign/golden with persisted goldens), operating envelope; `/systems/{id}` cross-campaign views with boundary annotations; campaign reports + qualification package + exports.
-**Exit / retirement**: Streamlit pages 4–7 and Qt Campaign/Configurations retired.
+**Exit / retirement**: Streamlit pages 4–7 and Qt Campaign/Configurations superseded.
 
 ### Phase 4 — Long tail & full retirement
 
-Multi-select batch fan-out; `/tools` (transient, frequency, anomaly) bound to runs; overlay review workflow polish; admin; watcher hardening; documentation.
-**Exit**: Streamlit and Qt deleted from the repo; `core/` deleted; one application remains.
-
-Each phase ends in daily-usable software; both old UIs stay runnable until their replacement exists.
+Multi-select batch fan-out; `/tools` (transient, frequency, anomaly) bound to runs; overlay review workflow polish; admin; watcher hardening; documentation. A final UX iteration pass over the real workflows with real usage behind them.
+**Exit**: the old repo (Streamlit, Qt, `core/`) is archived; one application remains.
 
 ---
 
@@ -801,8 +794,8 @@ Each phase ends in daily-usable software; both old UIs stay runnable until their
 
 | Risk | Mitigation |
 |---|---|
-| Numeric regressions during the port | Parity suite as a hard gate (§16); math ported, not rewritten |
-| Legacy DB migration surprises (schema drift across old campaign files) | Migration tool rehearsed in CI against copies of every real DB; quarantine-and-report, never guess |
+| Numeric regressions during the port | Golden-file verification suite as a hard gate (§16); math ported, not rewritten |
+| Building the wrong workflow (the legacy apps' actual failure mode) | UX track (Phase 1b): prototypes validated against interaction-count targets before production frontend code; final iteration pass in Phase 4 |
 | Spark Studio format drift before v2 stabilizes | Narrow contract (§14), validating parser, quarantine path; contract fixtures pinned |
 | Scope creep re-importing all legacy features | §2 G4; the Phase-4 cut list requires a usage argument per feature |
 | Single-server durability | Nightly Postgres dump + `/data` snapshot as one backup unit; restore rehearsed once |
@@ -813,13 +806,11 @@ Each phase ends in daily-usable software; both old UIs stay runnable until their
 
 ## 19. Open Decisions
 
-| # | Decision | Recommendation | Status |
-|---|---|---|---|
-| O1 | Postgres vs SQLite | Postgres (multi-user writes) | Awaiting confirmation |
-| O2 | Legacy migration depth | Migrate all `campaigns/*.db` results; legacy raw CSVs ingest on demand | Awaiting confirmation |
-| O3 | Product name | "HDA Web" as working title | Open |
-| O4 | Watcher transport | Filesystem share if the runs dir is mountable; else node REST pull | Decide at Phase-1 setup |
-| O5 | Repo strategy | Fresh repo (clean history, new stack) vs `web/` in this repo | Slight lean: fresh repo, this one archived after Phase 4 |
+Resolved decisions have moved to the decision record (§3, D8–D13). Remaining:
+
+| # | Decision | Status |
+|---|---|---|
+| O1 | **Product name.** Candidates on the table (Amphora-internal naming): **Ember Studio** (spark ignites the test, the ember is what you study after — pairs directly with Spark Studio), **Assay** (the metallurgical term for quantitative analysis of a material's content — precise fit for what the tool does), **Plume** (what the engine leaves behind to be read), **Ostraka** (the pottery shards ancient Greeks used as written records — on-theme with Amphora, obscure in a good way), **Kiln** (where vessels are proof-fired). Repo name follows the choice (e.g. `amphora-space/ember-studio`). | Luis to pick |
 
 ---
 
