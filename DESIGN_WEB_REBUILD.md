@@ -209,6 +209,9 @@ CREATE TABLE campaigns (
   description text,
   headline_metric jsonb,                   -- dashboard headline stat, campaign-manager configurable
                                            -- e.g. {"kind":"cpk","measurement":"c_star"} or {"kind":"mean","measurement":"cd"}
+  metadata_template jsonb,                 -- layer-2 metadata defaults (§8.3): free-form key/value set,
+                                           -- edited as a dynamic table; keys matching the plugin's
+                                           -- metadata fields feed the analysis, others travel as-is
   created_by  uuid NOT NULL REFERENCES users(id),
   created_at  timestamptz NOT NULL,
   UNIQUE (system_id, name)
