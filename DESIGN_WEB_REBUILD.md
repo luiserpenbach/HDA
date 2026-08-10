@@ -212,6 +212,8 @@ CREATE TABLE campaigns (
   metadata_template jsonb,                 -- layer-2 metadata defaults (§8.3): free-form key/value set,
                                            -- edited as a dynamic table; keys matching the plugin's
                                            -- metadata fields feed the analysis, others travel as-is
+  settings jsonb,                          -- campaign-manager settings: spec limits per measurement
+                                           -- (SPC defaults) and the operating-envelope target box
   created_by  uuid NOT NULL REFERENCES users(id),
   created_at  timestamptz NOT NULL,
   UNIQUE (system_id, name)
@@ -634,6 +636,10 @@ Design rules: every list endpoint paginates and filters server-side; every respo
 
 ## 11. Frontend
 
+> **Phase-2 build reference:** the UX track converged after five clickable-prototype
+> rounds; the validated screen-by-screen specification is **`UI_SPEC_PHASE2.md`** and
+> supersedes this section where they differ. This section stays as the summary.
+
 ### 11.1 Stack
 
 React + TypeScript + Vite. **TanStack Query** for all server state (caching, invalidation, optimistic updates); a small client store (Zustand) for UI-only state. **uPlot** for time-series plots — deliberately the same library Spark Studio uses: engineers get identical pan/zoom/cursor behavior on the bench and in analysis, and it comfortably handles the point volumes in §6.3. **ECharts** for statistical charts (SPC, histograms, box/violin, correlation, envelope). URL-addressable everything — `/runs/{id}`, `/analyses/{id}`, `/campaigns/{id}/spc?param=cd` — so any view is a shareable link (the one thing Streamlit got right, kept).
@@ -786,6 +792,7 @@ Two parallel streams:
 
 **1b — UX track (frontend, workflow-critical).** 2–3 rounds of clickable prototypes of the **inbox → assign → analyze → QC → save** loop and the campaign SPC view, populated with realistic data (Spark Studio `--sim` runs). Each round: Luis walks the workflow, interaction counts and dead ends are measured against the G1 target, the flow is revised. No production frontend code before this converges.
 **Exit**: the core-loop screen design (§11.3) is validated or revised; §11 is updated to match; the API surface is adjusted where the prototypes demanded it.
+**Status: CONVERGED (2026-08-10)** after five rounds. Output: `UI_SPEC_PHASE2.md` (screen-by-screen build spec), the R5 prototype artifact, and the schema deltas in §5 (`user_programs`, `headline_metric`, `metadata_template`, `settings`). Happy path measured at 5 interactions vs the ≤10 target.
 
 ### Phase 2 — The core loop
 
